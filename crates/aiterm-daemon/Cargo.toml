@@ -1,0 +1,17 @@
+[package]
+name = "aiterm-daemon"
+description = "aiterm daemon: session registry, Claude Code hook endpoint, transcript reader, socket server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiterm-proto = { path = "../aiterm-proto" }
+serde.workspace = true
+serde_json.workspace = true
+
+# Tracks add their own dependencies here. The workspace Cargo.toml is read-only
+# during a fan-out wave.

@@ -1,0 +1,29 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Cargo.lock is ignored during fan-out waves so parallel tracks adding deps to
+# their own crate never collide on it. Re-enable (and commit it) once the
+# workspace settles and we start shipping binaries. See docs/PROTOCOL.md.
+Cargo.lock
+
+# Xcode project is generated from app/project.yml by xcodegen — never commit it
+app/*.xcodeproj
+app/*.xcworkspace
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# SwiftPM
+app/.swiftpm/
+# Same reasoning as Cargo.lock above: pinned during a fan-out wave only invites
+# collisions between parallel tracks. Commit it before we ship a build.
+app/Package.resolved
+
+# macOS
+.DS_Store
+
+# Runtime state lives in ~/.aiterm, but guard against a stray local copy
+/.aiterm/
+*.log

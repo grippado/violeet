@@ -1,0 +1,39 @@
+# XcodeGen spec. The .xcodeproj is generated from this file and is NOT committed
+# — pbxproj is machine-written XML and conflicts badly when parallel tracks touch
+# the app. Regenerate with:  cd app && xcodegen generate
+name: AITerm
+
+options:
+  bundleIdPrefix: digital.opengateway.aiterm
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: 1.2.0
+
+targets:
+  AITerm:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/AITerm
+    dependencies:
+      - package: SwiftTerm
+    info:
+      path: Sources/AITerm/Info.plist
+      properties:
+        CFBundleName: AITerm
+        CFBundleDisplayName: aiterm
+        LSMinimumSystemVersion: "14.0"
+        NSHighResolutionCapable: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: digital.opengateway.aiterm
+        SWIFT_VERSION: "5.9"
+        ENABLE_HARDENED_RUNTIME: true
+        # The app spawns PTYs and talks to a Unix socket in ~/.aiterm.
+        # Sandboxing is deliberately off for v0 — revisit before distribution.
+        ENABLE_APP_SANDBOX: false

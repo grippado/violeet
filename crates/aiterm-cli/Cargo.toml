@@ -1,0 +1,18 @@
+[package]
+name = "aiterm-cli"
+description = "aiterm CLI: doctor, install-hooks, uninstall-hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aiterm"
+path = "src/main.rs"
+
+[dependencies]
+aiterm-proto = { path = "../aiterm-proto" }
+serde.workspace = true
+serde_json.workspace = true

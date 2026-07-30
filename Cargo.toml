@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aiterm-proto",
+    "crates/aiterm-daemon",
+    "crates/aiterm-cli",
+]
+
+# This file is READ-ONLY during a fan-out wave. Tracks add dependencies to their
+# own crate's Cargo.toml, never here. See docs/PROTOCOL.md § Fan-out rules.
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+authors = ["Gabriel Gripp"]
+repository = "https://github.com/grippado/aiterm"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
