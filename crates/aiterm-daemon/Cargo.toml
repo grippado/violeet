@@ -8,10 +8,32 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lib]
+name = "aiterm_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aiterm-daemon"
+path = "src/main.rs"
+
 [dependencies]
 aiterm-proto = { path = "../aiterm-proto" }
 serde.workspace = true
 serde_json.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "sync",
+    "time",
+    "io-util",
+    "signal",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
 
 # Tracks add their own dependencies here. The workspace Cargo.toml is read-only
 # during a fan-out wave.
