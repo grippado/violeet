@@ -237,3 +237,83 @@ maps, so its output is unaffected — its own test suite still passes.
   carrying a tab id the daemon has not heard of registers with `tab_id: null`,
   which is correct and is what the pending-claim rule in `wire.rs` describes — it
   briefly looked like a bug in my hook configuration during testing, and was not.
+
+---
+
+# Task 2 — `aiterm-transcript`
+
+Scope was widened for this task: the workspace `Cargo.toml` and the root
+`.gitignore` are now mine, and the parallel-track rules no longer apply. The
+crate is added to `members`; the read-only comment on that file is updated to
+say the waves are over rather than left to mislead.
+
+No dependency on `aiterm-daemon`, as briefed. The crate takes a path and returns
+typed events plus a telemetry snapshot. `notify` is its only dependency.
+
+## What I measured
+
+Every claim below was counted, twice, by two independent implementations — a
+Python pass over the raw files, then the Rust parser — which agreed on the
+numbers. `docs/TRANSCRIPT_FORMAT.md` separates measured from inferred from
+undetermined, and the undetermined section is the honest one.
+
+**One reply is many lines, each repeating the same `usage`.** The finding that
+shapes everything. In `099399e5-…`: 803 `assistant` lines, **344** distinct
+`message.id`, and content blocks of 227 `thinking` + 252 `text` + 324 `tool_use`
+= exactly 803. Summing per line rather than per message inflates cumulative
+output from **404,098** to **1,124,616**. Both implementations produced both
+numbers.
+
+**Occupancy is the latest turn's prompt, and it is not the cumulative sum.**
+Measured in that session: occupancy 662,536, cumulative output 404,098. Neither
+derivable from the other. There is a test asserting they differ on real files,
+because a comment cannot fail.
+
+**Compaction carries its own before and after.** `compactMetadata` on a
+`system` / `compact_boundary` line gives `preTokens` and `postTokens` —
+observed 337,228 → 15,850. Triggers seen: `auto` (14), `manual` (3). Ten real
+compactions were checked and every one reduced occupancy.
+
+Across 12 real transcripts, 23,380 lines parsed with no panic and no error.
+
+## A bug the real files caught
+
+The first version emitted *either* an `AssistantTurn` *or* a `ToolUse` for an
+`assistant` line. That silently discarded the `usage` of every reply that called
+a tool without also emitting text — the Rust total came out ~6% below the Python
+measurement of the same file, and the gap was the whole clue.
+
+`parse_line` now returns `Vec<TranscriptEvent>`: one line can carry more than
+one fact. Deduplication by `message.id` means the repeated usage is still billed
+once. After the fix both implementations agree exactly.
+
+I would not have found this without cross-checking against an independent
+measurement. Synthetic fixtures are written by the same person as the parser and
+share its assumptions.
+
+## Where I departed from the brief, and why
+
+**"Pending HITL text" is not obtainable from a transcript.** Measured: zero
+permission markers in the sampled files, and every `tool_use` in a completed
+session had a matching `tool_result`. This is the same conclusion ADR-004
+reached by a different route — the transcript records the result only *after*
+the decision. The crate exposes `in_flight_tool` (a tool with no result yet) and
+explicitly does **not** call it a pending HITL, because an in-flight tool may be
+blocked on a human, blocked on the network, or merely slow, and this source
+cannot tell them apart. The real signal is the daemon's hook.
+
+**`context_window_size_tokens` cannot be measured either.** No transcript field
+carries it; searching every file found nothing. It is filled from a lookup table
+on the model name, which is external knowledge that will age, and unknown models
+return `None` rather than a plausible default. A wrong window size makes a wrong
+percentage, and a wrong percentage is worse than a missing one because it looks
+like an answer. Relatedly, `compaction_imminent` returns `Option<bool>`: an
+unknown window is not the same as "plenty of room".
+
+## Still not investigated
+
+Named in `docs/TRANSCRIPT_FORMAT.md` § 3 rather than glossed: the `iterations`
+array inside `usage`, the `cache_creation` sub-fields, whether sub-agent
+transcripts should roll into the parent's cost, and both the Codex and opencode
+formats — `TranscriptReader` exists so they can be added, but nothing about
+their shape is known here.

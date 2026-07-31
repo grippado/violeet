@@ -1,0 +1,22 @@
+[package]
+name = "aiterm-transcript"
+description = "Incremental reader for agent transcript files (Claude Code JSONL)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+# Filesystem watching, and the only dependency here. It earns its place: the
+# alternative is polling every open transcript on a timer, which is the thing
+# `notify` exists to avoid.
+#
+# Deliberately NOT depending on aiterm-daemon. This crate takes a path and
+# returns typed events and a telemetry snapshot; it knows nothing about the
+# socket, the registry or the daemon's runtime. Wiring it in is wave 2's job.
+notify = "6"

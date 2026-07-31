@@ -4,10 +4,13 @@ members = [
     "crates/aiterm-proto",
     "crates/aiterm-daemon",
     "crates/aiterm-cli",
+    "crates/aiterm-transcript",
 ]
 
-# This file is READ-ONLY during a fan-out wave. Tracks add dependencies to their
-# own crate's Cargo.toml, never here. See docs/PROTOCOL.md § Fan-out rules.
+# This file was READ-ONLY during the fan-out waves, so parallel tracks could not
+# collide on it. Both waves are finished and it is editable again. The habit it
+# enforced is still the right default: a dependency needed by one crate belongs
+# in that crate's manifest, not here.
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
