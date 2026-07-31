@@ -16,9 +16,10 @@ xcuserdata/
 
 # SwiftPM
 app/.swiftpm/
-# Same reasoning as Cargo.lock above: pinned during a fan-out wave only invites
-# collisions between parallel tracks. Commit it before we ship a build.
-app/Package.resolved
+# app/Package.resolved was ignored here for the same reason as Cargo.lock above,
+# and like Cargo.lock it is committed now. CI cuts release builds from a tag, and
+# an unpinned resolve means the .dmg a tag produces depends on when it was built
+# rather than on what it was built from.
 
 # macOS
 .DS_Store

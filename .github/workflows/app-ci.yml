@@ -56,6 +56,14 @@ jobs:
         working-directory: app
         run: swift build
 
+      # The wire projection is tested here and only here: neither `Testing` nor
+      # `XCTest` ships with Command Line Tools, so a contributor without a full
+      # Xcode can build and package but cannot run these. CI is the machine that
+      # always has it.
+      - name: Test
+        working-directory: app
+        run: swift test
+
       # Warnings are not failed builds here. This is a young codebase with a
       # dependency it does not control; a warnings-as-errors gate would spend
       # its first month failing on SwiftTerm.
