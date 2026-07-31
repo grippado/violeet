@@ -277,15 +277,26 @@ the daemon and `PROTOCOL.md` today.
 This is the section the Wave 2 integration should read first.
 
 > **Status after 2026-07-31.** The wave is over, so the scope rules that
-> produced this list no longer bind anyone. Item 2 is **done** — the README's
-> component table was wrong and is fixed. Items 1, 3, 4, 5 and 6 are still open,
-> and item 1 is still the biggest: the protocol was just revised with `wire.rs`
-> in the wrong crate, which was the cheapest moment there will ever be to move
-> it. It did not move, so the next person pays slightly more.
+> produced this list no longer bind anyone.
 >
-> One item to add: **the daemon now depends on `axum` and `tower-http`**,
-> declared in its own manifest, not promoted to `[workspace.dependencies]` —
-> same open question as item 5.
+> - **Item 1 — done.** `wire.rs` moved to `aiterm-proto`, where `PROTOCOL.md`
+>   always said it lived. The daemon re-exports it, so `crate::wire` still
+>   resolves and no call site changed. `aiterm-cli` already depended on
+>   `aiterm-proto`, so it now gets the types for free rather than eventually
+>   hand-writing a second copy — which was the real deadline: once another
+>   track wants these types, moving them stops being mechanical and becomes a
+>   negotiation between sessions.
+> - **Item 2 — done.** The README's component table was wrong and is fixed.
+> - **Item 4 — done by consequence.** `aiterm-proto` is no longer a crate with
+>   one used constant in it.
+> - Items 3, 5 and 6 are still open.
+>
+> `Cargo.lock` is committed and out of `.gitignore` — same reasoning, the wave
+> is what it was ignored for. `app/Package.resolved` is still ignored on the
+> same stale grounds and should follow when the Swift app becomes real.
+>
+> One item to add to 5: **the daemon now depends on `axum` and `tower-http`**,
+> declared in its own manifest, not promoted to `[workspace.dependencies]`.
 
 1. **`crates/aiterm-proto/` should own `wire.rs`.** `PROTOCOL.md` says in its
    own opening paragraph that the Rust projection of the protocol lives in

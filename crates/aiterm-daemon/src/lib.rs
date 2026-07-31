@@ -10,7 +10,8 @@
 //!   I/O-free, so it is testable without a socket.
 //! - [`hitl`]     — permission requests being held open. Same discipline as
 //!   [`registry`]: synchronous, and `now` is a parameter.
-//! - [`wire`]     — the JSON-lines message types of `docs/PROTOCOL.md`.
+//! - [`wire`]     — the JSON-lines message types of `docs/PROTOCOL.md`,
+//!   re-exported from `aiterm-proto`, which owns them.
 //! - [`socket`]   — the Unix socket server that speaks [`wire`] to clients.
 //! - [`http`]     — the loopback endpoint Claude Code's hooks POST to.
 //! - [`discovery`] — `~/.aiterm/daemon.json`, so clients need not guess a port.
@@ -26,4 +27,10 @@ pub mod hitl;
 pub mod http;
 pub mod registry;
 pub mod socket;
-pub mod wire;
+
+/// The protocol's Rust projection, re-exported from `aiterm-proto`.
+///
+/// It lives there, not here: `docs/PROTOCOL.md` says so, and every client of
+/// the protocol — daemon, CLI, anything later — depends on the one definition
+/// rather than keeping its own copy in step.
+pub use aiterm_proto::wire;

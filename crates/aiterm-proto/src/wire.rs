@@ -1,15 +1,9 @@
 //! The JSON-lines message types of `docs/PROTOCOL.md`.
 //!
-//! # Why these live here and not in `aiterm-proto`
-//!
-//! `docs/PROTOCOL.md` says the Rust projection of the protocol belongs in the
-//! `aiterm-proto` crate. It should. But `crates/aiterm-proto/` is **outside
-//! Track A's scope** during Wave 1, and rule 1 of the fan-out brief is absolute:
-//! no edits outside scope, for any reason. So the types live here for now.
-//!
-//! TODO(track-A): move this module into `aiterm-proto` during Wave 2
-//! integration, once one owner can touch both crates. Recorded in
-//! `docs/tracks/A.md`.
+//! Every client of the protocol depends on this one module rather than
+//! reimplementing the shapes. That is the point of it living in `aiterm-proto`:
+//! a second hand-written copy of a wire format is a second thing to keep in
+//! sync, and the one that drifts is always the one nobody is testing.
 //!
 //! # Fidelity rules
 //!
@@ -24,7 +18,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub use aiterm_proto::PROTOCOL_VERSION;
+pub use crate::PROTOCOL_VERSION;
 
 /// RFC 3339, which is what the protocol's `ts` field is.
 pub fn timestamp(now: DateTime<Utc>) -> String {

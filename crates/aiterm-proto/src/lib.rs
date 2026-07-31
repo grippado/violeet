@@ -9,10 +9,15 @@
 //! process in `docs/PROTOCOL.md § Changing this protocol` — not through a
 //! unilateral edit.
 //!
-//! No logic lives here yet: the repository is at the structure-and-contract
-//! stage. Types land with the wave that implements them.
+//! The message types live in [`wire`]. They were written inside
+//! `aiterm-daemon` during Wave 1, because this crate was outside Track A's
+//! scope and the no-edits-outside-scope rule was absolute; they moved here on
+//! 2026-07-31, once the wave was over and one owner could touch both crates.
+//! This is where the document always said they belonged.
 
 #![forbid(unsafe_code)]
+
+pub mod wire;
 
 /// Protocol version carried in the `v` field of every message.
 pub const PROTOCOL_VERSION: u32 = 1;

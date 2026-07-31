@@ -2,10 +2,9 @@
 /target
 **/*.rs.bk
 
-# Cargo.lock is ignored during fan-out waves so parallel tracks adding deps to
-# their own crate never collide on it. Re-enable (and commit it) once the
-# workspace settles and we start shipping binaries. See docs/PROTOCOL.md.
-Cargo.lock
+# Cargo.lock was ignored during the fan-out wave so parallel tracks adding deps
+# to their own crate never collided on it. The wave is over and it is committed
+# now, which is what a workspace with binaries wants anyway.
 
 # Xcode project is generated from app/project.yml by xcodegen — never commit it
 app/*.xcodeproj
@@ -26,4 +25,11 @@ app/Package.resolved
 
 # Runtime state lives in ~/.aiterm, but guard against a stray local copy
 /.aiterm/
-*.log
+
+# Stray logs from running the daemon locally. Scoped rather than global: a bare
+# `*.log` silently swallowed docs/spikes/hook-payload.log, which is preserved
+# evidence, not runtime noise — and the kind of omission you only notice when
+# you go looking for the file and it was never committed.
+/*.log
+/crates/**/*.log
+/app/**/*.log
