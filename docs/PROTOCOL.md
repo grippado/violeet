@@ -1,12 +1,23 @@
 # aiterm socket protocol
 
-Status: **v1 — normative**
+Status: **v1 — normative.** Revised 2026-07-31, between waves, absorbing the
+seven change requests in [`tracks/A-protocol-request.md`](tracks/A-protocol-request.md).
 
 This document is the contract between `aiterm-daemon` and its clients. The Rust
 types in `crates/aiterm-proto` and the Swift decoder in
 `app/Sources/AITerm/Daemon` are *projections* of this document. When a
 projection and this document disagree, the document is right and the code is the
 bug.
+
+> **Why the revision did not bump `v`.** Two of the seven changes are breaking:
+> the token fields were renamed, and two unreachable states were removed. The
+> rule below says a change between waves bumps `v` — and it was waived here,
+> once, deliberately. No peer speaks v1 outside this repository: the daemon is
+> the only implementation, and it was updated in the same commit. Bumping would
+> have made the daemon reject messages from nobody and spent the number on
+> ceremony. **This waiver does not survive the first release.** Once a build
+> ships, or once the Swift app can talk to a daemon it did not come packaged
+> with, the rule is back in force with no judgement call attached.
 
 ---
 
@@ -100,8 +111,8 @@ A new agent session became known to the daemon.
 |---|---|---|---|
 | `session_id` | string | yes | |
 | `tab_id` | string \| null | yes | `null` when the session could not be bound to a tab (agent started outside aiterm). |
-| `agent` | string | yes | `claude-code` \| `codex` \| `opencode`. Unknown values are rendered generically, not dropped. |
-| `cwd` | string | yes | |
+| `agent` | string | yes | `claude-code` \| `codex` \| `opencode` \| `unknown`. Values outside this list are rendered generically, not dropped. |
+| `cwd` | string \| null | yes | `null` when the session was first seen through a hook that carried no working directory. Never `""` — an empty string renders as an empty path instead of as *unknown*. |
 | `title` | string \| null | yes | `null` until the daemon has something real to name it with. Never a placeholder. |
 | `model` | string \| null | yes | `null` when unknown. |
 | `started_at` | string | yes | |
@@ -117,22 +128,40 @@ An explicit `null` means *became unknown*.
   "type": "session_updated", "v": 1, "ts": "2026-07-30T18:04:02Z",
   "session_id": "b497437c-e819-4d0c-9145-03eb6573f8ef",
   "state": "working",
-  "context_tokens": 39104,
-  "context_window": 200000,
+  "context_window_used_tokens": 39104,
+  "context_window_size_tokens": 200000,
   "last_action": "Edit crates/aiterm-daemon/src/http/mod.rs"
 }
 ```
 
 | Field | Type | Notes |
 |---|---|---|
-| `state` | string | `idle` \| `working` \| `waiting_input` \| `hitl` \| `error` |
+| `state` | string | `starting` \| `idle` \| `working` \| `hitl` |
 | `title` | string \| null | |
 | `model` | string \| null | |
-| `cwd` | string | Emitted on `cwd-changed`. |
-| `context_tokens` | integer \| null | Absolute count, not a delta. |
-| `context_window` | integer \| null | The model's window. The app computes the percentage for display; it does not compute the inputs. |
+| `cwd` | string \| null | Emitted on `cwd-changed`. |
+| `context_window_used_tokens` | integer \| null | Current occupancy of the context window. Absolute, not a delta, and it **falls** on compaction. |
+| `context_window_size_tokens` | integer \| null | The model's window. The app computes the percentage for display; it does not compute the inputs. |
+| `cumulative_input_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
+| `cumulative_output_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
+| `git_branch` | string \| null | Display data for the sidebar. |
 | `last_action` | string \| null | |
+| `last_event_at` | string \| null | When the *session* last did something, as distinct from the envelope's `ts`, which is when the daemon emitted this message. |
 | `tab_id` | string \| null | Late binding: a session that registered unbound can acquire a tab later. |
+
+**The four token fields are four numbers, not two pairs of synonyms.** The first
+pair describes how full the window is right now; the second describes what the
+session has cost since it started. They move independently — compaction drops
+occupancy while cost keeps climbing — and any client that adds the cumulative
+pair to estimate occupancy will get a wrong-but-plausible number. That failure
+is the reason the names are long.
+
+`state` covers only the states the daemon can actually observe. `starting`
+exists because a session that is known but has not yet been observed doing
+anything is a real state, and in a sparse patch an absent `state` means
+*unchanged* — so without it a brand-new session has no state at all. `done` and
+`dead` are not here on purpose: the end of a session is reported by
+`session_ended`, which is a different message with a different shape.
 
 There is deliberately **no `context_pct`**. A percentage is presentation derived
 from two numbers the daemon already sends, and duplicating it invites the two
@@ -259,6 +288,30 @@ the daemon can bind the first session that reports that id.
 | `tab_id` | string | yes |
 | `cwd` | string \| null | yes |
 
+### `close_tab`
+
+The tab is gone. Symmetric with `register_tab`, and the only way the daemon can
+learn that a tab closed.
+
+```json
+{ "type": "close_tab", "v": 1, "ts": "...", "tab_id": "tab-7f3a" }
+```
+
+| Field | Type | Required |
+|---|---|---|
+| `tab_id` | string | yes |
+
+The daemon marks every session claiming that tab as ended and emits one
+`session_ended` with `reason: "tab_closed"` for each. A session with a pending
+HITL gets its `hitl_resolved` first, per the ordering rule under
+`session_ended`.
+
+**`close_tab` for an unknown tab id is silently ignored**, on the same reasoning
+as `resolve_hitl`: the app closing a tab the daemon never bound is a normal
+outcome, not an error. Without this message the daemon can only *infer* a closed
+tab from thirty minutes of silence — which is the infer-from-absence pattern the
+rest of this protocol refuses.
+
 ### `resolve_hitl`
 
 Answers a pending permission request.
@@ -358,6 +411,9 @@ If your implementation needs a field or message that is not here:
 
 Between waves, the protocol changes by bumping `v` and updating this document
 first, then the two projections.
+
+The 2026-07-31 revision waived the bump, once, for the reason recorded at the
+top of this file. Treat that as spent: the next breaking change bumps `v`.
 
 ### Related fan-out rules
 

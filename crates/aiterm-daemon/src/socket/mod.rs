@@ -102,11 +102,10 @@ impl Hub {
             // A pending claim is not a binding: publish null, never a guess.
             tab_id: session.binding.bound_tab_id().map(str::to_string),
             agent: session.harness.as_wire().to_string(),
-            // TODO(track-A): the protocol makes `cwd` required and non-null, but
-            // a session we only heard about through a hook that carried none has
-            // no cwd to report. Empty string is the least-bad schema-compliant
-            // value. See docs/tracks/A-protocol-request.md.
-            cwd: session.cwd.clone().unwrap_or_default(),
+            // `null`, not `""`. A session first seen through a hook that carried
+            // no working directory has none to report, and an empty string would
+            // render as an empty path rather than as unknown.
+            cwd: session.cwd.clone(),
             title: session.title.clone(),
             // TODO(track-C): model comes from the transcript crate in Wave 2.
             model: None,
@@ -155,6 +154,34 @@ impl Hub {
 
                 for patch in patches {
                     self.broadcast(&DaemonToApp::SessionUpdated(patch));
+                }
+                Vec::new()
+            }
+
+            AppToDaemon::CloseTab { tab_id } => {
+                // The registry marks the tab's sessions dead; we announce each
+                // one. Built under the lock, broadcast after dropping it.
+                let ended: Vec<DaemonToApp> = {
+                    let mut registry = self.lock();
+                    registry
+                        .close_tab(&tab_id, now)
+                        .into_iter()
+                        .map(|session_id| {
+                            DaemonToApp::SessionEnded(wire::SessionEnded {
+                                v: PROTOCOL_VERSION,
+                                ts: wire::timestamp(now),
+                                session_id,
+                                tab_id: Some(tab_id.clone()),
+                                reason: wire::EndReason::TabClosed,
+                            })
+                        })
+                        .collect()
+                };
+
+                // An unknown tab kills nothing and says nothing. Per
+                // docs/PROTOCOL.md that is the normal outcome, not an error.
+                for msg in ended {
+                    self.broadcast(&msg);
                 }
                 Vec::new()
             }

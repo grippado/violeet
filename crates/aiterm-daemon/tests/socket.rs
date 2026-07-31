@@ -383,3 +383,137 @@ async fn many_clients_and_many_sessions_stay_coherent() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// close_tab — the message added in the 2026-07-31 protocol revision.
+//
+// Registry::close_tab() was implemented and unit-tested during Wave 1 but was
+// unreachable over the socket, so these tests exist to prove the wiring, not
+// the registry logic.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn closing_a_tab_ends_its_sessions_and_tells_every_client() {
+    let h = start().await;
+    {
+        let mut r = h.hub.registry().lock().unwrap();
+        r.register_tab("tab-1", Some("/repo".into()), Utc::now());
+        r.observe_hook(
+            HookObservation::new("s1", Harness::ClaudeCode)
+                .with_tab_id("tab-1")
+                .with_cwd("/repo"),
+            Utc::now(),
+        );
+        // A second tab, to prove the blast radius is one tab wide.
+        r.register_tab("tab-2", Some("/other".into()), Utc::now());
+        r.observe_hook(
+            HookObservation::new("s2", Harness::ClaudeCode).with_tab_id("tab-2"),
+            Utc::now(),
+        );
+    }
+
+    let mut watcher = Client::connect(&h.path).await;
+    let mut closer = Client::connect(&h.path).await;
+
+    closer
+        .send(r#"{"type":"close_tab","v":1,"ts":"x","tab_id":"tab-1"}"#)
+        .await;
+
+    // session_ended is a broadcast: the client that asked and the one that did
+    // not both hear about it.
+    for client in [&mut watcher, &mut closer] {
+        let msg = client.next().await;
+        assert_eq!(msg["type"], "session_ended");
+        assert_eq!(msg["session_id"], "s1");
+        assert_eq!(msg["tab_id"], "tab-1");
+        assert_eq!(msg["reason"], "tab_closed");
+    }
+
+    // s2 belongs to a different tab and must be untouched.
+    watcher.expect_silence().await;
+
+    let r = h.hub.registry().lock().unwrap();
+    assert_eq!(r.session("s1").unwrap().state(), SessionState::Dead);
+    assert_ne!(
+        r.session("s2").unwrap().state(),
+        SessionState::Dead,
+        "closing one tab must not end another tab's sessions"
+    );
+}
+
+/// A closed tab's session leaves the snapshot immediately.
+///
+/// This is the requirement the missing message was blocking: without
+/// `close_tab` the card for a dead tab survived until the inactivity TTL, up to
+/// thirty minutes.
+#[tokio::test]
+async fn a_closed_tabs_session_is_gone_from_the_next_snapshot() {
+    let h = start().await;
+    {
+        let mut r = h.hub.registry().lock().unwrap();
+        r.register_tab("tab-1", Some("/repo".into()), Utc::now());
+        r.observe_hook(
+            HookObservation::new("s1", Harness::ClaudeCode).with_tab_id("tab-1"),
+            Utc::now(),
+        );
+    }
+
+    let mut client = Client::connect(&h.path).await;
+    client
+        .send(r#"{"type":"close_tab","v":1,"ts":"x","tab_id":"tab-1"}"#)
+        .await;
+    let _ended = client.next().await;
+
+    client
+        .send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
+        .await;
+    client.expect_silence().await;
+}
+
+/// Closing a tab the daemon never knew is the normal end of a race, not an
+/// error. The protocol has no error reply, so the only correct answer is
+/// nothing at all.
+#[tokio::test]
+async fn closing_an_unknown_tab_is_silently_ignored() {
+    let h = start().await;
+    let mut client = Client::connect(&h.path).await;
+
+    client
+        .send(r#"{"type":"close_tab","v":1,"ts":"x","tab_id":"tab-never-existed"}"#)
+        .await;
+    client.expect_silence().await;
+
+    // Still connected and still healthy afterwards.
+    client
+        .send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
+        .await;
+    client.expect_silence().await;
+}
+
+/// A session whose tab claim never resolved still dies with the tab.
+///
+/// `Pending` exists precisely because a hook can arrive before `register_tab`.
+/// Such a session was only ever going to bind to that one tab, so if the tab
+/// closes first there is nothing left for it to bind to.
+#[tokio::test]
+async fn a_session_pending_on_the_closed_tab_dies_with_it() {
+    let h = start().await;
+    {
+        // Hook first, tab never registered: the claim stays pending.
+        let mut r = h.hub.registry().lock().unwrap();
+        r.observe_hook(
+            HookObservation::new("s1", Harness::ClaudeCode).with_tab_id("tab-1"),
+            Utc::now(),
+        );
+    }
+
+    let mut client = Client::connect(&h.path).await;
+    client
+        .send(r#"{"type":"close_tab","v":1,"ts":"x","tab_id":"tab-1"}"#)
+        .await;
+
+    let msg = client.next().await;
+    assert_eq!(msg["type"], "session_ended");
+    assert_eq!(msg["session_id"], "s1");
+    assert_eq!(msg["reason"], "tab_closed");
+}

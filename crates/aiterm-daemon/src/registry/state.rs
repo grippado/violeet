@@ -1,10 +1,9 @@
 //! Session lifecycle state and its legal transitions.
 //!
 //! The internal state set is richer than the one `docs/PROTOCOL.md` puts on the
-//! wire. That is deliberate and allowed: the protocol is frozen, the internal
-//! model is not, and a state with no wire representation is simply not
-//! published. See [`SessionState::wire_state`] and
-//! `docs/tracks/A-protocol-request.md`.
+//! wire, and stays that way by design: `Done` and `Dead` are reported through
+//! `session_ended`, not through `session_updated.state`. A state with no wire
+//! representation is simply not published. See [`SessionState::wire_state`].
 
 use std::fmt;
 
@@ -84,20 +83,23 @@ impl SessionState {
     /// How this state is spelled in `session_updated.state` on the wire, if it
     /// can be spelled at all.
     ///
-    /// `docs/PROTOCOL.md` allows `idle | working | waiting_input | hitl | error`.
-    /// Three of our states have no counterpart:
+    /// `docs/PROTOCOL.md` allows `starting | idle | working | hitl`. Four of our
+    /// six map straight across. The other two have no counterpart on purpose:
     ///
-    /// - `Starting` — the protocol has no "known but unobserved" state. We emit
-    ///   **no** `state` field rather than guessing one. In a sparse patch an
-    ///   absent field means *unchanged*, so this is honest rather than a lie.
-    /// - `Done` / `Dead` — these are reported by `session_ended`, which carries
-    ///   no `state` field at all.
+    /// - `Done` / `Dead` — reported by `session_ended`, a different message with
+    ///   a different shape and no `state` field at all.
+    ///
+    /// Returning `Option` rather than a bare `&str` is what keeps that honest:
+    /// there is no string to fall back on for an ended session, so the caller is
+    /// forced to omit `state` instead of inventing one. In a sparse patch an
+    /// absent field means *unchanged*, which is exactly right.
     pub fn wire_state(self) -> Option<&'static str> {
         match self {
+            SessionState::Starting => Some("starting"),
             SessionState::Idle => Some("idle"),
             SessionState::Working => Some("working"),
             SessionState::WaitingHitl => Some("hitl"),
-            SessionState::Starting | SessionState::Done | SessionState::Dead => None,
+            SessionState::Done | SessionState::Dead => None,
         }
     }
 }
@@ -214,28 +216,49 @@ mod tests {
         assert!(!Starting.can_transition_to(Starting));
     }
 
+    /// The ended states emit nothing rather than guessing a spelling.
+    ///
+    /// `Done` and `Dead` are reported by `session_ended`. Giving either one a
+    /// `session_updated.state` would mean the app learns a session ended from
+    /// two different messages that could disagree.
     #[test]
-    fn states_with_no_wire_spelling_emit_nothing_rather_than_guessing() {
-        assert_eq!(Starting.wire_state(), None);
+    fn ended_states_emit_no_wire_state_rather_than_guessing() {
         assert_eq!(Done.wire_state(), None);
         assert_eq!(Dead.wire_state(), None);
 
+        assert_eq!(Starting.wire_state(), Some("starting"));
         assert_eq!(Idle.wire_state(), Some("idle"));
         assert_eq!(Working.wire_state(), Some("working"));
         assert_eq!(WaitingHitl.wire_state(), Some("hitl"));
     }
 
+    /// Both directions, against a hand-written copy of the protocol's list.
+    ///
+    /// The reverse half is the one that matters: a state the document allows
+    /// but nothing can emit is a promise to the app that we silently break, and
+    /// that is exactly what `waiting_input` and `error` were before the
+    /// 2026-07-31 revision removed them.
     #[test]
-    fn wire_spellings_are_all_allowed_by_the_frozen_protocol() {
+    fn the_wire_state_set_and_the_protocol_agree_in_both_directions() {
         // docs/PROTOCOL.md, session_updated.state
-        const ALLOWED: &[&str] = &["idle", "working", "waiting_input", "hitl", "error"];
-        for s in SessionState::ALL {
-            if let Some(w) = s.wire_state() {
-                assert!(
-                    ALLOWED.contains(&w),
-                    "{w:?} is not in the protocol's state set"
-                );
-            }
+        const ALLOWED: &[&str] = &["starting", "idle", "working", "hitl"];
+
+        let emitted: Vec<&str> = SessionState::ALL
+            .iter()
+            .filter_map(|s| s.wire_state())
+            .collect();
+
+        for w in &emitted {
+            assert!(
+                ALLOWED.contains(w),
+                "{w:?} is emitted but is not in the protocol's state set"
+            );
+        }
+        for a in ALLOWED {
+            assert!(
+                emitted.contains(a),
+                "{a:?} is in the protocol's state set but nothing can emit it"
+            );
         }
     }
 }

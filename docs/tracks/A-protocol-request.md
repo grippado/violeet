@@ -2,12 +2,37 @@
 
 Raised against `docs/PROTOCOL.md` v1, frozen at commit `a77a1ac`.
 
-**Nothing here has been implemented on the wire.** Per rule 2 of the fan-out
-brief, the protocol is frozen and the other tracks are coding against it as it
-stands. Every item below is either carried in the daemon's *internal* model
-only, or worked around in a way that is documented at the call site.
+> ## Resolved 2026-07-31 — all seven accepted
+>
+> The wave is over, so the protocol thawed and every item below was applied to
+> `docs/PROTOCOL.md` and to the daemon in the same commit. **This file is now a
+> record of the reasoning, not a list of open requests.** What changed:
+>
+> | # | Decision |
+> |---|---|
+> | 1 | `close_tab` added (app→daemon). `Registry::close_tab()` is reachable at last. |
+> | 2 | `session_registered.cwd` is now `string \| null`. The `""` workaround is gone. |
+> | 3 | `starting` added; `waiting_input` and `error` **removed** — nothing could emit them. |
+> | 4 | `cumulative_input_tokens` / `cumulative_output_tokens` added, and all four token fields renamed to say what they measure. |
+> | 5 | `unknown` added to the documented `agent` values. The field stays `agent`, not `harness`. |
+> | 6 | `git_branch` added to `session_updated`. `transcript_path` stays off the wire. |
+> | 7 | `last_event_at` added to `session_updated`. |
+>
+> Items 3 and 4 are breaking, and `v` was deliberately **not** bumped — see the
+> waiver at the top of `PROTOCOL.md`. It is spent: the next breaking change
+> bumps.
+>
+> Two follow-ons for whoever writes the Swift client: the state set is smaller
+> than it was, so an app switching on `waiting_input` or `error` is switching on
+> something that cannot arrive; and `cwd` can now be `null`, which must render
+> as *unknown* rather than as an empty path.
 
-Ordered by how much it costs to leave unfixed.
+**Nothing here had been implemented on the wire when it was written.** Per rule
+2 of the fan-out brief, the protocol was frozen and the other tracks were coding
+against it as it stood. Every item below was either carried in the daemon's
+*internal* model only, or worked around in a way documented at the call site.
+
+Ordered by how much it cost to leave unfixed.
 
 ---
 

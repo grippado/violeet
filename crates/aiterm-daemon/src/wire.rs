@@ -74,7 +74,11 @@ pub struct SessionRegistered {
     /// binding and is published as `null`.
     pub tab_id: Option<String>,
     pub agent: String,
-    pub cwd: String,
+    /// `null` when the session was first seen through a hook with no working
+    /// directory. Deliberately not `""`: an empty string renders as an empty
+    /// path, which is a lie, where `null` renders as unknown, which is the
+    /// truth.
+    pub cwd: Option<String>,
     pub title: Option<String>,
     pub model: Option<String>,
     pub started_at: String,
@@ -93,13 +97,30 @@ pub struct SessionUpdated {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
+    pub cwd: Patch<String>,
+
+    // The four token quantities. Two pairs that measure different things: the
+    // first is how full the window is *now* and falls on compaction, the second
+    // is what the session has cost since it started and only ever climbs.
+    // Summing across the pairs produces a wrong-but-plausible number, which is
+    // why neither pair is named just "tokens".
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_tokens: Patch<u64>,
+    pub context_window_used_tokens: Patch<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_window: Patch<u64>,
+    pub context_window_size_tokens: Patch<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_input_tokens: Patch<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_output_tokens: Patch<u64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_branch: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_action: Patch<String>,
+    /// When the *session* last did something. Distinct from the envelope `ts`,
+    /// which is when the daemon emitted this message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_id: Patch<String>,
 }
@@ -122,9 +143,13 @@ impl SessionUpdated {
             && self.title.is_none()
             && self.model.is_none()
             && self.cwd.is_none()
-            && self.context_tokens.is_none()
-            && self.context_window.is_none()
+            && self.context_window_used_tokens.is_none()
+            && self.context_window_size_tokens.is_none()
+            && self.cumulative_input_tokens.is_none()
+            && self.cumulative_output_tokens.is_none()
+            && self.git_branch.is_none()
             && self.last_action.is_none()
+            && self.last_event_at.is_none()
             && self.tab_id.is_none()
     }
 }
@@ -196,6 +221,11 @@ pub enum AppToDaemon {
         tab_id: String,
         #[serde(default)]
         cwd: Option<String>,
+    },
+    /// The tab is gone. Symmetric with `RegisterTab`, and the only way the
+    /// daemon can learn a tab closed rather than inferring it from silence.
+    CloseTab {
+        tab_id: String,
     },
     ResolveHitl {
         hitl_id: String,
@@ -295,7 +325,7 @@ mod tests {
             session_id: "s1".into(),
             tab_id: Some("tab-1".into()),
             agent: "claude-code".into(),
-            cwd: "/repo".into(),
+            cwd: Some("/repo".into()),
             title: None,
             model: None,
             started_at: timestamp(now()),
@@ -307,6 +337,34 @@ mod tests {
         assert!(
             j["title"].is_null(),
             "unknown title is null, never a placeholder"
+        );
+    }
+
+    /// An unknown cwd is `null`, and specifically not `""`.
+    ///
+    /// The empty string is schema-compliant and renders as an empty path, which
+    /// reads as "the session is at the root" rather than "we do not know". That
+    /// is the same fabrication the registry's no-zero rule exists to prevent,
+    /// so it gets its own test rather than riding along with the others.
+    #[test]
+    fn an_unknown_cwd_is_null_and_never_the_empty_string() {
+        let msg = DaemonToApp::SessionRegistered(SessionRegistered {
+            v: PROTOCOL_VERSION,
+            ts: timestamp(now()),
+            session_id: "s1".into(),
+            tab_id: None,
+            agent: "unknown".into(),
+            cwd: None,
+            title: None,
+            model: None,
+            started_at: timestamp(now()),
+        });
+        let j = json_of(&msg);
+        assert!(j["cwd"].is_null());
+        assert_ne!(j["cwd"], "");
+        assert_eq!(
+            j["agent"], "unknown",
+            "`unknown` is an enumerated agent value, not a fallback we invented"
         );
     }
 
@@ -337,12 +395,12 @@ mod tests {
     #[test]
     fn sparse_patch_distinguishes_absent_from_null_from_value() {
         let mut p = SessionUpdated::new("s1", now());
-        p.context_tokens = Some(Some(39_104)); // a reading
+        p.context_window_used_tokens = Some(Some(39_104)); // a reading
         p.title = Some(None); // became unknown
                               // model left as None -> unchanged, must not appear at all
 
         let j = json_of(&DaemonToApp::SessionUpdated(p));
-        assert_eq!(j["context_tokens"], 39_104);
+        assert_eq!(j["context_window_used_tokens"], 39_104);
         assert!(j["title"].is_null());
         assert!(
             j.get("model").is_none(),
@@ -365,12 +423,56 @@ mod tests {
     #[test]
     fn there_is_no_context_pct_on_the_wire() {
         let mut p = SessionUpdated::new("s1", now());
-        p.context_tokens = Some(Some(100));
-        p.context_window = Some(Some(200));
+        p.context_window_used_tokens = Some(Some(100));
+        p.context_window_size_tokens = Some(Some(200));
         let j = json_of(&DaemonToApp::SessionUpdated(p));
         assert!(
             j.get("context_pct").is_none(),
             "the app derives the percentage; the daemon must not send one"
+        );
+    }
+
+    /// The four token quantities are four independent fields.
+    ///
+    /// The point of the long names is that occupancy and cost are different
+    /// measurements: compaction drops the first while the second keeps
+    /// climbing. If these ever collapse into one number, or if a total appears
+    /// on the wire, the distinction is lost before the app can see it.
+    #[test]
+    fn the_four_token_quantities_stay_four_and_nothing_totals_them() {
+        let mut p = SessionUpdated::new("s1", now());
+        p.context_window_used_tokens = Some(Some(39_104));
+        p.context_window_size_tokens = Some(Some(200_000));
+        p.cumulative_input_tokens = Some(Some(1_204_882));
+        p.cumulative_output_tokens = Some(Some(88_120));
+
+        let j = json_of(&DaemonToApp::SessionUpdated(p));
+        assert_eq!(j["context_window_used_tokens"], 39_104);
+        assert_eq!(j["context_window_size_tokens"], 200_000);
+        assert_eq!(j["cumulative_input_tokens"], 1_204_882);
+        assert_eq!(j["cumulative_output_tokens"], 88_120);
+
+        for invented in ["tokens", "total_tokens", "context_pct", "cost"] {
+            assert!(
+                j.get(invented).is_none(),
+                "`{invented}` is derived; deriving it here is what makes the two \
+                 pairs look interchangeable"
+            );
+        }
+    }
+
+    /// `last_event_at` is about the session; `ts` is about the message.
+    #[test]
+    fn last_event_at_is_distinct_from_the_envelope_timestamp() {
+        let mut p = SessionUpdated::new("s1", now());
+        p.last_event_at = Some(Some("2026-07-31T10:00:00Z".into()));
+
+        let j = json_of(&DaemonToApp::SessionUpdated(p));
+        assert_eq!(j["last_event_at"], "2026-07-31T10:00:00Z");
+        assert_ne!(
+            j["last_event_at"], j["ts"],
+            "collapsing these means the sidebar can only infer quietness from \
+             the absence of messages, which the protocol forbids"
         );
     }
 
@@ -398,6 +500,14 @@ mod tests {
             AppToDaemon::RenameSession {
                 session_id: "s".into(),
                 title: "t".into()
+            }
+        );
+
+        let m = parse_inbound(r#"{"type":"close_tab","v":1,"ts":"x","tab_id":"tab-1"}"#).unwrap();
+        assert_eq!(
+            m,
+            AppToDaemon::CloseTab {
+                tab_id: "tab-1".into()
             }
         );
 
