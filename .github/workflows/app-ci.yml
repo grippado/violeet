@@ -38,7 +38,7 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # `package.sh` derives the version from `git describe` and the build
           # number from the commit count. A shallow clone has neither.
@@ -79,7 +79,7 @@ jobs:
           lipo -info "$bundle/Contents/MacOS/AITerm" | tee /dev/stderr | grep -q 'x86_64 arm64'
           codesign --verify --verbose=2 "$bundle"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: aiterm-app-unsigned
           path: app/dist/*

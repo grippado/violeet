@@ -42,9 +42,14 @@ running. ⌘Q closed both and produced one `session_ended` each.
 
 **Graceful degradation.** Killed the daemon with a tab open: app alive, shell
 alive, socket file gone. Restarted it: the client reconnected on its own and
-showed up as a connected client on the new daemon. Reconnection re-sends
-`register_tab` for every live tab and then `request_snapshot`, in that order, so
-a session the snapshot describes can already be bound.
+showed up as an established client connection on the new daemon's socket.
+
+One caveat on that last test, stated rather than glossed: what was *observed*
+was the reconnection, by inspecting the daemon's open descriptors. The
+re-sending of `register_tab` on reconnect was not observed directly — it would
+have needed one more round of reading a tab id out of the window. It is the same
+code path as the first connect, which was observed, but it is inference and not
+measurement, and the difference is worth a sentence.
 
 **Shortcuts.** ⌘T new tab, ⌘W close tab, ⌘⇧] / ⌘⇧[ next and previous (wrapping),
 ⌘1–⌘8 by position with ⌘9 as "last", ⌘⌥S toggle sidebar, ⌘+ / ⌘− font size.

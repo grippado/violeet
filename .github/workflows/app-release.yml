@@ -56,7 +56,7 @@ jobs:
       MACOS_NOTARY_PROFILE: ${{ secrets.MACOS_NOTARY_PROFILE }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
