@@ -12,7 +12,7 @@ options:
 packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
-    from: 1.2.0
+    from: 1.15.0
 
 targets:
   AITerm:
@@ -22,15 +22,16 @@ targets:
       - path: Sources/AITerm
     dependencies:
       - package: SwiftTerm
-    info:
-      path: Sources/AITerm/Info.plist
-      properties:
-        CFBundleName: AITerm
-        CFBundleDisplayName: aiterm
-        LSMinimumSystemVersion: "14.0"
-        NSHighResolutionCapable: true
+    # Deliberately NOT an `info:` block. XcodeGen's `info:` *generates*
+    # Sources/AITerm/Info.plist, overwriting it on every `xcodegen generate` —
+    # and that same file is the one `scripts/package.sh` copies into the bundle
+    # it assembles without Xcode. One file, one author: the plist is committed
+    # and hand-maintained, and Xcode is pointed at it rather than handed a
+    # recipe to rewrite it from.
     settings:
       base:
+        INFOPLIST_FILE: Sources/AITerm/Info.plist
+        GENERATE_INFOPLIST_FILE: false
         PRODUCT_BUNDLE_IDENTIFIER: digital.opengateway.aiterm
         SWIFT_VERSION: "5.9"
         ENABLE_HARDENED_RUNTIME: true

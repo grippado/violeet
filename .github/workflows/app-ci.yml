@@ -1,0 +1,88 @@
+# Builds the macOS app on every change that touches it.
+#
+# Scope is deliberate: this workflow knows about `app/` and nothing else. The
+# Rust workspace belongs to another track and gets its own file, so neither can
+# turn the other one red — and neither has to be edited to change the other's
+# build.
+#
+# The build here is `swift build`, the same command `app/scripts/package.sh`
+# runs. There is no second build path to keep in sync, and no dependency on a
+# full Xcode install.
+
+name: app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/app-ci.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/app-ci.yml"
+  # So the app can be built on demand without pushing anything.
+  workflow_dispatch:
+
+concurrency:
+  # A newer push to the same branch makes the older run's answer irrelevant.
+  # Not applied to `main`, where every commit's result is worth having.
+  group: app-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build and package
+    # Apple-silicon runner: it is what the primary slice targets, and the
+    # x86_64 slice cross-compiles from it in `package.sh`.
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `package.sh` derives the version from `git describe` and the build
+          # number from the commit count. A shallow clone has neither.
+          fetch-depth: 0
+
+      - name: Select Xcode
+        # Pinned rather than "latest": a toolchain that moves under the build
+        # turns an unrelated green run red, and the failure looks like ours.
+        run: sudo xcode-select -switch /Applications/Xcode_16.4.app
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Build (debug)
+        working-directory: app
+        run: swift build
+
+      # Warnings are not failed builds here. This is a young codebase with a
+      # dependency it does not control; a warnings-as-errors gate would spend
+      # its first month failing on SwiftTerm.
+      - name: Package (unsigned)
+        working-directory: app
+        run: ./scripts/package.sh --output dist
+
+      - name: Verify the bundle
+        working-directory: app
+        run: |
+          set -euo pipefail
+          app=$(find dist -name '*.zip' -print -quit)
+          [[ -n "$app" ]] || { echo "no artifact produced"; exit 1; }
+          # Unpack and check the three things a broken hand-assembled bundle
+          # gets wrong: a missing executable, a plist Launch Services cannot
+          # read, and a binary with only one architecture in it.
+          mkdir -p verify && ditto -x -k "$app" verify
+          bundle=verify/aiterm.app
+          test -x "$bundle/Contents/MacOS/AITerm"
+          plutil -lint "$bundle/Contents/Info.plist"
+          lipo -info "$bundle/Contents/MacOS/AITerm" | tee /dev/stderr | grep -q 'x86_64 arm64'
+          codesign --verify --verbose=2 "$bundle"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiterm-app-unsigned
+          path: app/dist/*
+          # Long enough to bisect a regression, short enough that unsigned
+          # builds do not accumulate as if they were releases.
+          retention-days: 14

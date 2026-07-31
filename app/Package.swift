@@ -11,7 +11,7 @@ let package = Package(
     name: "AITerm",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0")
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.15.0")
     ],
     targets: [
         .executableTarget(

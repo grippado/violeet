@@ -1,0 +1,180 @@
+# Cuts a release when a version tag is pushed.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# That is the whole ritual. The version in the bundle comes from the tag, so a
+# release cannot ship a number that disagrees with the ref it was built from,
+# and nothing has to be edited before tagging.
+#
+# # Signing and notarization are optional and detected
+#
+# With the four secrets below configured, the app is signed with a Developer ID,
+# notarized, and stapled — it opens on any Mac with a double-click. Without
+# them, the build still happens and still publishes, ad-hoc signed, and the
+# release notes say plainly what the user has to do to run it.
+#
+# This is on purpose. A release pipeline that refuses to run without a paid
+# Apple account would mean no downloadable build at all until one exists, and
+# an unsigned build a handful of people run past Gatekeeper is worth more than
+# no build.
+#
+#   MACOS_CERTIFICATE          base64 of the Developer ID .p12
+#   MACOS_CERTIFICATE_PASSWORD password for that .p12
+#   MACOS_SIGN_IDENTITY        e.g. "Developer ID Application: Name (TEAMID)"
+#   MACOS_NOTARY_PROFILE       JSON: {"appleId","teamId","password"} (app-specific password)
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (without the leading v)"
+        required: true
+
+permissions:
+  # Needed to create the GitHub release. Everything else stays read-only:
+  # a release job has no reason to be able to push code.
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign, publish
+    runs-on: macos-15
+
+    # Job level, not step level. A step's own `env:` block is evaluated *after*
+    # its `if:`, so `if: env.MACOS_CERTIFICATE != ''` on a step that defines
+    # `MACOS_CERTIFICATE` in its own `env:` is always false — the signing step
+    # would silently never run and every release would ship unsigned with no
+    # error anywhere to explain it.
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      MACOS_NOTARY_PROFILE: ${{ secrets.MACOS_NOTARY_PROFILE }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode_16.4.app
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building aiterm $version"
+
+      # The keychain is created, used, and left behind on a runner that is
+      # destroyed minutes later. It still gets a random password rather than a
+      # literal, because a hardcoded one in a public repository is the kind of
+      # thing that gets copied into a repository where the runner is not
+      # ephemeral.
+      - name: Import signing certificate
+        id: signing
+        if: ${{ env.MACOS_CERTIFICATE != '' }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+          # Without this, codesign blocks on a GUI prompt no one can answer and
+          # the job hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$password" "$keychain" > /dev/null
+
+          security list-keychain -d user -s "$keychain" login.keychain-db
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        working-directory: app
+        env:
+          AITERM_SIGN_IDENTITY: ${{ env.MACOS_SIGN_IDENTITY }}
+        run: ./scripts/package.sh --version "${{ steps.version.outputs.version }}" --output dist
+
+      # Notarization is Apple telling Gatekeeper this build is known. Stapling
+      # writes that verdict into the artifacts, so they open on a machine that
+      # is offline. Skipped, not failed, when there is no profile: an
+      # unnotarized release is a worse release, not a broken pipeline.
+      - name: Notarize and staple
+        if: ${{ steps.signing.outputs.signed == 'true' && env.MACOS_NOTARY_PROFILE != '' }}
+        working-directory: app
+        run: |
+          set -euo pipefail
+          apple_id=$(echo "$MACOS_NOTARY_PROFILE" | plutil -extract appleId raw -)
+          team_id=$(echo "$MACOS_NOTARY_PROFILE" | plutil -extract teamId raw -)
+          password=$(echo "$MACOS_NOTARY_PROFILE" | plutil -extract password raw -)
+
+          for artifact in dist/*.zip dist/*.dmg; do
+            echo "==> Notarizing $artifact"
+            xcrun notarytool submit "$artifact" \
+              --apple-id "$apple_id" --team-id "$team_id" --password "$password" \
+              --wait --timeout 30m
+          done
+
+          # Only the .dmg can be stapled; a .zip is not a stapleable container.
+          # Its contents are covered by the notarization above, which Gatekeeper
+          # checks online on first launch.
+          xcrun stapler staple dist/*.dmg
+          xcrun stapler validate dist/*.dmg
+
+      - name: Checksums
+        working-directory: app/dist
+        run: shasum -a 256 * | tee SHA256SUMS.txt
+
+      - name: Write release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          {
+            echo "## aiterm ${{ steps.version.outputs.version }}"
+            echo
+            echo "macOS 14 or later. Universal (Apple silicon and Intel)."
+            echo
+            if [[ "${{ steps.signing.outputs.signed }}" == "true" ]]; then
+              echo "Signed with a Developer ID. Open the .dmg and drag aiterm to Applications."
+            else
+              echo "**This build is not signed with a Developer ID.** macOS will refuse to"
+              echo "open it until the quarantine flag is removed:"
+              echo
+              echo '```'
+              echo "xattr -dr com.apple.quarantine /Applications/aiterm.app"
+              echo '```'
+            fi
+            echo
+            echo "aiterm talks to \`aiterm-daemon\` over \`~/.aiterm/daemon.sock\`. Without the"
+            echo "daemon running the terminal works normally and the sidebar has no data."
+          } > notes.md
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: aiterm ${{ steps.version.outputs.version }}
+          body_path: notes.md
+          # A tag that looks like a prerelease is published as one, so a
+          # `v0.2.0-rc1` never becomes the download the front page offers.
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: |
+            app/dist/*.dmg
+            app/dist/*.zip
+            app/dist/SHA256SUMS.txt

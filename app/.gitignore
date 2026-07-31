@@ -1,0 +1,15 @@
+# Build output from scripts/package.sh — the .app, the .dmg and the .zip.
+#
+# Scoped here rather than in the repository root because it is the app's build
+# output and the app's tracks own it. Releases are published as GitHub release
+# assets by .github/workflows/app-release.yml; a binary in git is a copy of an
+# artifact that is already versioned somewhere better.
+dist/
+
+# XcodeGen output. Regenerate with `xcodegen generate`; pbxproj is
+# machine-written XML and conflicts badly. Also covered by the root .gitignore —
+# repeated here so a `git add app/` from inside this directory cannot pick it up
+# if that line ever moves.
+*.xcodeproj
+*.xcworkspace
+.xcbuild/
