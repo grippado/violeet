@@ -99,10 +99,18 @@ It now searches every submenu by selector, and runs again on
 - **The working directory is polled, not subscribed.** No stock macOS shell
   emits OSC 7 outside Apple Terminal, so the cwd comes from `proc_pidinfo` every
   2 s, with OSC 7 honoured when a configured shell does send it.
-- **No tests.** There is no test target in `app/`, and adding one is a
-  `Package.swift` change I judged out of proportion to a wave whose brief was
-  "validate PTY, tabs and socket before investing in UI". `Protocol.swift` is
-  the part that most wants tests and would be the place to start.
+- **Tests cover `Protocol.swift` and nothing else.** Added after the wave, on
+  Gabriel's argument, which is the right one: the sparse-patch decoder is the
+  only place in the app where a mistake is *silent*. Everything else fails
+  loudly — a broken PTY is a dead tab, a broken socket is an offline badge —
+  where a bad decode renders a value the session no longer has and looks like a
+  daemon bug from the outside.
+
+  **They do not run on this machine.** Neither `Testing` nor `XCTest` ships with
+  Command Line Tools, and there is no Xcode here, so `swift test` fails with "no
+  such module". CI runs them; locally they are compiled by nobody. `swift build`
+  and `scripts/package.sh` still need nothing but CLT, so this is the one place
+  the toolchain floor is higher than the rest of the repo's.
 
 ## What I nearly changed outside my scope, and did not
 
@@ -111,12 +119,13 @@ It now searches every submenu by selector, and runs again on
   edited, not reconciled — flagging it here instead. Nothing in my
   implementation depends on the answer: the wire `v` is `1` either way, which is
   what the daemon accepts.
-- **`.gitignore` ignores `app/Package.resolved`**, with a comment saying to
-  commit it before shipping builds. We are now shipping builds from CI, and an
-  unpinned resolve makes release builds irreproducible. I did not edit
-  `.gitignore` (root file, not mine) — I force-added `app/Package.resolved`
-  instead, which is inside my scope and achieves the pin. The `.gitignore` line
-  should probably go; that is track A's call.
+- **`.gitignore` ignored `app/Package.resolved`.** I force-added the file rather
+  than editing a root file that was not mine, and flagged the line as track A's
+  call. Gabriel's correction: track A is finished, nobody is contending for the
+  root any more, and the line had already done its job. Removed in a follow-up
+  commit — the ignore rule and the force-add were contradicting each other, and
+  a repo where the two disagree is a repo where the next person reverts the
+  wrong one.
 - **`crates/aiterm-daemon` `/health` reports a session as live after its
   `session_ended`.** Observed while testing; the registry appears to keep ended
   sessions until they expire. Did not touch it. Track A's.
@@ -136,9 +145,31 @@ Both by explicit instruction from Gabriel during the wave, overriding the brief:
 
 Also outside the repo, for testing only: the app was installed to
 `~/Applications/aiterm.app` (the computer-use tooling only resolves apps in
-standard locations). Two orphaned `zsh` processes from the runs *before* the
-`SIGHUP` fix survive on ttys008 and ttys009; they are harmless and left for
-Gabriel to decide about.
+standard locations).
+
+**A mistake worth recording.** I reported two `zsh` processes on ttys008 and
+ttys009 as orphans left by the pre-`SIGHUP` runs, and killed them when asked.
+They were not ours. Both ttys had real terminal sessions underneath — `login` →
+`-zsh` → `claude`, parented to the terminal app — and the two pids were almost
+certainly prompt workers (p10k/gitstatus) belonging to those sessions. The
+sessions survived; their prompts likely lost git status until reopened. The
+diagnosis rested on `ppid == 1` plus a timestamp that overlapped the test run,
+which is not enough to attribute a process, and I presented it with more
+confidence than it earned.
+
+## Repository hygiene, checked after the push
+
+`docs/spikes/` went public-repo-shaped before anyone audited it. Checked:
+`grep -rniE 'gabriel|grippado|arco|isaac|/Users/'`. The only hits are
+`/Users/grippado/…` in home paths — the `cwd` of every captured payload is
+`/private/tmp/aiterm-spike` and every `tool_input` is `/bin/date
++SPIKE_MARKER_*`. No client repo path, no work context, no secret. The spike's
+discipline held.
+
+The repository is **private with zero forks**, so nothing was exposed and no
+history rewrite is warranted. If it is ever made public, normalizing
+`/Users/grippado/` to `/Users/you/` in `docs/spikes/` (which is the convention
+`PROTOCOL.md` already uses) is a two-minute job and the only thing outstanding.
 
 ## Assumptions about the other tracks
 
