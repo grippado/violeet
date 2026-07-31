@@ -27,9 +27,11 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::registry::{Registry, Session};
+use crate::hitl::{HitlRegistry, HitlRequest, NewHitl, Resolution};
+use crate::registry::{HookObservation, HookOutcome, Registry, Session};
 use crate::wire::{
-    self, AppToDaemon, DaemonToApp, Rejected, SessionRegistered, SessionUpdated, PROTOCOL_VERSION,
+    self, AppToDaemon, DaemonToApp, HitlOrigin, HitlPending, HitlResolved, Rejected,
+    SessionRegistered, SessionUpdated, PROTOCOL_VERSION,
 };
 
 /// How many messages a slow client may fall behind before it starts losing
@@ -43,17 +45,28 @@ const UNICAST_CAPACITY: usize = 256;
 const MAX_LINE_BYTES: u64 = 1024 * 1024;
 
 /// Shared handle to the daemon's state and its outbound broadcast.
+///
+/// Two locks, never held at once. Nothing in this module needs both, and
+/// keeping them separate means a long-running HITL cannot park the registry.
 #[derive(Clone)]
 pub struct Hub {
     registry: Arc<Mutex<Registry>>,
+    hitl: Arc<Mutex<HitlRegistry>>,
     tx: broadcast::Sender<String>,
 }
 
 impl Hub {
     pub fn new(registry: Registry) -> Self {
+        Self::with_hitl(registry, HitlRegistry::with_default_timeout())
+    }
+
+    /// Same, with an explicit HITL registry — tests use it to set a deadline
+    /// they can actually reach.
+    pub fn with_hitl(registry: Registry, hitl: HitlRegistry) -> Self {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
             registry: Arc::new(Mutex::new(registry)),
+            hitl: Arc::new(Mutex::new(hitl)),
             tx,
         }
     }
@@ -62,12 +75,25 @@ impl Hub {
         &self.registry
     }
 
+    pub fn hitl(&self) -> &Arc<Mutex<HitlRegistry>> {
+        &self.hitl
+    }
+
     /// Lock the registry, recovering from a poisoned mutex rather than
     /// panicking. A panic in one connection must not take the daemon down with
     /// it: the registry's invariants are enforced by its own methods, not by
     /// the lock.
     fn lock(&self) -> MutexGuard<'_, Registry> {
         match self.registry.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Same recovery for the HITL registry, and for the same reason: a panic
+    /// while one permission request is in flight must not strand every other.
+    fn lock_hitl(&self) -> MutexGuard<'_, HitlRegistry> {
+        match self.hitl.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         }
@@ -113,20 +139,214 @@ impl Hub {
         })
     }
 
+    /// Feed in what a hook told us, and announce whatever changed.
+    ///
+    /// This is the HTTP layer's only way into the registry. It returns the raw
+    /// [`HookOutcome`] so the caller can log a refused transition, but the
+    /// caller never has to build a wire message itself.
+    ///
+    /// A refused transition publishes **nothing**. The registry leaves the
+    /// session untouched in that case — including `last_event_at`, deliberately
+    /// — so there is genuinely no change to report, and inventing a patch would
+    /// tell the app a session is alive on the strength of an illegal move.
+    pub fn observe_hook(&self, obs: HookObservation, now: chrono::DateTime<Utc>) -> HookOutcome {
+        let (outcome, msg) = {
+            let mut registry = self.lock();
+            let outcome = registry.observe_hook(obs, now);
+
+            let msg = match registry.session(&outcome.session_id) {
+                _ if outcome.rejected_transition.is_some() => None,
+                Some(session) if outcome.created => Some(Self::session_registered(session)),
+                // A session that just finished gets no patch. `session_ended`
+                // is the message that reports the end, and `Done`/`Dead` have
+                // no wire state anyway — so a patch here would be a stateless
+                // update about a card the app is one message away from
+                // removing.
+                Some(session) if session.state().is_finished() => None,
+                Some(session) => {
+                    let mut patch = SessionUpdated::new(&session.session_id, now);
+                    if outcome.state_changed {
+                        patch.state = session.state().wire_state().map(str::to_string);
+                    }
+                    if outcome.newly_bound {
+                        patch.tab_id = Some(session.binding.bound_tab_id().map(str::to_string));
+                    }
+                    patch.cwd = Some(session.cwd.clone());
+                    patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
+                    Some(DaemonToApp::SessionUpdated(patch))
+                }
+                None => None,
+            };
+            (outcome, msg)
+        };
+
+        if let Some(msg) = msg {
+            self.broadcast(&msg);
+        }
+        outcome
+    }
+
+    /// The `hitl_pending` message for a request as it stands.
+    fn hitl_pending(request: &HitlRequest) -> DaemonToApp {
+        DaemonToApp::HitlPending(HitlPending {
+            v: PROTOCOL_VERSION,
+            ts: wire::timestamp(Utc::now()),
+            hitl_id: request.hitl_id.clone(),
+            session_id: request.session_id.clone(),
+            tab_id: request.tab_id.clone(),
+            tool_name: request.tool_name.clone(),
+            tool_input: request.tool_input.clone(),
+            permission_suggestions: request.permission_suggestions.clone(),
+            expires_at: wire::timestamp(request.expires_at),
+        })
+    }
+
     /// Everything a freshly connected client needs, as ordinary messages.
     ///
     /// `docs/PROTOCOL.md` deliberately has no snapshot envelope and no
     /// end-of-snapshot marker: the daemon replays `session_registered` per live
-    /// session. Clients treat all inbound messages as idempotent upserts, so a
-    /// replay for a session they already know is normal traffic.
+    /// session, then `hitl_pending` per outstanding request. Clients treat all
+    /// inbound messages as idempotent upserts, so a replay for something they
+    /// already know is normal traffic.
     ///
-    /// TODO(track-A): once HITL exists, a `hitl_pending` per outstanding request
-    /// is replayed here too.
+    /// Sessions come first on purpose: a `hitl_pending` names a `session_id`,
+    /// and a client that builds cards in arrival order should never meet a
+    /// permission request for a session it has not been told about.
     fn snapshot(&self) -> Vec<DaemonToApp> {
-        self.lock()
+        let mut out: Vec<DaemonToApp> = self
+            .lock()
             .live_sessions()
             .map(Self::session_registered)
-            .collect()
+            .collect();
+        out.extend(self.lock_hitl().pending().map(Self::hitl_pending));
+        out
+    }
+
+    /// Park a permission request, announce it, and hand back the channel the
+    /// HTTP handler waits on.
+    pub fn open_hitl(
+        &self,
+        new: NewHitl,
+        now: chrono::DateTime<Utc>,
+    ) -> (HitlRequest, tokio::sync::oneshot::Receiver<Resolution>) {
+        let (request, rx) = self.lock_hitl().open(new, now);
+        self.broadcast(&Self::hitl_pending(&request));
+        (request, rx)
+    }
+
+    /// Resolve a request and announce it. Returns whether anything was there.
+    ///
+    /// Announcing happens after the lock is dropped, and only when a request
+    /// was actually consumed — so the exactly-once guarantee on `hitl_resolved`
+    /// comes from the registry's first-wins removal, not from a check here.
+    pub fn resolve_hitl(&self, hitl_id: &str, resolution: Resolution) -> bool {
+        let origin = resolution.origin;
+        let decision = resolution.decision.as_ref().map(|d| d.behavior.clone());
+
+        let Some(request) = self.lock_hitl().resolve(hitl_id, resolution) else {
+            return false;
+        };
+
+        self.broadcast(&DaemonToApp::HitlResolved(HitlResolved {
+            v: PROTOCOL_VERSION,
+            ts: wire::timestamp(Utc::now()),
+            hitl_id: request.hitl_id,
+            session_id: request.session_id,
+            origin,
+            decision,
+        }));
+        true
+    }
+
+    /// Announce a resolution the HITL registry already performed.
+    ///
+    /// Used by the paths that resolve in bulk — expiry, and a session ending —
+    /// where the removal happened inside the registry and only the broadcast is
+    /// left to do.
+    fn announce_resolved(&self, request: &HitlRequest, origin: HitlOrigin) {
+        self.broadcast(&DaemonToApp::HitlResolved(HitlResolved {
+            v: PROTOCOL_VERSION,
+            ts: wire::timestamp(Utc::now()),
+            hitl_id: request.hitl_id.clone(),
+            session_id: request.session_id.clone(),
+            origin,
+            // Only the app path knows what was chosen.
+            decision: None,
+        }));
+    }
+
+    /// End a session: clear its permission requests, then announce the end.
+    ///
+    /// The order is required by `docs/PROTOCOL.md` and is the whole reason this
+    /// helper exists. A `session_ended` that arrives while the app still holds a
+    /// `hitl_pending` card for that session leaves the app garbage-collecting
+    /// orphans, which is exactly the bookkeeping the protocol promises it will
+    /// never have to do.
+    pub fn publish_session_ended(
+        &self,
+        session_id: &str,
+        tab_id: Option<String>,
+        reason: wire::EndReason,
+        now: chrono::DateTime<Utc>,
+    ) {
+        let orphaned = self
+            .lock_hitl()
+            .resolve_all_for_session(session_id, HitlOrigin::DaemonError);
+        for request in &orphaned {
+            self.announce_resolved(request, HitlOrigin::DaemonError);
+        }
+
+        self.broadcast(&DaemonToApp::SessionEnded(wire::SessionEnded {
+            v: PROTOCOL_VERSION,
+            ts: wire::timestamp(now),
+            session_id: session_id.to_string(),
+            tab_id,
+            reason,
+        }));
+    }
+
+    /// The tab a session is bound to, if it is bound at all.
+    ///
+    /// A *pending* claim answers `None`, same as everywhere else: it is not a
+    /// binding until the tab is known.
+    pub fn bound_tab_of(&self, session_id: &str) -> Option<String> {
+        self.lock()
+            .session(session_id)?
+            .binding
+            .bound_tab_id()
+            .map(str::to_string)
+    }
+
+    /// The human answered in the terminal and won the race.
+    ///
+    /// Returns whether a request was actually consumed. `false` is the common
+    /// case by far: most `PostToolUse` hooks are for calls that never needed a
+    /// permission decision at all.
+    pub fn resolve_tui_race(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> bool {
+        let Some(request) = self
+            .lock_hitl()
+            .resolve_tui_race(session_id, tool_name, tool_input)
+        else {
+            return false;
+        };
+        self.announce_resolved(&request, HitlOrigin::Tui);
+        true
+    }
+
+    /// Resolve everything past its deadline and announce each one.
+    ///
+    /// Returns how many fired, for the caller's log.
+    pub fn expire_hitl(&self, now: chrono::DateTime<Utc>) -> usize {
+        let expired = self.lock_hitl().expire(now);
+        for request in &expired {
+            self.announce_resolved(request, HitlOrigin::Timeout);
+        }
+        expired.len()
     }
 
     /// Apply one inbound command. Returns messages for *this* client only;
@@ -160,28 +380,18 @@ impl Hub {
 
             AppToDaemon::CloseTab { tab_id } => {
                 // The registry marks the tab's sessions dead; we announce each
-                // one. Built under the lock, broadcast after dropping it.
-                let ended: Vec<DaemonToApp> = {
-                    let mut registry = self.lock();
-                    registry
-                        .close_tab(&tab_id, now)
-                        .into_iter()
-                        .map(|session_id| {
-                            DaemonToApp::SessionEnded(wire::SessionEnded {
-                                v: PROTOCOL_VERSION,
-                                ts: wire::timestamp(now),
-                                session_id,
-                                tab_id: Some(tab_id.clone()),
-                                reason: wire::EndReason::TabClosed,
-                            })
-                        })
-                        .collect()
-                };
+                // one. Built under the lock, published after dropping it.
+                let killed = self.lock().close_tab(&tab_id, now);
 
                 // An unknown tab kills nothing and says nothing. Per
                 // docs/PROTOCOL.md that is the normal outcome, not an error.
-                for msg in ended {
-                    self.broadcast(&msg);
+                for session_id in killed {
+                    self.publish_session_ended(
+                        &session_id,
+                        Some(tab_id.clone()),
+                        wire::EndReason::TabClosed,
+                        now,
+                    );
                 }
                 Vec::new()
             }
@@ -206,12 +416,13 @@ impl Hub {
 
             AppToDaemon::RequestSnapshot {} => self.snapshot(),
 
-            AppToDaemon::ResolveHitl { hitl_id, .. } => {
-                // TODO(track-A): HITL bookkeeping arrives with the HTTP hook
-                // endpoint, the next task. Until then a resolve targets nothing.
-                // Per docs/PROTOCOL.md, resolving an unknown hitl_id is silently
-                // ignored: it is the normal outcome of the race, not an error.
-                let _ = hitl_id;
+            AppToDaemon::ResolveHitl { hitl_id, decision } => {
+                // An unknown or already-resolved id is silently ignored: per
+                // docs/PROTOCOL.md that is the normal outcome of the race with
+                // the terminal, not an error. The app learns the real outcome
+                // from `hitl_resolved` either way, which is why it must treat
+                // its own click as a request rather than a fact.
+                self.resolve_hitl(&hitl_id, Resolution::from_app(decision));
                 Vec::new()
             }
         }

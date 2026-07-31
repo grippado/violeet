@@ -8,18 +8,22 @@
 //!
 //! - [`registry`] — live sessions, tab bindings, lifecycle. Synchronous and
 //!   I/O-free, so it is testable without a socket.
+//! - [`hitl`]     — permission requests being held open. Same discipline as
+//!   [`registry`]: synchronous, and `now` is a parameter.
 //! - [`wire`]     — the JSON-lines message types of `docs/PROTOCOL.md`.
 //! - [`socket`]   — the Unix socket server that speaks [`wire`] to clients.
+//! - [`http`]     — the loopback endpoint Claude Code's hooks POST to.
+//! - [`discovery`] — `~/.aiterm/daemon.json`, so clients need not guess a port.
 //!
 //! Transcript reading and context math are deliberately *not* here: they live in
 //! the `aiterm-transcript` crate, which Track C owns. The daemon does not depend
 //! on it yet — that wiring lands in Wave 2 integration.
-//!
-//! The HTTP endpoint that receives Claude Code hooks is the next task and does
-//! not exist yet.
 
 #![forbid(unsafe_code)]
 
+pub mod discovery;
+pub mod hitl;
+pub mod http;
 pub mod registry;
 pub mod socket;
 pub mod wire;

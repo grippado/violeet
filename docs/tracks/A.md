@@ -34,6 +34,94 @@ formally owned by Track A. The boundary is now clean.
 `cargo test -p aiterm-daemon` → **67 passing** (54 unit, 13 integration).
 `cargo clippy --all-targets` clean, `cargo fmt --check` clean.
 
+### 2026-07-31 — protocol thaw, HTTP hook endpoint, HITL
+
+The wave ended, so this session did the two things that were blocked on it
+being over.
+
+**The protocol changed.** All seven requests in
+[`A-protocol-request.md`](A-protocol-request.md) were accepted and applied to
+`PROTOCOL.md`, `wire.rs` and the registry together. That file now carries the
+decision table. The consequence worth repeating here: `waiting_input` and
+`error` are gone from the wire, and there is a test asserting the state set and
+the document agree **in both directions** — the reverse half is the one that
+matters, since a state the document allows but nothing emits is a promise
+silently broken.
+
+**`close_tab` is wired.** `Registry::close_tab()` was implemented and unit
+tested in Wave 1 but unreachable; it now has a message, a socket route, and four
+integration tests including the one that matters — a closed tab's session leaves
+the snapshot immediately rather than lingering for the 30-minute TTL.
+
+**The HTTP endpoint exists**, in `http/`, on axum. One route for every
+informational hook, discriminated by the payload's own `hook_event_name`, so
+`install-hooks` writes one URL and a Claude Code that adds an event needs no new
+route. Loopback-only, asserted by a test that binds `0.0.0.0` on the same port
+and requires it to succeed.
+
+**HITL is real**, in `hitl/`, and it is the part to read carefully. The registry
+is synchronous and takes `now` as a parameter, like the session registry, and
+holds one `oneshot::Sender` per parked request. ADR-004's invariant — no
+permission request goes unanswered — is enforced in three layers rather than by
+care: `CatchPanicLayer` turns a panicking handler into `500`; the handler owns
+its own deadline rather than trusting the sweeper; and the sweeper is a backstop
+for requests whose HTTP client vanished. All three resolutions are
+integration-tested against a real socket and a real HTTP client, including the
+TUI race, which resolves nothing when the match is ambiguous.
+
+**The remaining Wave 1 stubs are closed.** `~/.aiterm/daemon.json` is written
+after both servers bind (never before — publishing a port that might fail to
+bind advertises a lie), removed on shutdown, and written atomically via
+rename. `session_ended` is published on expiry. `Hub::snapshot` replays
+`hitl_pending`, sessions first, so a client building cards in arrival order
+never meets a request for a session it has not heard of.
+
+`cargo test --workspace` → **122 passing**. Clippy and fmt clean across the
+workspace.
+
+#### Two things found by testing, not by reading
+
+1. **`SessionEnd` was emitting a `session_updated` before `session_ended`.**
+   Harmless on the wire, but it is a patch about a card the app is one message
+   away from removing, and `Done` has no wire state so the patch carried no
+   state anyway. A finished session now publishes no patch at all.
+2. **Shutdown only handled `SIGINT`.** A process manager sends `SIGTERM`, so
+   every managed shutdown left `daemon.json` behind — and a stale discovery file
+   is worse than no file, because it points a client at a dead port. Found by
+   running the daemon and `kill`ing it, not by any test.
+
+#### The response shape was wrong, and the spike proved it
+
+I first wrote `PermissionResponse` against the documented `hookSpecificOutput`
+envelope — `permissionDecision` and `permissionDecisionReason` as siblings of
+`hookEventName` — and flagged it as the one thing not verified. It was worse
+than unverified: it was **wrong**.
+
+The spike's own hook scripts survived in `/tmp/aiterm-spike` and are now
+preserved in [`docs/spikes/`](../spikes/). What Claude Code v2.1.220 actually
+honoured, confirmed as `err=False` in the session transcript, is a **nested
+`decision` object**:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+```
+
+That is now the third documentation error on this single hook, after the
+missing `tool_use_id` and the wrong `permission_suggestions` shape. Two tests
+pin it: one asserts a bare allow serializes byte-for-byte identical to
+`docs/spikes/scripts/hook-allow-0.sh`, and one asserts the documented key names
+**never** appear — because the plausible future mistake is someone "fixing" the
+struct to match the docs, which breaks HITL silently.
+
+Had this shipped, the failure mode was the worst available: the daemon
+broadcasting `origin: "app"`, the sidebar clearing the card, and the user's
+agent still sitting on a dialog nobody was watching.
+
+**Still unmeasured:** `updatedInput` and `updatedPermissions`. No spike sent
+them. They are spelled camelCase to match their measured siblings and omitted
+unless a client asks, so a plain allow or deny carries nothing invented. If the
+sidebar ever amends tool input, spike it first.
+
 ---
 
 ## What is done and tested
@@ -145,29 +233,20 @@ promised by `PROTOCOL.md`, both tested.
 | `Session::git_branch` — always `None` | **Track C** | The registry does no I/O, so it never populates this itself. |
 | `SessionRegistered.model` — always `None` | **Track C** | Comes from the transcript. |
 | `TitleSource::Derived` — nothing writes it | **Track C** | Naming logic is a future task; the field and stickiness rule exist. |
-| `AppToDaemon::ResolveHitl` — parsed, then ignored | **Track A (me)** | HITL bookkeeping arrives with the HTTP endpoint, the next task. |
-| `Hub::snapshot` — replays sessions only | **Track A (me)** | Will also replay `hitl_pending` once HITL exists. |
-| `~/.aiterm/daemon.json` — not written | **Track A (me)** | The discovery file carries the effective **hook port**. Writing it before the HTTP server exists would advertise a lie, so `main.rs` has a `TODO` instead. |
-| `session_ended` on expiry — logged, not published | **Track A (me)** | The sweeper detects expiry correctly; building the message needs publish helpers that land with the HTTP task. |
 | The real socket client | **Track B** | Integration tests use fakes speaking the same JSON-lines protocol. |
+
+Everything Track A owed itself was closed on 2026-07-31: `ResolveHitl`,
+`Hub::snapshot`, `~/.aiterm/daemon.json` and `session_ended` on expiry all work
+and are tested. The Track C rows above are still open and still marked
+`TODO(track-C)` in the code.
 
 ---
 
 ## Protocol divergences
 
-Seven, all recorded in [`A-protocol-request.md`](A-protocol-request.md). Nothing
-was changed on the wire. Two are worth surfacing here:
-
-1. **There is no app→daemon "tab closed" message.** `Registry::close_tab()` is
-   implemented and tested, but nothing can reach it over the socket. A closed
-   tab's sessions survive until the inactivity TTL — up to 30 minutes of a card
-   for a tab that is gone. This blocks a stated requirement and also blocks
-   Track B.
-2. **`session_registered.cwd` is required and non-null**, but a hook that
-   carried no working directory leaves us with nothing to send. I send `""`,
-   which is schema-compliant and marked `TODO` at the call site — but it is
-   exactly the fabrication the no-zero rule exists to prevent, since an empty
-   string renders as an empty path rather than as `—`.
+**All seven were resolved on 2026-07-31.** See the decision table at the top of
+[`A-protocol-request.md`](A-protocol-request.md). There is no divergence between
+the daemon and `PROTOCOL.md` today.
 
 ---
 
@@ -196,6 +275,17 @@ was changed on the wire. Two are worth surfacing here:
 ## Things I nearly changed outside my scope, and did not
 
 This is the section the Wave 2 integration should read first.
+
+> **Status after 2026-07-31.** The wave is over, so the scope rules that
+> produced this list no longer bind anyone. Item 2 is **done** — the README's
+> component table was wrong and is fixed. Items 1, 3, 4, 5 and 6 are still open,
+> and item 1 is still the biggest: the protocol was just revised with `wire.rs`
+> in the wrong crate, which was the cheapest moment there will ever be to move
+> it. It did not move, so the next person pays slightly more.
+>
+> One item to add: **the daemon now depends on `axum` and `tower-http`**,
+> declared in its own manifest, not promoted to `[workspace.dependencies]` —
+> same open question as item 5.
 
 1. **`crates/aiterm-proto/` should own `wire.rs`.** `PROTOCOL.md` says in its
    own opening paragraph that the Rust projection of the protocol lives in
