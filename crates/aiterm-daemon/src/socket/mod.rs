@@ -29,6 +29,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::hitl::{HitlRegistry, HitlRequest, NewHitl, Resolution};
 use crate::registry::{HookObservation, HookOutcome, Registry, Session, TitleSource};
+use crate::titles::TitleRecord;
 use crate::wire::{
     self, AppToDaemon, DaemonToApp, HitlOrigin, HitlPending, HitlResolved, Rejected,
     SessionRegistered, SessionUpdated, PROTOCOL_VERSION,
@@ -73,9 +74,7 @@ impl Hub {
         Self {
             registry: Arc::new(Mutex::new(registry)),
             hitl: Arc::new(Mutex::new(hitl)),
-            transcripts: Arc::new(Mutex::new(
-                crate::transcript::TranscriptSupervisor::new(),
-            )),
+            transcripts: Arc::new(Mutex::new(crate::transcript::TranscriptSupervisor::new())),
             titles: Arc::new(Mutex::new(crate::titles::TitleStore::load())),
             tx,
         }
@@ -203,44 +202,105 @@ impl Hub {
         source: TitleSource,
         now: chrono::DateTime<Utc>,
     ) -> bool {
-        let msg = {
+        self.apply_naming(session_id, now, |session| {
+            session.offer_title(title, source, now)
+        })
+    }
+
+    /// Set a session's name to what the human typed, and publish it.
+    ///
+    /// Separate entry point from `offer_title` even though the funnel below is
+    /// shared: this is the one call that takes the name away from automatic
+    /// naming, and it should be findable by that name.
+    pub fn set_user_title(
+        &self,
+        session_id: &str,
+        title: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> bool {
+        self.apply_naming(session_id, now, |session| {
+            session.set_user_title(title, now)
+        })
+    }
+
+    /// Hand a session back to automatic naming, and publish what it fell back
+    /// to. False when the session is unknown, or was never renamed.
+    pub fn release_user_title(&self, session_id: &str, now: chrono::DateTime<Utc>) -> bool {
+        self.apply_naming(session_id, now, |session| session.release_user_title(now))
+    }
+
+    /// The one funnel every naming path goes through, so precedence,
+    /// persistence and what the app was told cannot disagree with each other.
+    ///
+    /// `change` mutates the session and says whether the **effective** name
+    /// moved. Persistence happens either way: an `ai-title` that arrived while
+    /// a manual name was in force changes nothing on screen and still has to be
+    /// written down, or unlocking after a restart would have nothing to return
+    /// to.
+    fn apply_naming(
+        &self,
+        session_id: &str,
+        now: chrono::DateTime<Utc>,
+        change: impl FnOnce(&mut Session) -> bool,
+    ) -> bool {
+        let (changed, record, msg) = {
             let mut registry = self.lock();
             let Some(session) = registry.session_mut(session_id) else {
                 return false;
             };
-            if !session.offer_title(title, source, now) {
-                return false;
-            }
+            let changed = change(session);
+            let record = session.title.as_ref().map(|title| TitleRecord {
+                title: title.clone(),
+                source: session.title_source,
+                // Only worth carrying when it is not already the name on
+                // screen: a session with no manual name *is* its automatic
+                // track, and writing it twice would be two copies to keep in
+                // step.
+                auto: match session.title_source {
+                    TitleSource::User => session
+                        .auto_title
+                        .clone()
+                        .map(|auto| (auto, session.auto_source)),
+                    _ => None,
+                },
+            });
+
             let mut patch = SessionUpdated::new(session_id, now);
             patch.title = Some(session.title.clone());
             patch.title_source = Some(session.title_source.as_wire().map(str::to_string));
             patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
-            DaemonToApp::SessionUpdated(patch)
+            (changed, record, DaemonToApp::SessionUpdated(patch))
         };
 
         // Outside the registry lock, and before the broadcast: a title the app
         // has been shown must already be one a restart would restore.
-        self.remember_title(session_id, title, source);
-        self.broadcast(&msg);
-        true
+        self.remember_title(session_id, record.as_ref());
+        if changed {
+            self.broadcast(&msg);
+        }
+        changed
     }
 
-    fn remember_title(&self, session_id: &str, title: &str, source: TitleSource) {
-        match self.titles.lock() {
-            Ok(mut g) => g.put(session_id, title, source),
-            Err(p) => p.into_inner().put(session_id, title, source),
+    /// Write a session's naming down, or forget it when there is no name left
+    /// — which is what unlocking a session that never had a derived name does.
+    fn remember_title(&self, session_id: &str, record: Option<&TitleRecord>) {
+        let mut guard = match self.titles.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        match record {
+            Some(record) => guard.put(session_id, record),
+            None => guard.forget(session_id),
         }
     }
 
-    /// The name this session had before the daemon last stopped, if any.
-    fn remembered_title(&self, session_id: &str) -> Option<(String, TitleSource)> {
+    /// The naming this session had before the daemon last stopped, if any.
+    fn remembered_title(&self, session_id: &str) -> Option<TitleRecord> {
         let guard = match self.titles.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        guard
-            .get(session_id)
-            .map(|(t, s)| (t.to_string(), s))
+        guard.get(session_id)
     }
 
     fn forget_title(&self, session_id: &str) {
@@ -336,8 +396,16 @@ impl Hub {
         // already gone by here. The app sees the card appear and be named in
         // the same batch of messages.
         if outcome.created {
-            if let Some((title, source)) = self.remembered_title(&outcome.session_id) {
-                self.offer_title(&outcome.session_id, &title, source, now);
+            if let Some(record) = self.remembered_title(&outcome.session_id) {
+                // The derived track first, so a restored manual name lands on
+                // top of it rather than beside it. Offering them the other way
+                // round would leave the session unlockable-into-nothing: the
+                // manual name would be in force with an empty automatic track
+                // underneath, and "back to automatic" would drop to the cwd.
+                if let Some((auto, source)) = record.auto {
+                    self.offer_title(&outcome.session_id, &auto, source, now);
+                }
+                self.offer_title(&outcome.session_id, &record.title, record.source, now);
             }
             // And, for a session that was already running when we met it, the
             // name sitting in the head of its own transcript. Once, here, at
@@ -663,7 +731,6 @@ impl Hub {
         }));
     }
 
-
     /// The tab a session is bound to, if it is bound at all.
     ///
     /// A *pending* claim answers `None`, same as everywhere else: it is not a
@@ -761,7 +828,15 @@ impl Hub {
                 // An unknown session produces nothing: the protocol has no
                 // error reply and inventing one would be a unilateral
                 // extension.
-                self.offer_title(&session_id, &title, TitleSource::User, now);
+                self.set_user_title(&session_id, &title, now);
+                Vec::new()
+            }
+
+            AppToDaemon::ReleaseSessionTitle { session_id } => {
+                // The way out of a manual name. Without it `User` is a rank
+                // nothing outranks and the user is stuck with whatever they
+                // typed once — see `Session::release_user_title`.
+                self.release_user_title(&session_id, now);
                 Vec::new()
             }
 

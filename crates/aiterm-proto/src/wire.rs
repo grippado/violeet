@@ -295,6 +295,16 @@ pub enum AppToDaemon {
         session_id: String,
         title: String,
     },
+    /// Give a session back to automatic naming.
+    ///
+    /// A separate message rather than `rename_session` with a null title: an
+    /// unknown `type` is ignored by design (see `Rejected`), so an old daemon
+    /// meeting a new app quietly keeps the manual name — while a null in a
+    /// field typed as a string would be rejected as malformed and logged as an
+    /// error the user did not cause.
+    ReleaseSessionTitle {
+        session_id: String,
+    },
     RequestSnapshot {},
 }
 
@@ -560,6 +570,16 @@ mod tests {
             AppToDaemon::RenameSession {
                 session_id: "s".into(),
                 title: "t".into()
+            }
+        );
+
+        let m =
+            parse_inbound(r#"{"type":"release_session_title","v":1,"ts":"x","session_id":"s"}"#)
+                .unwrap();
+        assert_eq!(
+            m,
+            AppToDaemon::ReleaseSessionTitle {
+                session_id: "s".into()
             }
         );
 

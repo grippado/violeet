@@ -1,6 +1,6 @@
 # aiterm socket protocol
 
-> **Wire version `v` = 1. Document revision 5.**
+> **Wire version `v` = 1. Document revision 6.**
 >
 > These are two different numbers and conflating them has now cost time twice:
 > two separate tracks were briefed that the protocol was "v2, frozen", read
@@ -16,7 +16,9 @@
 >   [`tracks/A-protocol-request.md`](tracks/A-protocol-request.md). Revision 3
 >   (2026-08-01) added `cumulative_tokens_partial`. Neither bumped `v`:
 >   revision 2 for the reason recorded below, revision 3 because adding an
->   optional field is backward compatible by the rule in *Envelope*.
+>   optional field is backward compatible by the rule in *Envelope*. Revision 6
+>   (2026-08-01) added `release_session_title`, an inbound message: a new
+>   `type` is ignored by older receivers, which is the same rule.
 >
 > When a brief says "the protocol is at v2", it means this document's second
 > revision. The wire is still `1`.
@@ -261,7 +263,7 @@ precedence is not visible from the title alone. In rank order:
 | `cwd` | nothing has named it; the client falls back to the path's last component | — |
 | `prompt` | the first `UserPromptSubmit`, derived from what the user typed | `cwd` |
 | `ai_title` | Claude Code's own `ai-title` line in the transcript | `prompt` |
-| `user` | `rename_session`. Sticky: nothing overwrites it | everything |
+| `user` | `rename_session`. Sticky: nothing overwrites it, and only `release_session_title` clears it | everything |
 
 A title is only ever replaced by one that outranks it, which is what stops a
 name from flickering between derivations — and what makes a manual rename
@@ -497,6 +499,40 @@ only when `hitl_resolved` arrives.
 
 A user-set title. The daemon stores it and stops overwriting that session's
 title with auto-derived ones; it echoes the change back as `session_updated`.
+
+An empty or whitespace-only title is refused rather than stored: an empty name
+is a mistake, and giving up a manual name is a decision with a message of its
+own.
+
+### `release_session_title`
+
+```json
+{ "type": "release_session_title", "v": 1, "ts": "...", "session_id": "b497..." }
+```
+
+Added in document revision 6. An addition, so the wire `v` stays `1`.
+
+Gives a session back to automatic naming: the counterpart to `rename_session`,
+and not optional. `user` is a rank nothing outranks, so without this message a
+session that was renamed once can never be renamed by anything again — the user
+is stuck with what they typed, and the only way out is ending the session.
+
+The daemon replies with `session_updated` carrying the name the session falls
+back to, which is the best title it derived **while the manual name was in
+force** — the `ai-title` that arrived after the rename, not the older one that
+preceded it. That requires the daemon to keep two tracks per session (the name
+on screen and the best derived name underneath), and both are persisted, so
+unlocking works the same before and after a restart.
+
+A session with nothing derived underneath falls back to `title: null`, and the
+client names it from its working directory. Unknown `session_id` is silently
+ignored, like every other message here.
+
+It is a separate message rather than `rename_session` with a null title because
+an unknown `type` is ignored by design (see the version rules above), while a
+null in a field typed as a string is malformed — so an old daemon meeting a new
+client quietly keeps the manual name instead of logging an error the user did
+not cause.
 
 ### `request_snapshot`
 

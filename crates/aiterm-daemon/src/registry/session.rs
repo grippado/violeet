@@ -244,8 +244,20 @@ pub struct Session {
     pub git_branch: Option<String>,
     pub transcript_path: Option<PathBuf>,
     state: SessionState,
+    /// The name in force: the human's if they set one, otherwise the best we
+    /// derived. This is the only title that goes on the wire.
     pub title: Option<String>,
     pub title_source: TitleSource,
+    /// The best name we derived on our own, kept **even while a manual name is
+    /// in force**.
+    ///
+    /// Without this, `release_user_title` would have nowhere to go back to: the
+    /// `ai-title` that arrived after the rename would have been discarded on
+    /// arrival, and "back to automatic" would drop the card to its working
+    /// directory even though a good derived name existed. Two tracks, one
+    /// effective name — see `offer_title`.
+    pub auto_title: Option<String>,
+    pub auto_source: TitleSource,
     /// The model the session is running on, read from its transcript. `None`
     /// until a turn has been observed — never a default model name.
     pub model: Option<String>,
@@ -283,6 +295,8 @@ impl Session {
             state: SessionState::Starting,
             title: None,
             title_source: TitleSource::None,
+            auto_title: None,
+            auto_source: TitleSource::None,
             model: None,
             last_action: None,
             limits: RateLimits::unknown(),
@@ -323,40 +337,94 @@ impl Session {
     }
 
     /// Set a human-chosen title. Sticky: derived naming must not clobber it.
-    pub fn set_user_title(&mut self, title: impl Into<String>, now: DateTime<Utc>) {
-        self.title = Some(title.into());
+    ///
+    /// Returns whether the effective name changed, so the caller knows whether
+    /// there is anything to publish. Renaming a session to the name it already
+    /// had, by a user who already owned the name, publishes nothing.
+    pub fn set_user_title(&mut self, title: impl Into<String>, now: DateTime<Utc>) -> bool {
+        let title = title.into();
+        if title.trim().is_empty() {
+            return false;
+        }
+        let changed =
+            self.title.as_deref() != Some(title.as_str()) || self.title_source != TitleSource::User;
+        self.title = Some(title);
         self.title_source = TitleSource::User;
         self.touch(now);
+        changed
     }
 
-    /// Offer a title from `source`. It takes only if `source` outranks
-    /// whatever named the session already, and only if the text is different.
+    /// Give the session back to automatic naming.
     ///
-    /// Returns whether the title changed, so the caller knows whether there is
-    /// anything to publish.
+    /// The counterpart to `set_user_title`, and not optional: a name that can
+    /// be locked and never unlocked is a name the user is stuck with. The
+    /// session drops straight back to the best title we derived while the
+    /// manual one was in force — which is why `auto_title` is kept.
+    ///
+    /// Returns whether anything changed. A session with no manual name is
+    /// already automatic and this does nothing.
+    pub fn release_user_title(&mut self, now: DateTime<Utc>) -> bool {
+        if self.title_source != TitleSource::User {
+            return false;
+        }
+        self.title = self.auto_title.clone();
+        self.title_source = match self.auto_title {
+            Some(_) => self.auto_source,
+            // No derived name yet. `None` rather than `Cwd`: the daemon never
+            // set a cwd title, and claiming it did would tell the app a name
+            // exists where there is none.
+            None => TitleSource::None,
+        };
+        self.touch(now);
+        true
+    }
+
+    /// Offer a title from `source`. Records it on the automatic track if it
+    /// outranks what named the session there, and promotes it to the effective
+    /// name unless a human has taken the name over.
+    ///
+    /// Returns whether the **effective** title changed, so the caller knows
+    /// whether there is anything to publish.
     ///
     /// The rank check is what makes the sequence stable: the first prompt names
     /// the session immediately, Claude Code's own `ai-title` upgrades it once,
     /// and a human rename ends the conversation. Nothing downgrades, so a
     /// re-read of the transcript cannot walk a good name backwards.
+    ///
+    /// A `User` source arriving here is a restored manual name — `titles.json`
+    /// replays whatever source it stored — and is routed to `set_user_title`
+    /// rather than treated as one more rank, so there is exactly one place
+    /// where a name becomes the human's.
     pub fn offer_title(
         &mut self,
         title: impl Into<String>,
         source: TitleSource,
         now: DateTime<Utc>,
     ) -> bool {
-        if source.rank() < self.title_source.rank() {
+        let title = title.into();
+        if source == TitleSource::User {
+            return self.set_user_title(title, now);
+        }
+        if source.rank() < self.auto_source.rank() {
             return false;
         }
-        let title = title.into();
         if title.trim().is_empty() {
             return false;
         }
-        let changed = self.title.as_deref() != Some(title.as_str());
-        self.title = Some(title);
-        self.title_source = source;
+
+        let auto_changed = self.auto_title.as_deref() != Some(title.as_str());
+        self.auto_title = Some(title);
+        self.auto_source = source;
         self.touch(now);
-        changed
+
+        // The human owns the name. The derived one is still worth recording —
+        // it is what unlocking goes back to — but it does not go on screen.
+        if self.title_source == TitleSource::User {
+            return false;
+        }
+        self.title = self.auto_title.clone();
+        self.title_source = source;
+        auto_changed
     }
 
     /// Whether this session has gone quiet for longer than `ttl`.
@@ -482,7 +550,11 @@ mod tests {
     fn the_ai_title_upgrades_a_prompt_derived_name_but_not_the_reverse() {
         let mut s = session();
         assert!(s.offer_title("Arrumar o parser", TitleSource::Prompt, t(1)));
-        assert!(s.offer_title("Corrigir o parser de transcripts", TitleSource::AiTitle, t(2)));
+        assert!(s.offer_title(
+            "Corrigir o parser de transcripts",
+            TitleSource::AiTitle,
+            t(2)
+        ));
         assert_eq!(s.title.as_deref(), Some("Corrigir o parser de transcripts"));
 
         assert!(
@@ -490,6 +562,58 @@ mod tests {
             "a re-read of the first prompt must not walk the name backwards"
         );
         assert_eq!(s.title.as_deref(), Some("Corrigir o parser de transcripts"));
+    }
+
+    /// The way out of a manual name, and what makes level 1 safe to enter: the
+    /// user can always leave it.
+    #[test]
+    fn releasing_a_manual_name_goes_back_to_the_best_derived_one() {
+        let mut s = session();
+        s.offer_title("Arrumar o parser", TitleSource::Prompt, t(1));
+        s.set_user_title("mine", t(2));
+        // Arrives while the manual name is in force: invisible, and recorded.
+        assert!(!s.offer_title("Corrigir o parser", TitleSource::AiTitle, t(3)));
+        assert_eq!(s.title.as_deref(), Some("mine"));
+
+        assert!(s.release_user_title(t(4)));
+        assert_eq!(
+            s.title.as_deref(),
+            Some("Corrigir o parser"),
+            "unlocking returns the name the session would have had, not the one \
+             it had before the rename"
+        );
+        assert_eq!(s.title_source, TitleSource::AiTitle);
+    }
+
+    /// Unlocking a session nothing ever named leaves it with no name, which the
+    /// app renders from its working directory. Not an empty string, and not the
+    /// manual name it just gave up.
+    #[test]
+    fn releasing_with_nothing_derived_underneath_leaves_no_name_at_all() {
+        let mut s = session();
+        s.set_user_title("mine", t(1));
+        assert!(s.release_user_title(t(2)));
+        assert_eq!(s.title, None);
+        assert_eq!(s.title_source, TitleSource::None);
+    }
+
+    #[test]
+    fn releasing_a_session_that_was_never_renamed_changes_nothing() {
+        let mut s = session();
+        s.offer_title("auto", TitleSource::Prompt, t(1));
+        assert!(!s.release_user_title(t(2)));
+        assert_eq!(s.title.as_deref(), Some("auto"));
+        assert_eq!(s.title_source, TitleSource::Prompt);
+    }
+
+    /// Renaming to the name it already has is not a change. Worth a test
+    /// because the app sends a rename on every commit of the field, including
+    /// the one where the user typed nothing and pressed Enter.
+    #[test]
+    fn renaming_to_the_same_name_reports_no_change() {
+        let mut s = session();
+        assert!(s.set_user_title("mine", t(1)));
+        assert!(!s.set_user_title("mine", t(2)));
     }
 
     /// Re-offering the same title at the same rank is not a change, so nothing

@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use aiterm_daemon::registry::{Harness, HookObservation, Registry, SessionState};
+use aiterm_daemon::registry::{Harness, HookObservation, Registry, SessionState, TitleSource};
 use aiterm_daemon::socket::{Hub, SocketServer};
 use aiterm_daemon::wire::{DaemonToApp, EndReason, SessionEnded, PROTOCOL_VERSION};
 use chrono::Utc;
@@ -332,6 +332,51 @@ async fn rename_session_is_applied_and_announced() {
 
     let r = h.hub.registry().lock().unwrap();
     assert_eq!(r.session("s1").unwrap().title.as_deref(), Some("my run"));
+}
+
+/// The round trip the user actually performs: rename, let the agent produce a
+/// better name behind the manual one, then ask for automatic naming back.
+#[tokio::test]
+async fn releasing_a_manual_name_announces_the_derived_one() {
+    let h = start().await;
+    {
+        let mut r = h.hub.registry().lock().unwrap();
+        r.observe_hook(HookObservation::new("s1", Harness::Opencode), Utc::now());
+    }
+
+    let mut client = Client::connect(&h.path).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    client
+        .send(r#"{"type":"rename_session","v":1,"ts":"x","session_id":"s1","title":"my run"}"#)
+        .await;
+    assert_eq!(client.next().await["title"], "my run");
+
+    // Arrives while the manual name holds: nothing is published, because
+    // nothing on screen changed.
+    h.hub
+        .offer_title("s1", "Fix the parser", TitleSource::AiTitle, Utc::now());
+    client.expect_silence().await;
+
+    client
+        .send(r#"{"type":"release_session_title","v":1,"ts":"x","session_id":"s1"}"#)
+        .await;
+    let msg = client.next().await;
+    assert_eq!(msg["type"], "session_updated");
+    assert_eq!(msg["title"], "Fix the parser");
+    assert_eq!(msg["title_source"], "ai_title");
+}
+
+#[tokio::test]
+async fn releasing_an_unknown_session_is_silently_ignored() {
+    let h = start().await;
+    let mut client = Client::connect(&h.path).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    client
+        .send(r#"{"type":"release_session_title","v":1,"ts":"x","session_id":"ghost"}"#)
+        .await;
+
+    client.expect_silence().await;
 }
 
 #[tokio::test]

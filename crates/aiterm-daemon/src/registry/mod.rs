@@ -333,6 +333,18 @@ impl Registry {
         }
     }
 
+    /// `release_session_title` from the app: back to automatic naming.
+    /// Returns whether the session existed.
+    pub fn release_session_title(&mut self, session_id: &str, now: DateTime<Utc>) -> bool {
+        match self.sessions.get_mut(session_id) {
+            Some(s) => {
+                s.release_user_title(now);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Kill everything that has gone quiet for longer than the TTL.
     ///
     /// Returns the sessions that just died, so the caller can publish
