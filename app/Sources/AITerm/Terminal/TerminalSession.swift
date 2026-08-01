@@ -81,6 +81,26 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     static func environment(tabID: String, socketPath: String) -> [String] {
         var variables = ProcessInfo.processInfo.environment
 
+        // Whatever agent launched *aiterm* must not be inherited by the agents
+        // aiterm launches.
+        //
+        // Measured, and it is not hypothetical: an aiterm started from inside a
+        // Claude Code session inherits that session's markers, and copying the
+        // environment wholesale hands them to every tab. The result was a
+        // session announcing itself as a child of a session it has nothing to
+        // do with — and, worse for this app specifically,
+        // `CLAUDE_CODE_CHILD_SESSION` turns transcript writing **off**. The
+        // transcript is where every number on a card comes from, so aiterm was
+        // blinding itself: no tokens, no title, no last action.
+        //
+        // Stripping is safe because the child is a **login** shell. Anything
+        // the user actually configured — in `.zprofile`, `.zshrc`, direnv — is
+        // put back by the shell a moment later. The only thing lost is state
+        // that belonged to a different process.
+        for name in Self.inheritedAgentState {
+            variables.removeValue(forKey: name)
+        }
+
         variables["TERM"] = "xterm-256color"
         variables["COLORTERM"] = "truecolor"
         // Without a UTF-8 locale, full-screen tools emit sequences that are not
@@ -98,6 +118,30 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
 
         return variables.map { "\($0.key)=\($0.value)" }
     }
+
+    /// Variables that describe *a* session and must never describe another.
+    ///
+    /// Named individually rather than matched by prefix. A prefix would also
+    /// take a user's own `CLAUDE_CONFIG_DIR` or API key if they set it outside
+    /// their shell profile, and this list is meant to remove state that leaked
+    /// in, not configuration someone chose. Every name here was read off a
+    /// running process, not guessed.
+    static let inheritedAgentState: Set<String> = [
+        // Claude Code's own session markers.
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        // And aiterm's own, for the case that catches people out: an aiterm
+        // launched from inside an aiterm tab would otherwise hand every new tab
+        // the *old* tab's id, and every session in it would bind to a tab in
+        // another window.
+        "AITERM_TAB_ID",
+        "AITERM_SOCKET",
+    ]
 
     static func resolveShell(_ override: String) -> String {
         guard !override.isEmpty, FileManager.default.isExecutableFile(atPath: override) else {
