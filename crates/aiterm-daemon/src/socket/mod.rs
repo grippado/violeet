@@ -170,6 +170,16 @@ impl Hub {
         })
     }
 
+    /// True when we already know where this session is running.
+    ///
+    /// The HTTP layer asks before spending anything on resolving it, which is
+    /// what keeps the cost at once per session rather than once per hook.
+    pub fn knows_origin(&self, session_id: &str) -> bool {
+        self.lock()
+            .session(session_id)
+            .is_some_and(|s| s.origin_app.is_some())
+    }
+
     /// Feed in what a hook told us, and announce whatever changed.
     ///
     /// This is the HTTP layer's only way into the registry. It returns the raw
@@ -181,9 +191,27 @@ impl Hub {
     /// — so there is genuinely no change to report, and inventing a patch would
     /// tell the app a session is alive on the strength of an illegal move.
     pub fn observe_hook(&self, obs: HookObservation, now: chrono::DateTime<Utc>) -> HookOutcome {
-        let (outcome, msg) = {
+        let (outcome, msg, origin_msg) = {
             let mut registry = self.lock();
             let outcome = registry.observe_hook(obs, now);
+
+            // `session_registered` carries identity only, and the origin is
+            // resolved on the very hook that creates the session — so on that
+            // one message the "where" would be dropped and never re-sent, since
+            // nothing changes it afterwards. It rides as its own patch instead.
+            let origin_msg = match registry.session(&outcome.session_id) {
+                Some(session)
+                    if outcome.created
+                        && outcome.origin_changed
+                        && outcome.rejected_transition.is_none() =>
+                {
+                    let mut patch = SessionUpdated::new(&session.session_id, now);
+                    patch.origin_app = Some(session.origin_app.clone());
+                    patch.origin_tty = Some(session.origin_tty.clone());
+                    Some(DaemonToApp::SessionUpdated(patch))
+                }
+                _ => None,
+            };
 
             let msg = match registry.session(&outcome.session_id) {
                 _ if outcome.rejected_transition.is_some() => None,
@@ -203,15 +231,22 @@ impl Hub {
                         patch.tab_id = Some(session.binding.bound_tab_id().map(str::to_string));
                     }
                     patch.cwd = Some(session.cwd.clone());
+                    if outcome.origin_changed {
+                        patch.origin_app = Some(session.origin_app.clone());
+                        patch.origin_tty = Some(session.origin_tty.clone());
+                    }
                     patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
                     Some(DaemonToApp::SessionUpdated(patch))
                 }
                 None => None,
             };
-            (outcome, msg)
+            (outcome, msg, origin_msg)
         };
 
         if let Some(msg) = msg {
+            self.broadcast(&msg);
+        }
+        if let Some(msg) = origin_msg {
             self.broadcast(&msg);
         }
         outcome
@@ -386,6 +421,12 @@ impl Hub {
         }
         if session.git_branch.is_some() {
             patch.git_branch = Some(session.git_branch.clone());
+        }
+        if session.origin_app.is_some() {
+            patch.origin_app = Some(session.origin_app.clone());
+        }
+        if session.origin_tty.is_some() {
+            patch.origin_tty = Some(session.origin_tty.clone());
         }
         patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
 

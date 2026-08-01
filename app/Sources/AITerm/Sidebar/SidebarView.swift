@@ -57,6 +57,7 @@ struct SidebarView: View {
                         ElsewhereHeader(
                             count: state.elsewhereSessions.count,
                             waiting: state.hasWaitingElsewhere,
+                            apps: state.elsewhereApps,
                             expanded: preferences.elsewhereExpanded
                         ) {
                             preferences.elsewhereExpanded.toggle()
@@ -165,6 +166,11 @@ struct SidebarView: View {
 private struct ElsewhereHeader: View {
     let count: Int
     let waiting: Bool
+    /// The distinct terminal applications behind the hidden cards. Shown only
+    /// while collapsed: it is the one piece of "where" worth paying for when
+    /// the cards themselves are not on screen, and once they are, each says it
+    /// for itself.
+    let apps: [String]
     let expanded: Bool
     let toggle: () -> Void
 
@@ -187,6 +193,12 @@ private struct ElsewhereHeader: View {
                     Text("waiting for you")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(CardTheme.attention)
+                } else if !expanded, !apps.isEmpty {
+                    Text(apps.joined(separator: ", "))
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 Spacer(minLength: 0)
             }

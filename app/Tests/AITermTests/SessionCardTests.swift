@@ -221,6 +221,30 @@ struct CardThemeTests {
         #expect(CardTheme.toolLabel(for: "some-future-agent") == "some-future-agent")
     }
 
+    /// Two agents in the same terminal are indistinguishable by application
+    /// alone, and that is the common case — so the tty rides along whenever
+    /// there is one.
+    @Test func the_origin_names_the_terminal_and_the_tty_inside_it() {
+        var card = SessionCard(registered: registered())
+        card.originApp = "iTerm2"
+        card.originTTY = "ttys005"
+        #expect(card.originLabel == "iTerm2 · ttys005")
+    }
+
+    /// An origin the daemon could not resolve must produce no label at all.
+    /// "unknown" in that slot would read as a place the session is running.
+    @Test func an_unresolved_origin_is_no_label_and_not_the_word_unknown() {
+        let card = SessionCard(registered: registered())
+        #expect(card.originLabel == nil)
+    }
+
+    /// An agent with no controlling terminal still has an application.
+    @Test func an_application_without_a_tty_still_answers_where() {
+        var card = SessionCard(registered: registered())
+        card.originApp = "iTerm2"
+        #expect(card.originLabel == "iTerm2")
+    }
+
     /// The gauge ramp has to change colour at the threshold, or the warning is
     /// not a warning.
     @Test func the_gauge_changes_colour_across_the_threshold() {

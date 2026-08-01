@@ -46,7 +46,7 @@ pub mod payload;
 
 use std::net::{Ipv4Addr, SocketAddr};
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -103,7 +103,14 @@ impl HookServer {
     }
 
     pub async fn serve(self) -> std::io::Result<()> {
-        axum::serve(self.listener, router(self.hub)).await
+        // `into_make_service_with_connect_info` is what makes the peer address
+        // reachable from a handler, and the peer address is how a session that
+        // aiterm did not start gets identified — see `crate::origin`.
+        axum::serve(
+            self.listener,
+            router(self.hub).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
     }
 }
 
@@ -169,6 +176,28 @@ fn tab_id_of(headers: &HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Work out where this session is running, at most once per session.
+///
+/// Must be awaited **before** the response is written: the resolution reads the
+/// kernel's view of the connection this request arrived on, and that view stops
+/// existing when the socket closes. The work itself is two short-lived
+/// subprocesses, so it goes on a blocking thread rather than stalling a runtime
+/// worker for the ~45 ms it takes.
+///
+/// Returns `None` — and costs nothing — for a session whose origin is already
+/// known, which is every hook after the first.
+async fn origin_for(hub: &Hub, session_id: &str, peer: SocketAddr) -> Option<crate::origin::Origin> {
+    if hub.knows_origin(session_id) {
+        return None;
+    }
+    let port = peer.port();
+    tokio::task::spawn_blocking(move || crate::origin::resolve(port))
+        .await
+        .ok()
+        .flatten()
+        .filter(|o| !o.is_empty())
+}
+
 fn harness_of(headers: &HeaderMap) -> Harness {
     match headers.get(HARNESS_HEADER).and_then(|v| v.to_str().ok()) {
         None | Some("") | Some("claude-code") => Harness::ClaudeCode,
@@ -186,6 +215,7 @@ fn harness_of(headers: &HeaderMap) -> Harness {
 /// waiting on our bookkeeping would be a regression for no benefit.
 async fn hook_event(
     State(hub): State<Hub>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Option<Json<HookPayload>>,
 ) -> StatusCode {
@@ -213,7 +243,10 @@ async fn hook_event(
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
-    let obs = payload.observation(&session_id, tab_id_of(&headers), harness_of(&headers));
+    let mut obs = payload.observation(&session_id, tab_id_of(&headers), harness_of(&headers));
+    if let Some(origin) = origin_for(&hub, &session_id, peer).await {
+        obs = obs.with_origin(origin);
+    }
     // Start following the transcript before recording the hook: the reader is
     // idempotent per (session, path), so this is free once it is running, and
     // doing it first means a session is never briefly known-but-unfollowed.
@@ -276,6 +309,7 @@ async fn statusline(State(hub): State<Hub>, body: Option<Json<StatusLinePayload>
 /// response.
 async fn permission_request(
     State(hub): State<Hub>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Option<Json<HookPayload>>,
 ) -> Response {
@@ -299,7 +333,13 @@ async fn permission_request(
 
     // Record the session first, so the app hears about it before it hears that
     // it is blocked.
-    let obs = payload.observation(&session_id, tab_id.clone(), harness_of(&headers));
+    let mut obs = payload.observation(&session_id, tab_id.clone(), harness_of(&headers));
+    // Worth the ~45 ms here more than anywhere else: this is the hook that
+    // makes a card say "waiting for you", and a card the user cannot locate is
+    // the whole reason the origin exists.
+    if let Some(origin) = origin_for(&hub, &session_id, peer).await {
+        obs = obs.with_origin(origin);
+    }
     if let Some(path) = obs.transcript_path.clone() {
         crate::transcript::follow(&hub, &session_id, &path);
     }

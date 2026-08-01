@@ -101,6 +101,41 @@ struct SparsePatchTests {
         }
         #expect(patch.contextWindowUsedTokens == .value(0))
     }
+
+    /// The origin of a session aiterm did not start. An agent with no
+    /// controlling terminal is a real case (launched by a daemon), and its
+    /// `origin_tty` is absent rather than an empty string — the card must be
+    /// able to name the application while saying nothing about the tty.
+    @Test func anOriginMayNameTheApplicationWithoutATTY() throws {
+        let line = Data("""
+        {"type":"session_updated","v":1,"ts":"2026-08-01T18:00:00Z","session_id":"s1",\
+        "origin_app":"iTerm2"}
+        """.utf8)
+
+        guard case .success(.sessionUpdated(let patch)) = DaemonMessageDecoder.decode(line: line) else {
+            Issue.record("expected a session_updated")
+            return
+        }
+        #expect(patch.originApp == .value("iTerm2"))
+        #expect(patch.originTTY == .unchanged)
+    }
+
+    /// Exactly the patch the daemon was measured emitting for a live iTerm2
+    /// session, including the explicit null the resolver sends for a field it
+    /// could not determine.
+    @Test func aMeasuredOriginPatchDecodesBothHalves() throws {
+        let line = Data("""
+        {"type":"session_updated","v":1,"ts":"2026-08-01T18:00:00Z","session_id":"s1",\
+        "origin_app":"iTerm2","origin_tty":"ttys005"}
+        """.utf8)
+
+        guard case .success(.sessionUpdated(let patch)) = DaemonMessageDecoder.decode(line: line) else {
+            Issue.record("expected a session_updated")
+            return
+        }
+        #expect(patch.originApp == .value("iTerm2"))
+        #expect(patch.originTTY == .value("ttys005"))
+    }
 }
 
 @Suite("Inbound decoding")

@@ -135,6 +135,17 @@ pub struct SessionUpdated {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seven_day_limit_resets_at: Patch<String>,
 
+    // Where a session is actually running, for the ones aiterm did not start.
+    // Derived from the process tree behind the hook's own connection, so it is
+    // exact where a `cwd` match would be ambiguous. Both stay absent for a
+    // session in an aiterm tab, which needs no "where" — the tab is the where.
+    /// The terminal application hosting the session: `iTerm2`, `Terminal`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_app: Patch<String>,
+    /// Its controlling terminal, `ttys008`. Absent for an agent with none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_tty: Patch<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_branch: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -174,6 +185,8 @@ impl SessionUpdated {
             && self.five_hour_limit_resets_at.is_none()
             && self.seven_day_limit_used_percent.is_none()
             && self.seven_day_limit_resets_at.is_none()
+            && self.origin_app.is_none()
+            && self.origin_tty.is_none()
             && self.git_branch.is_none()
             && self.last_action.is_none()
             && self.last_event_at.is_none()

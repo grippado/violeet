@@ -118,6 +118,11 @@ struct SessionUpdated: Equatable {
     let fiveHourLimitResetsAt: Patch<String>
     let sevenDayLimitUsedPercent: Patch<Double>
     let sevenDayLimitResetsAt: Patch<String>
+    /// Where a session aiterm did not start is actually running: the terminal
+    /// application, and the tty inside it. Absent for a session in a tab, which
+    /// needs no "where" — the tab is the answer.
+    let originApp: Patch<String>
+    let originTTY: Patch<String>
     let gitBranch: Patch<String>
     let lastAction: Patch<String>
     let lastEventAt: Patch<String>
@@ -257,6 +262,8 @@ enum DaemonMessageDecoder {
                 fiveHourLimitResetsAt: Patch.decode(from: container, key: DynamicKey("five_hour_limit_resets_at")),
                 sevenDayLimitUsedPercent: Patch.decode(from: container, key: DynamicKey("seven_day_limit_used_percent")),
                 sevenDayLimitResetsAt: Patch.decode(from: container, key: DynamicKey("seven_day_limit_resets_at")),
+                originApp: Patch.decode(from: container, key: DynamicKey("origin_app")),
+                originTTY: Patch.decode(from: container, key: DynamicKey("origin_tty")),
                 gitBranch: Patch.decode(from: container, key: DynamicKey("git_branch")),
                 lastAction: Patch.decode(from: container, key: DynamicKey("last_action")),
                 lastEventAt: Patch.decode(from: container, key: DynamicKey("last_event_at")),

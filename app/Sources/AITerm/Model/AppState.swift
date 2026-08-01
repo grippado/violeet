@@ -61,6 +61,20 @@ final class AppState: ObservableObject {
         elsewhereSessions.contains { $0.lifecycle == .waitingForYou }
     }
 
+    /// The distinct terminal applications the hidden sessions are running in,
+    /// in the order the cards appear.
+    ///
+    /// Sessions whose origin the daemon could not resolve contribute nothing —
+    /// the summary lists the places we know, and never an "unknown" that would
+    /// read as a place of its own.
+    var elsewhereApps: [String] {
+        var seen = Set<String>()
+        return elsewhereSessions.compactMap { card in
+            guard let app = card.originApp, !app.isEmpty else { return nil }
+            return seen.insert(app).inserted ? app : nil
+        }
+    }
+
     var orderedSessions: [SessionCard] {
         sessions.values.sorted { a, b in
             if a.sortRank != b.sortRank { return a.sortRank < b.sortRank }

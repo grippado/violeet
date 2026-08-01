@@ -188,6 +188,13 @@ pub struct Session {
     pub binding: TabBinding,
     pub harness: Harness,
     pub cwd: Option<String>,
+    /// The terminal application the session is running in, from
+    /// [`crate::origin`]. `None` until a hook has been resolved — and it stays
+    /// `None` for a session the app started, which needs no origin because its
+    /// tab is the answer.
+    pub origin_app: Option<String>,
+    /// Its controlling terminal, without `/dev/`.
+    pub origin_tty: Option<String>,
     /// TODO(track-C): filled from the working tree once someone owns git
     /// inspection. The registry does no I/O, so it never populates this itself.
     pub git_branch: Option<String>,
@@ -225,6 +232,8 @@ impl Session {
             binding,
             harness,
             cwd: None,
+            origin_app: None,
+            origin_tty: None,
             git_branch: None,
             transcript_path: None,
             state: SessionState::Starting,

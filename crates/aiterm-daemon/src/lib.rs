@@ -30,6 +30,7 @@
 pub mod discovery;
 pub mod hitl;
 pub mod http;
+pub mod origin;
 pub mod registry;
 pub mod socket;
 pub mod transcript;

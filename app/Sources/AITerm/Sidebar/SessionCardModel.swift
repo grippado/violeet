@@ -32,6 +32,12 @@ struct SessionCard: Identifiable, Equatable {
     var lastAction: String?
     var lastEventAt: String?
 
+    /// Where a session with no tab is actually running: the terminal
+    /// application and, inside it, the tty. Both `nil` for a session aiterm
+    /// started — the tab already answers "where".
+    var originApp: String?
+    var originTTY: String?
+
     var contextUsedTokens: Int?
     var contextSizeTokens: Int?
     var cumulativeInputTokens: Int?
@@ -76,6 +82,8 @@ struct SessionCard: Identifiable, Equatable {
         gitBranch = patch.gitBranch.applied(to: gitBranch)
         lastAction = patch.lastAction.applied(to: lastAction)
         lastEventAt = patch.lastEventAt.applied(to: lastEventAt)
+        originApp = patch.originApp.applied(to: originApp)
+        originTTY = patch.originTTY.applied(to: originTTY)
         tabID = patch.tabID.applied(to: tabID)
 
         contextUsedTokens = patch.contextWindowUsedTokens.applied(to: contextUsedTokens)
@@ -105,6 +113,21 @@ extension SessionCard {
     var subtitle: String? {
         guard let cwd, !cwd.isEmpty else { return nil }
         return ProcessDirectory.abbreviated(cwd)
+    }
+
+    /// Where this session is running, for a card with no tab to switch to.
+    ///
+    /// `nil` when the daemon could not resolve it, and the card then says
+    /// nothing rather than "unknown terminal" — an origin we did not measure is
+    /// not a place. The tty rides along because two agents in the same terminal
+    /// are otherwise indistinguishable, which is the common case.
+    var originLabel: String? {
+        switch (originApp, originTTY) {
+        case let (app?, tty?): return "\(app) · \(tty)"
+        case let (app?, nil): return app
+        case let (nil, tty?): return tty
+        case (nil, nil): return nil
+        }
     }
 
     /// How full the context window is, `0...1`.

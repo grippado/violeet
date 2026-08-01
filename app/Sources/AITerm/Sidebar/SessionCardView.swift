@@ -93,6 +93,13 @@ struct SessionCardView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
             titleRow
+            // Only for a card with no tab, and only when the origin was
+            // actually resolved. A session in a tab already answers "where",
+            // and repeating it for every card would cost a line on every card
+            // to tell the user something they can see.
+            if card.tabID == nil, let origin = card.originLabel {
+                originRow(origin)
+            }
             pillRow
             contextRow
             // Only when the account actually reports limits. An API-key user
@@ -116,6 +123,21 @@ struct SessionCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Where this session lives, for one aiterm did not start.
+    ///
+    /// Reads as an address, not as a status: same weight as the working
+    /// directory line, no colour of its own. It is there to be found when the
+    /// user goes looking, not to compete with the attention signal.
+    private func originRow(_ origin: String) -> some View {
+        Label(origin, systemImage: "terminal")
+            .labelStyle(.titleAndIcon)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help("This session is running in \(origin), outside aiterm.")
+    }
+
     private var titleRow: some View {
         HStack(spacing: 5) {
             // A session with no tab is one aiterm did not launch — an agent
@@ -128,7 +150,11 @@ struct SessionCardView: View {
                 Image(systemName: "arrow.up.forward.app")
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
-                    .help("Running outside aiterm — there is no tab to switch to.")
+                    .help(
+                        card.originLabel.map {
+                            "Running in \($0), outside aiterm — there is no tab to switch to."
+                        } ?? "Running outside aiterm — there is no tab to switch to."
+                    )
             }
             Text(card.displayTitle)
                 .font(.system(size: 13, weight: .semibold))

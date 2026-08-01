@@ -45,6 +45,10 @@ pub struct HookObservation {
     pub harness: Harness,
     pub cwd: Option<String>,
     pub transcript_path: Option<PathBuf>,
+    /// Where the hook came from, resolved by [`crate::origin`] from the
+    /// connection it arrived on. Only the HTTP layer can produce this — the
+    /// registry does no I/O — and it only bothers for a session that has none.
+    pub origin: Option<crate::origin::Origin>,
     /// The state this hook implies, when it implies one.
     pub state: Option<SessionState>,
 }
@@ -58,8 +62,14 @@ impl HookObservation {
             harness,
             cwd: None,
             transcript_path: None,
+            origin: None,
             state: None,
         }
+    }
+
+    pub fn with_origin(mut self, origin: crate::origin::Origin) -> Self {
+        self.origin = Some(origin);
+        self
     }
 
     pub fn with_tab_id(mut self, tab_id: impl Into<String>) -> Self {
@@ -89,6 +99,8 @@ pub struct HookOutcome {
     pub newly_bound: bool,
     /// Its lifecycle state moved.
     pub state_changed: bool,
+    /// We learned where it is running, or learned something different.
+    pub origin_changed: bool,
     /// The hook implied a state the session could not legally move to. The
     /// session is untouched; the caller should log it.
     pub rejected_transition: Option<InvalidTransition>,
@@ -257,6 +269,20 @@ impl Registry {
         if obs.cwd.is_some() {
             session.cwd = obs.cwd;
         }
+        // Same rule for the origin, and per field: a resolution that found the
+        // application but no controlling terminal must not erase a tty an
+        // earlier hook did find.
+        let mut origin_changed = false;
+        if let Some(origin) = obs.origin {
+            if origin.app.is_some() && origin.app != session.origin_app {
+                session.origin_app = origin.app;
+                origin_changed = true;
+            }
+            if origin.tty.is_some() && origin.tty != session.origin_tty {
+                session.origin_tty = origin.tty;
+                origin_changed = true;
+            }
+        }
         if obs.transcript_path.is_some() {
             session.transcript_path = obs.transcript_path;
         }
@@ -279,6 +305,7 @@ impl Registry {
             created,
             newly_bound,
             state_changed,
+            origin_changed,
             rejected_transition,
         }
     }

@@ -1,6 +1,6 @@
 # aiterm socket protocol
 
-> **Wire version `v` = 1. Document revision 3.**
+> **Wire version `v` = 1. Document revision 4.**
 >
 > These are two different numbers and conflating them has now cost time twice:
 > two separate tracks were briefed that the protocol was "v2, frozen", read
@@ -169,6 +169,8 @@ An explicit `null` means *became unknown*.
 | `five_hour_limit_resets_at` | string \| null | RFC 3339, when that window resets. |
 | `seven_day_limit_used_percent` | number \| null | 0–100. The weekly window. |
 | `seven_day_limit_resets_at` | string \| null | RFC 3339. |
+| `origin_app` | string \| null | The terminal application a session with no tab is running in, verbatim from the process tree: `iTerm2`, `Terminal`, `tmux: server`. See below. |
+| `origin_tty` | string \| null | Its controlling terminal, without `/dev/`: `ttys005`. `null` for an agent that has none. |
 | `git_branch` | string \| null | Display data for the sidebar. |
 | `last_action` | string \| null | |
 | `last_event_at` | string \| null | When the *session* last did something, as distinct from the envelope's `ts`, which is when the daemon emitted this message. |
@@ -195,6 +197,33 @@ missing, and more dangerous than one that is obviously absent.
 Added in document revision 3. It is an addition, so the wire `v` stays `1`:
 a client that does not know the field ignores it, which is exactly what the
 "receivers must ignore unknown fields" rule is for.
+
+**`origin_app` / `origin_tty` answer "where is this session", for the ones
+aiterm did not start.** The hooks are installed user-wide, so an agent launched
+from iTerm2 reaches the same daemon and gets a card. Those cards are the ones
+most worth having — they block on a permission request while the user is looking
+somewhere else — but until revision 4 they could only say *outside aiterm*,
+which is true and unusable.
+
+They are resolved from the process tree behind the hook's **own TCP connection**:
+the kernel knows which process owns the client end, and walking up from it
+reaches the terminal application. The obvious alternative, matching on `cwd`,
+was measured ambiguous — two agents in the same repository are indistinguishable,
+and that is the normal case, not the corner case. `lsof` on the transcript path
+finds nothing, because Claude Code closes the file between writes.
+
+`origin_app` is reported **verbatim** from the process's own name rather than
+mapped to a friendlier label, so a terminal nobody anticipated shows its real
+name instead of "unknown". Either field may be `null` on its own: an agent with
+no controlling terminal still has an application. A session bound to an aiterm
+tab carries neither, because its tab already answers the question.
+
+Resolution costs two short-lived subprocesses (~45 ms, measured) and happens at
+most **once per session** — on the first hook that arrives with no origin yet.
+It has to complete before the response is written, because the kernel's view of
+the connection stops existing when the socket closes.
+
+Added in document revision 4, and again an addition: the wire `v` stays `1`.
 
 **The rate-limit fields come from a different channel entirely.** They are not
 in the transcript and not in any hook: Claude Code reports them, along with the
