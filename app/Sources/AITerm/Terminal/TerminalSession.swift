@@ -175,16 +175,28 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         // input.
         view.getTerminal().feed(text: settings.behaviour.wrapLines ? "\u{1b}[?7h" : "\u{1b}[?7l")
 
-        // Translucency: the view must stop filling its own background before
-        // anything behind the window can be seen through it. Layer alpha rather
-        // than a translucent colour, so the text keeps its full opacity — a
-        // faded foreground is unreadable long before the background is
-        // interestingly transparent.
-        view.layer?.opacity = 1
-        view.alphaValue = 1
-        view.nativeBackgroundColor = settings.window.isTranslucent
-            ? settings.appearance.background.nsColor.withAlphaComponent(settings.window.opacity)
+        // Translucency.
+        //
+        // The alpha goes on the **background colour**, never on the view: a
+        // faded `alphaValue` would take the text with it, and text is
+        // unreadable long before a background is interestingly transparent.
+        //
+        // Both places have to be set, and this is the part that cost an
+        // afternoon. `nativeBackgroundColor`'s setter only forwards the colour
+        // to the emulator; the layer's own `backgroundColor` is written in
+        // SwiftTerm's `setupOptions()`, which runs on layout and not on
+        // assignment. Setting only the property leaves an opaque layer filling
+        // the view behind everything drawn on it — the terminal composites
+        // correctly onto a backdrop nobody can see.
+        let background = settings.window.isTranslucent
+            ? settings.appearance.background.nsColor
+                .withAlphaComponent(settings.window.opacity)
             : settings.appearance.background.nsColor
+
+        view.nativeBackgroundColor = background
+        view.wantsLayer = true
+        view.layer?.backgroundColor = background.cgColor
+        view.layer?.isOpaque = !settings.window.isTranslucent
 
         syncWindowSize()
         view.needsDisplay = true

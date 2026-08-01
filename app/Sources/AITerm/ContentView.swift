@@ -77,10 +77,14 @@ struct ContentView: View {
             // The window's own background, so the gap below the last row of
             // cells is the terminal's colour and not the sidebar material.
             //
-            // Not painted at all when the window is translucent: a filled
-            // rectangle behind the terminal is exactly what would make the
-            // translucency invisible, and this is the layer people forget.
-            if !preferences.terminal.window.isTranslucent {
+            // Not painted when the window is translucent: a filled rectangle
+            // behind the terminal is exactly what would make the translucency
+            // invisible, and this is the layer people forget.
+            if preferences.terminal.window.isTranslucent {
+                if preferences.terminal.window.blur {
+                    WindowBackdrop(material: .hudWindow)
+                }
+            } else {
                 Color(nsColor: preferences.terminal.appearance.background.nsColor)
             }
 
@@ -195,49 +199,50 @@ private struct WindowConfigurator: NSViewRepresentable {
         apply(to: window)
     }
 
-    /// Make the window able to show what is behind it.
+    /// Let the window composite what is behind it.
     ///
-    /// Three things have to agree or the effect does not appear at all, which
-    /// is why this is one function and not three call sites:
-    ///
-    ///  1. **The window** must be non-opaque with a clear background colour.
-    ///     `isOpaque = true` is the default and it short-circuits everything
-    ///     downstream — AppKit will not composite through an opaque window
-    ///     however transparent its contents are.
-    ///  2. **The backdrop** is an `NSVisualEffectView` behind the content, and
-    ///     it is what turns "clear" into "frosted". Without it, translucency is
-    ///     a plain window into whatever is behind, which is unreadable over
-    ///     anything busy.
-    ///  3. **The terminal's own background** must be translucent too, which
-    ///     `TerminalSession.apply` does. A fully painted terminal over a
-    ///     perfectly transparent window is still opaque.
+    /// This is only half the job, and deliberately the half that has to be done
+    /// on the `NSWindow`: AppKit will not composite through a window whose
+    /// `isOpaque` is `true`, however transparent its contents are. The frosting
+    /// itself is `WindowBackdrop`, which lives inside the SwiftUI hierarchy —
+    /// see the note there for why it is not a subview of `contentView`.
     private func apply(to window: NSWindow) {
         let translucent = settings.window.isTranslucent
         window.isOpaque = !translucent
         window.backgroundColor = translucent ? .clear : .windowBackgroundColor
-
-        guard let contentView = window.contentView else { return }
-        let existing = contentView.subviews.compactMap { $0 as? BackdropView }.first
-
-        guard translucent, settings.window.blur else {
-            existing?.removeFromSuperview()
-            return
-        }
-
-        let backdrop = existing ?? {
-            let view = BackdropView()
-            view.blendingMode = .behindWindow
-            view.material = .hudWindow
-            view.state = .active
-            view.autoresizingMask = [.width, .height]
-            // Index 0: behind everything the app draws, in front of nothing.
-            contentView.addSubview(view, positioned: .below, relativeTo: nil)
-            return view
-        }()
-        backdrop.frame = contentView.bounds
     }
 }
 
-/// Tagged so the configurator can find its own backdrop again rather than
-/// guessing at subview positions.
-private final class BackdropView: NSVisualEffectView {}
+/// The frosted layer behind everything the app draws.
+///
+/// # Why this is a SwiftUI view and not a subview of `window.contentView`
+///
+/// It was the latter first, and it painted over the entire window: the sidebar,
+/// the terminal, all of it, leaving a blurred empty rectangle. Under SwiftUI
+/// the window's `contentView` **is** the `NSHostingView`, and inserting a view
+/// into it puts that view inside a hierarchy SwiftUI owns and reorders at will.
+/// `positioned: .below` buys nothing there, because the ordering is not ours to
+/// set.
+///
+/// Placed as the bottom of the app's own `ZStack` instead, where the layering
+/// is expressed in the same system that enforces it.
+private struct WindowBackdrop: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        // `behindWindow`, not `withinWindow`: the point is what is behind the
+        // *window*, not what is behind this view inside it.
+        view.blendingMode = .behindWindow
+        view.material = material
+        // `.active` rather than `.followsWindowActiveState`, so an unfocused
+        // window keeps the appearance it was configured with instead of going
+        // flat the moment you look at something else.
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
+    }
+}
