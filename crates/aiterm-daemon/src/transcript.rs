@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aiterm_transcript::{watch, ClaudeCodeReader, Telemetry, WatchHandle};
+use aiterm_transcript::{watch_shared, ClaudeCodeReader, Telemetry, TranscriptSession, WatchHandle};
 use chrono::Utc;
 
 use crate::registry::SessionState;
@@ -57,6 +57,9 @@ struct Followed {
     path: PathBuf,
     /// Dropping this stops the watcher and its thread.
     _handle: WatchHandle,
+    /// Shared with the watcher thread, so the session can be read one last
+    /// time before the watch is dropped. See `finalize`.
+    session: Arc<Mutex<TranscriptSession>>,
 }
 
 /// Every transcript the daemon is currently following, keyed by session.
@@ -82,6 +85,11 @@ impl TranscriptSupervisor {
 
     pub fn is_empty(&self) -> bool {
         self.followed.is_empty()
+    }
+
+    /// Take a session out of the table, handing back what was following it.
+    fn take(&mut self, session_id: &str) -> Option<Followed> {
+        self.followed.remove(session_id)
     }
 
     pub fn forget(&mut self, session_id: &str) {
@@ -120,7 +128,7 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
     // precisely so the creation is seen.
     let already_exists = path.exists();
     let reader = Box::new(ClaudeCodeReader::new());
-    let (handle, updates) = match watch(path, reader, already_exists) {
+    let (handle, updates, shared) = match watch_shared(path, reader, already_exists) {
         Ok(pair) => pair,
         Err(e) => {
             // Not fatal, and deliberately not retried here: the next hook for
@@ -151,6 +159,7 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
                 let Ok(update) = updates.recv() else {
                     return; // the watcher was dropped
                 };
+                let mut partial = update.cumulative_is_partial;
                 let mut pending: Option<Telemetry> = Some(update.telemetry);
 
                 let wait = PUBLISH_DEBOUNCE.saturating_sub(last_publish.elapsed());
@@ -158,11 +167,12 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
                     std::thread::sleep(wait);
                 }
                 while let Ok(newer) = updates.try_recv() {
+                    partial = newer.cumulative_is_partial;
                     pending = Some(newer.telemetry);
                 }
 
                 if let Some(telemetry) = pending.take() {
-                    publish(&thread_hub, &owned_session, &telemetry);
+                    publish(&thread_hub, &owned_session, &telemetry, partial);
                     last_publish = Instant::now();
                 }
             }
@@ -175,6 +185,7 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
                 Followed {
                     path: path.to_path_buf(),
                     _handle: handle,
+                    session: shared,
                 },
             );
         }
@@ -182,12 +193,42 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
     }
 }
 
+/// Read a session's transcript one last time, then stop following it.
+///
+/// Called when the session ends. It matters because **a session's last lines
+/// are written after its `SessionEnd` hook fires**: dropping the watch on the
+/// hook loses them, and the counters left on the card are wrong while looking
+/// final. Measured before this existed: a card showing 345 output tokens for a
+/// session whose transcript recorded 489.
+///
+/// Best effort by design. If the final read fails the numbers stay as they
+/// were, which is the same outcome as not having tried — a session already
+/// ending is not worth an error path.
+pub fn finalize(hub: &Hub, session_id: &str) {
+    let Some(followed) = lock(hub.transcripts()).take(session_id) else {
+        return;
+    };
+
+    let final_read = {
+        let mut session = lock(&followed.session);
+        session
+            .read()
+            .ok()
+            .map(|_| (session.telemetry().clone(), session.cumulative_is_partial()))
+    };
+
+    if let Some((telemetry, partial)) = final_read {
+        publish(hub, session_id, &telemetry, partial);
+    }
+    // `followed` drops here, taking the watcher and its thread with it.
+}
+
 /// Fold a telemetry snapshot into the registry and broadcast what changed.
 ///
 /// Everything here is a **sparse patch**: a field that did not change is not
 /// sent, and `None` is never rendered as zero. The registry holds the previous
 /// values, so the comparison is against what the app was last told.
-fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry) {
+fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
     let now = Utc::now();
 
     // Whether a permission request is open for this session. Read before the
@@ -226,6 +267,15 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry) {
         }
         copy_token_field!(cumulative_input_tokens);
         copy_token_field!(cumulative_output_tokens);
+
+        // Travels with the pair it qualifies. Sent whenever it changes,
+        // including from unknown to `false`, because "this total is complete"
+        // is a claim worth making explicitly rather than by omission.
+        if session.tokens.cumulative_tokens_partial != Some(partial) {
+            session.tokens.cumulative_tokens_partial = Some(partial);
+            patch.cumulative_tokens_partial = Some(Some(partial));
+            anything = true;
+        }
         copy_token_field!(context_window_used_tokens);
         copy_token_field!(context_window_size_tokens);
 

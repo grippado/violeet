@@ -101,6 +101,15 @@ struct SessionUpdated: Equatable {
     let contextWindowSizeTokens: Patch<Int>
     let cumulativeInputTokens: Patch<Int>
     let cumulativeOutputTokens: Patch<Int>
+    /// `true` when the cumulative pair counts only part of the session.
+    ///
+    /// The daemon starts reading a transcript from its end, so a session
+    /// already running when the daemon started contributes nothing before that
+    /// moment. The number that results is not approximately right — it is wrong
+    /// by an unknown amount and looks exactly like a correct small number. The
+    /// card renders `~8k` when this is set, and that tilde is the only thing
+    /// standing between the user and a total they would otherwise trust.
+    let cumulativeTokensPartial: Patch<Bool>
     let gitBranch: Patch<String>
     let lastAction: Patch<String>
     let lastEventAt: Patch<String>
@@ -235,6 +244,7 @@ enum DaemonMessageDecoder {
                 contextWindowSizeTokens: Patch.decode(from: container, key: DynamicKey("context_window_size_tokens")),
                 cumulativeInputTokens: Patch.decode(from: container, key: DynamicKey("cumulative_input_tokens")),
                 cumulativeOutputTokens: Patch.decode(from: container, key: DynamicKey("cumulative_output_tokens")),
+                cumulativeTokensPartial: Patch.decode(from: container, key: DynamicKey("cumulative_tokens_partial")),
                 gitBranch: Patch.decode(from: container, key: DynamicKey("git_branch")),
                 lastAction: Patch.decode(from: container, key: DynamicKey("last_action")),
                 lastEventAt: Patch.decode(from: container, key: DynamicKey("last_event_at")),

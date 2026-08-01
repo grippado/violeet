@@ -89,12 +89,14 @@ impl Hub {
         &self.transcripts
     }
 
-    /// Stop following a session's transcript, releasing its thread and watch.
+    /// Read a session's transcript one last time, then stop following it.
+    ///
+    /// The final read is not optional bookkeeping: Claude Code writes a
+    /// session's last lines *after* its `SessionEnd` hook fires, so dropping
+    /// the watch on the hook leaves the card holding numbers that are wrong and
+    /// look final.
     pub fn forget_transcript(&self, session_id: &str) {
-        match self.transcripts.lock() {
-            Ok(mut g) => g.forget(session_id),
-            Err(p) => p.into_inner().forget(session_id),
-        }
+        crate::transcript::finalize(self, session_id);
     }
 
     /// Is a permission request open for this session?

@@ -103,6 +103,12 @@ pub struct TokenTelemetry {
     pub cumulative_output_tokens: Option<u64>,
     pub context_window_used_tokens: Option<u64>,
     pub context_window_size_tokens: Option<u64>,
+    /// Whether the cumulative pair covers the whole session.
+    ///
+    /// `None` until we have read anything. `Some(true)` when reading began
+    /// partway through a session already in progress — see the field of the
+    /// same name in `docs/PROTOCOL.md`.
+    pub cumulative_tokens_partial: Option<bool>,
 }
 
 impl TokenTelemetry {
@@ -115,6 +121,7 @@ impl TokenTelemetry {
             cumulative_output_tokens: None,
             context_window_used_tokens: None,
             context_window_size_tokens: None,
+            cumulative_tokens_partial: None,
         }
     }
 
@@ -124,6 +131,7 @@ impl TokenTelemetry {
             && self.cumulative_output_tokens.is_none()
             && self.context_window_used_tokens.is_none()
             && self.context_window_size_tokens.is_none()
+            && self.cumulative_tokens_partial.is_none()
     }
 }
 

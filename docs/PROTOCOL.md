@@ -1,6 +1,6 @@
 # aiterm socket protocol
 
-> **Wire version `v` = 1. Document revision 2.**
+> **Wire version `v` = 1. Document revision 3.**
 >
 > These are two different numbers and conflating them has now cost time twice:
 > two separate tracks were briefed that the protocol was "v2, frozen", read
@@ -11,10 +11,12 @@
 >   `aiterm_proto::PROTOCOL_VERSION` is `1`, and a receiver drops anything
 >   greater. Changing it is a code change in three projections, not an edit
 >   here.
-> - **The revision number counts edits to this document.** Revision 2 is the
+> - **The revision number counts edits to this document.** Revision 2 was the
 >   2026-07-31 pass that absorbed the seven change requests in
->   [`tracks/A-protocol-request.md`](tracks/A-protocol-request.md). It did not
->   bump `v`, for the reason recorded below.
+>   [`tracks/A-protocol-request.md`](tracks/A-protocol-request.md). Revision 3
+>   (2026-08-01) added `cumulative_tokens_partial`. Neither bumped `v`:
+>   revision 2 for the reason recorded below, revision 3 because adding an
+>   optional field is backward compatible by the rule in *Envelope*.
 >
 > When a brief says "the protocol is at v2", it means this document's second
 > revision. The wire is still `1`.
@@ -162,10 +164,33 @@ An explicit `null` means *became unknown*.
 | `context_window_size_tokens` | integer \| null | The model's window. The app computes the percentage for display; it does not compute the inputs. |
 | `cumulative_input_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
 | `cumulative_output_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
+| `cumulative_tokens_partial` | boolean \| null | `true` when the cumulative pair counts only part of the session. See below. |
 | `git_branch` | string \| null | Display data for the sidebar. |
 | `last_action` | string \| null | |
 | `last_event_at` | string \| null | When the *session* last did something, as distinct from the envelope's `ts`, which is when the daemon emitted this message. |
 | `tab_id` | string \| null | Late binding: a session that registered unbound can acquire a tab later. |
+
+**`cumulative_tokens_partial` exists because a partial total is not a small
+total.** The daemon starts reading a transcript from its *end*, so a session
+already in progress when the daemon started contributes nothing before that
+moment. The resulting counters are not incomplete-but-approaching-right: they
+are wrong, by an unknown amount, and nothing about the number says so. A card
+reading `8k out` for a session that has burned `400k` is a lie the user cannot
+detect.
+
+So the flag travels with the numbers. `true` means "this counts from when we
+started looking, not from when the session started"; the app must mark it —
+`~8k` rather than `8k`. Absent or `null` means unknown in the sparse-patch
+sense: unchanged, not "complete". `false` is a positive claim that the count
+covers the whole session.
+
+This is the same discipline as `null` versus zero, applied one level up: a
+number whose *provenance* is uncertain is as dangerous as a number that is
+missing, and more dangerous than one that is obviously absent.
+
+Added in document revision 3. It is an addition, so the wire `v` stays `1`:
+a client that does not know the field ignores it, which is exactly what the
+"receivers must ignore unknown fields" rule is for.
 
 **The four token fields are four numbers, not two pairs of synonyms.** The first
 pair describes how full the window is right now; the second describes what the

@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use notify::{Event, RecursiveMode, Watcher};
@@ -40,6 +41,9 @@ pub struct TranscriptSession {
     reader: Box<dyn TranscriptReader>,
     cursor: Cursor,
     telemetry: Telemetry,
+    /// Reading started partway through the file, so the cumulative counters
+    /// describe part of the session rather than all of it.
+    started_partway: bool,
 }
 
 impl TranscriptSession {
@@ -50,6 +54,7 @@ impl TranscriptSession {
             reader,
             cursor: Cursor::start(),
             telemetry: Telemetry::new(),
+            started_partway: false,
         }
     }
 
@@ -66,11 +71,16 @@ impl TranscriptSession {
     ) -> std::io::Result<Self> {
         let path = path.into();
         let cursor = Cursor::at_end_of(&path)?;
+        // Only partial if there was something to skip. Starting "from the end"
+        // of an empty file skips nothing, so the count is complete — and
+        // claiming otherwise would put a tilde on a total that is exact.
+        let started_partway = cursor.offset > 0;
         Ok(Self {
             path,
             reader,
             cursor,
             telemetry: Telemetry::new(),
+            started_partway,
         })
     }
 
@@ -80,6 +90,11 @@ impl TranscriptSession {
 
     pub fn telemetry(&self) -> &Telemetry {
         &self.telemetry
+    }
+
+    /// True when the cumulative counters cover only part of the session.
+    pub fn cumulative_is_partial(&self) -> bool {
+        self.started_partway
     }
 
     pub fn harness(&self) -> &'static str {
@@ -99,6 +114,9 @@ impl TranscriptSession {
         // correct answer: keeping the counters would mix two sessions' costs.
         if batch.restarted {
             self.telemetry = Telemetry::new();
+            // The file was replaced, and we are reading the new one from its
+            // beginning — so the fresh counters are complete for that file.
+            self.started_partway = false;
         }
 
         let mut events = Vec::with_capacity(batch.lines.len());
@@ -118,6 +136,8 @@ pub struct Update {
     pub path: PathBuf,
     pub events: Vec<TranscriptEvent>,
     pub telemetry: Telemetry,
+    /// See [`TranscriptSession::cumulative_is_partial`].
+    pub cumulative_is_partial: bool,
 }
 
 /// Watch one transcript and send an [`Update`] on every settled burst.
@@ -130,13 +150,30 @@ pub fn watch(
     reader: Box<dyn TranscriptReader>,
     from_end: bool,
 ) -> Result<(WatchHandle, Receiver<Update>), WatchError> {
+    watch_shared(path, reader, from_end).map(|(handle, rx, _)| (handle, rx))
+}
+
+/// Same, but also hands back the session so the caller can read it directly.
+///
+/// The caller needs this to **flush before dropping the watch**. A session's
+/// last lines are written after its `SessionEnd` hook fires, so a daemon that
+/// stops following the moment the hook arrives loses them — and the counters it
+/// keeps are not merely stale, they are wrong while claiming to be final. That
+/// was measured: 345 output tokens on the card against 489 in the file.
+pub fn watch_shared(
+    path: impl Into<PathBuf>,
+    reader: Box<dyn TranscriptReader>,
+    from_end: bool,
+) -> Result<(WatchHandle, Receiver<Update>, Arc<Mutex<TranscriptSession>>), WatchError> {
     let path = path.into();
 
-    let mut session = if from_end {
+    let session = if from_end {
         TranscriptSession::from_end(&path, reader)?
     } else {
         TranscriptSession::from_start(&path, reader)
     };
+    let session = Arc::new(Mutex::new(session));
+    let thread_session = Arc::clone(&session);
 
     let (raw_tx, raw_rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher =
@@ -159,7 +196,7 @@ pub fn watch(
         .spawn(move || {
             // Immediate first read, before waiting on any event. If the
             // receiver is already gone there is nothing to do at all.
-            if !emit(&mut session, &tx, &thread_path) {
+            if !emit(&thread_session, &tx, &thread_path) {
                 return;
             }
 
@@ -175,7 +212,7 @@ pub fn watch(
                                 break;
                             }
                         }
-                        if !emit(&mut session, &tx, &thread_path) {
+                        if !emit(&thread_session, &tx, &thread_path) {
                             // The receiver is gone; nobody is listening.
                             return;
                         }
@@ -193,6 +230,7 @@ pub fn watch(
             _thread: handle,
         },
         rx,
+        session,
     ))
 }
 
@@ -202,7 +240,11 @@ pub fn watch(
 /// carries the whole undelivered `Update` back, which is far larger than the
 /// success case and which no caller can do anything with — if nobody is
 /// listening, the only move is to stop.
-fn emit(session: &mut TranscriptSession, tx: &mpsc::Sender<Update>, path: &Path) -> bool {
+fn emit(session: &Arc<Mutex<TranscriptSession>>, tx: &mpsc::Sender<Update>, path: &Path) -> bool {
+    let mut session = match session.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     // A read failure is not fatal and is not reported: the file may be mid
     // rotation, or briefly absent. The next event retries, and the cursor has
     // not moved, so nothing is lost.
@@ -216,6 +258,7 @@ fn emit(session: &mut TranscriptSession, tx: &mpsc::Sender<Update>, path: &Path)
         path: path.to_path_buf(),
         events,
         telemetry: session.telemetry().clone(),
+        cumulative_is_partial: session.cumulative_is_partial(),
     })
     .is_ok()
 }

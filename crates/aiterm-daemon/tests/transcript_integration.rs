@@ -228,3 +228,52 @@ fn an_unwatchable_transcript_does_not_take_the_session_down() {
         "the session must survive a transcript we cannot follow"
     );
 }
+
+/// Lines written after `SessionEnd` still land on the card.
+///
+/// Regression test for a bug the real thing exposed and no unit test would
+/// have: Claude Code writes a session's last lines *after* its SessionEnd hook
+/// fires. The daemon used to drop the watch on the hook, so the card kept
+/// numbers that were wrong and looked final — measured at 345 output tokens
+/// against 489 in the file. `forget_transcript` now reads once more first.
+#[test]
+fn the_final_lines_are_read_before_the_watch_is_dropped() {
+    let path = temp("final-flush");
+    let hub = hub_with_session("s-final");
+
+    transcript::follow(&hub, "s-final", &path);
+    append(&path, &tool_call("m1", "toolu_1"));
+
+    assert!(
+        eventually(|| {
+            let r = hub.registry().lock().unwrap();
+            r.session("s-final")
+                .and_then(|s| s.tokens.cumulative_output_tokens)
+                == Some(40)
+        }),
+        "the first turn never landed"
+    );
+
+    // The last write races the end of the session, exactly as Claude Code
+    // does it: appended with no chance for the watcher to have seen it.
+    append(&path, &tool_call("m2", "toolu_2"));
+    hub.publish_session_ended(
+        "s-final",
+        None,
+        aiterm_daemon::wire::EndReason::SessionEndHook,
+        chrono::Utc::now(),
+    );
+
+    let registry = hub.registry().lock().unwrap();
+    let session = registry.session("s-final").expect("session still in the registry");
+    assert_eq!(
+        session.tokens.cumulative_output_tokens,
+        Some(80),
+        "the line written after SessionEnd must be counted; a card that stops \
+         at 40 is not stale, it is wrong while looking final"
+    );
+    drop(registry);
+
+    assert!(hub.transcripts().lock().unwrap().is_empty(), "and the watch is released");
+    let _ = std::fs::remove_file(&path);
+}

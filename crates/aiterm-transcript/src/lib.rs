@@ -35,7 +35,7 @@ pub mod watch;
 
 pub use claude_code::ClaudeCodeReader;
 pub use tail::{Cursor, TailError};
-pub use watch::{watch, TranscriptSession, Update, WatchError, WatchHandle};
+pub use watch::{watch, watch_shared, TranscriptSession, Update, WatchError, WatchHandle};
 
 // ---------------------------------------------------------------------------
 // Events

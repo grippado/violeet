@@ -106,6 +106,16 @@ pub struct SessionUpdated {
     pub cumulative_input_tokens: Patch<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cumulative_output_tokens: Patch<u64>,
+    /// `true` when the cumulative pair counts only part of the session.
+    ///
+    /// The daemon reads a transcript from its end, so a session already running
+    /// when the daemon started contributes nothing before that moment. The
+    /// resulting total is not approximately right — it is wrong by an unknown
+    /// amount, and the number itself gives no hint. This flag is what lets the
+    /// app render `~8k` instead of `8k`, which is the difference between an
+    /// estimate and a lie.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_tokens_partial: Patch<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_branch: Patch<String>,
@@ -141,6 +151,7 @@ impl SessionUpdated {
             && self.context_window_size_tokens.is_none()
             && self.cumulative_input_tokens.is_none()
             && self.cumulative_output_tokens.is_none()
+            && self.cumulative_tokens_partial.is_none()
             && self.git_branch.is_none()
             && self.last_action.is_none()
             && self.last_event_at.is_none()

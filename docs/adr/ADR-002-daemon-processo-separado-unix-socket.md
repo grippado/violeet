@@ -62,6 +62,29 @@ by `type`.**
 - The CLI is another client of the same socket, with no privileged path.
 - The contract is `docs/PROTOCOL.md`, frozen during fan-out waves.
 
+### An unrecognized hook still updates what it carries
+
+Deliberate, and load-bearing enough to state here rather than leave as an
+implementation detail somebody tidies away.
+
+An event whose `hook_event_name` this daemon does not know maps to
+`HookEvent::Unrecognized`, and `Unrecognized` **still feeds `cwd`,
+`transcript_path` and liveness into the registry**. It derives no lifecycle
+state — it has no basis for one — but it is not discarded.
+
+That is what makes the daemon degrade well when Claude Code adds an event. It
+was measured in wave 2: `CwdChanged` was being installed by `aiterm
+install-hooks` for a whole wave before the daemon enumerated it, and the working
+directory on a card stayed correct throughout, because the unrecognized event
+carried a `cwd` and the registry applied it. Enumerating the event later bought
+clarity, not a bug fix.
+
+**Do not "fix" this by rejecting unknown events.** Doing so would trade a
+daemon that quietly keeps working against a newer agent for one that silently
+stops updating the moment the agent ships an event we have not enumerated — and
+the symptom would be a stale card with no error anywhere, which is the worst
+shape a failure can take.
+
 ## Consequences
 
 **Good**

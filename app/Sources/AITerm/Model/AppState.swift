@@ -23,11 +23,29 @@ final class AppState: ObservableObject {
 
     /// Sessions the daemon knows about, keyed by `session_id`.
     ///
-    /// Not rendered in this build — the sidebar shows tabs, and the cards come
-    /// later. It is populated anyway because that is what proves the socket
-    /// works end to end, and because dropping the messages would leave the
-    /// reconnect path untested until the day it matters.
-    @Published private(set) var sessions: [String: SessionRegistered] = [:]
+    /// Every daemon message is an idempotent upsert into this table, and the
+    /// sidebar renders it directly. The app derives nothing here beyond
+    /// presentation: the four token numbers, the state and the model all come
+    /// off the wire as sent.
+    @Published private(set) var sessions: [String: SessionCard] = [:]
+
+    /// Cards in the order the sidebar shows them: waiting-for-you first, then
+    /// by how recently the session did something.
+    ///
+    /// Sorted here rather than in the view so the ordering is one decision with
+    /// one place to change it — and so a card cannot jump because two views
+    /// disagreed about the rank.
+    var orderedSessions: [SessionCard] {
+        sessions.values.sorted { a, b in
+            if a.sortRank != b.sortRank { return a.sortRank < b.sortRank }
+            let lhs = a.lastEventAt ?? a.startedAt
+            let rhs = b.lastEventAt ?? b.startedAt
+            if lhs != rhs { return lhs > rhs }
+            // Total order, so equal timestamps cannot make the list reshuffle
+            // on every update.
+            return a.sessionID < b.sessionID
+        }
+    }
 
     /// Pending permission requests, keyed by `hitl_id`. Same reasoning.
     @Published private(set) var pendingHitl: [String: HitlPending] = [:]
@@ -176,37 +194,63 @@ final class AppState: ObservableObject {
     private func apply(_ message: DaemonMessage) {
         switch message {
         case .sessionRegistered(let session):
-            sessions[session.sessionID] = session
+            // Idempotent upsert: a replay on reconnect is normal traffic, not a
+            // duplicate. An existing card keeps the telemetry it has
+            // accumulated, because `session_registered` carries none of it and
+            // replacing the card wholesale would blank the numbers on every
+            // reconnect.
+            if var existing = sessions[session.sessionID] {
+                existing.tabID = session.tabID
+                existing.agent = session.agent
+                existing.cwd = session.cwd ?? existing.cwd
+                existing.title = session.title ?? existing.title
+                existing.model = session.model ?? existing.model
+                sessions[session.sessionID] = existing
+            } else {
+                sessions[session.sessionID] = SessionCard(registered: session)
+            }
 
         case .sessionUpdated(let patch):
-            guard let existing = sessions[patch.sessionID] else {
+            guard var card = sessions[patch.sessionID] else {
                 // A patch for a session we have never seen. Dropped rather than
                 // synthesized: a sparse patch cannot describe a whole session,
                 // and inventing the missing fields would put values on screen
                 // the daemon never sent.
                 return
             }
-            sessions[patch.sessionID] = SessionRegistered(
-                sessionID: existing.sessionID,
-                tabID: patch.tabID.applied(to: existing.tabID),
-                agent: existing.agent,
-                cwd: patch.cwd.applied(to: existing.cwd),
-                title: patch.title.applied(to: existing.title),
-                model: patch.model.applied(to: existing.model),
-                startedAt: existing.startedAt
-            )
+            card.apply(patch)
+            sessions[patch.sessionID] = card
 
         case .hitlPending(let request):
             pendingHitl[request.hitlID] = request
+            attachPendingHitl()
 
         case .hitlResolved(let resolved):
             // The card clears on this message and on no other signal — including
             // our own click, which is a request and not a fact (ADR-004).
             pendingHitl.removeValue(forKey: resolved.hitlID)
+            attachPendingHitl()
 
         case .sessionEnded(let ended):
             sessions.removeValue(forKey: ended.sessionID)
             pendingHitl = pendingHitl.filter { $0.value.sessionID != ended.sessionID }
+            attachPendingHitl()
+        }
+    }
+
+    /// Point each card at its pending request, if it has one.
+    ///
+    /// Recomputed wholesale rather than patched incrementally: the table is a
+    /// handful of entries, and a card left holding a request that was resolved
+    /// would keep pulsing for a decision nobody can make any more.
+    private func attachPendingHitl() {
+        let bySession = Dictionary(
+            pendingHitl.values.map { ($0.sessionID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        for (id, var card) in sessions where card.pendingHitl != bySession[id] {
+            card.pendingHitl = bySession[id]
+            sessions[id] = card
         }
     }
 

@@ -33,7 +33,7 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             if preferences.sidebarVisible {
-                SidebarView()
+                SidebarView(preferences: preferences)
                     .frame(width: dragWidth ?? preferences.sidebarWidth)
                 SidebarResizeHandle(
                     width: dragWidth ?? preferences.sidebarWidth,

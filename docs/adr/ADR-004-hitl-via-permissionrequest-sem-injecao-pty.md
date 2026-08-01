@@ -119,6 +119,37 @@ gets us the feature with structured data and a safe failure mode. Reconsider
 after v0, as a fallback for agents with no hook system, never as the primary
 path for Claude Code.
 
+**Correlating the TUI race on `prompt_id`.** Measured 2026-08-01 against
+v2.1.220: `PermissionRequest`, `PreToolUse` and `PostToolUse` all carry a
+`prompt_id`, and `PreToolUse`/`PostToolUse` additionally carry a `tool_use_id`
+that `PermissionRequest` still does not. So `prompt_id` is the only identifier
+present on *both* sides of the race. **Evaluated and rejected**, in both possible
+roles:
+
+*As the correlator on its own* it is weaker than what we already do.
+`prompt_id` identifies the **user's turn**, not the tool call, and one turn
+routinely contains several calls. Two `Bash` calls in the same turn share a
+`prompt_id`, so matching on it alone would resolve a permission request against
+a different call's completion — clearing the wrong card, which is the precise
+failure the current rule (`session_id` + `tool_name` + structural equality of
+`tool_input`) refuses when the match is ambiguous.
+
+*As an additional narrowing on top of the existing match* the risk exceeds the
+gain. It only helps in the case where two structurally identical calls from
+different turns are in flight at once — rare, and already covered by the
+"ambiguous means do not resolve" rule, which lets the timeout handle it. Against
+that, adding it introduces a new way to **stop** resolving: if `prompt_id` ever
+diverges between the two events on a path we have not measured — a resumed
+session, a sub-agent, a queued prompt, a compaction boundary — the match fails,
+`resolve_tui_race` never fires, and the card sits there until the five-minute
+timeout. A stale card waiting on a timeout is worse than the ambiguity it was
+added to remove, because it looks like the daemon is broken rather than
+cautious.
+
+The measurement is on the record so this does not come back as a fresh idea in
+three months. If it does return, it needs new evidence: `prompt_id` observed
+stable across a resumed session and a sub-agent, not just within one turn.
+
 **`PreToolUse` instead of `PermissionRequest`.** Fires earlier and can block
 outright. Rejected: it fires for *every* tool call, not just the ones needing a
 decision, so it cannot distinguish "the user must choose" from ordinary

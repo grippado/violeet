@@ -19,6 +19,7 @@ final class Preferences: ObservableObject {
         static let sidebarVisible = "sidebar.visible"
         static let fontName = "terminal.font.name"
         static let fontSize = "terminal.font.size"
+        static let compactionThreshold = "context.compaction.threshold"
     }
 
     /// Bounds for the drag handle. The lower one is where the cwd column stops
@@ -48,6 +49,16 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(Double(fontSize), forKey: Key.fontSize) }
     }
 
+    /// Fraction of the context window at which the gauge turns red.
+    ///
+    /// Matches `aiterm_transcript::DEFAULT_COMPACTION_THRESHOLD`. Kept as a
+    /// preference rather than a constant because the useful value depends on
+    /// how the user works — someone who compacts by hand wants warning earlier
+    /// than someone who lets it happen.
+    @Published var compactionThreshold: Double {
+        didSet { defaults.set(compactionThreshold, forKey: Key.compactionThreshold) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -62,6 +73,9 @@ final class Preferences: ObservableObject {
         fontName = defaults.string(forKey: Key.fontName) ?? "SF Mono"
         let storedSize = defaults.object(forKey: Key.fontSize) as? Double
         fontSize = Self.clampFontSize(CGFloat(storedSize ?? 13))
+
+        let storedThreshold = defaults.object(forKey: Key.compactionThreshold) as? Double
+        compactionThreshold = min(max(storedThreshold ?? 0.85, 0.1), 1.0)
     }
 
     /// The font every terminal view uses.
