@@ -21,6 +21,9 @@ final class Preferences: ObservableObject {
         static let fontSize = "terminal.font.size"
         static let compactionThreshold = "context.compaction.threshold"
         static let elsewhereExpanded = "sidebar.elsewhere.expanded"
+        static let inspectorWidth = "inspector.width"
+        static let inspectorVisible = "inspector.visible"
+        static let terminalSettings = "terminal.settings"
     }
 
     /// Bounds for the drag handle. The lower one is where the cwd column stops
@@ -68,6 +71,34 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(elsewhereExpanded, forKey: Key.elsewhereExpanded) }
     }
 
+    /// The right sidebar. Its own width and its own visibility, stored under
+    /// its own keys: the two sides are independent panels that happen to be
+    /// symmetric, and sharing a width would mean opening one resizes the other.
+    @Published var inspectorWidth: CGFloat {
+        didSet { defaults.set(Double(inspectorWidth), forKey: Key.inspectorWidth) }
+    }
+
+    @Published var inspectorVisible: Bool {
+        didSet { defaults.set(inspectorVisible, forKey: Key.inspectorVisible) }
+    }
+
+    /// How the terminal looks and behaves. Global for every tab in v0 — see
+    /// `TerminalSettings` for why, and for what keeps that cheap to revisit.
+    ///
+    /// Written on every change, with no save button: the panel applies live, so
+    /// there is no moment at which the screen and the stored value disagree and
+    /// therefore no moment a save button would be for.
+    @Published var terminal: TerminalSettings {
+        didSet {
+            guard terminal != oldValue else { return }
+            persistTerminalSettings()
+        }
+    }
+
+    /// Whatever the settings file carried that this build does not model, kept
+    /// so saving cannot delete a newer build's fields.
+    private var unknownTerminalKeys: [String: Any] = [:]
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -79,14 +110,47 @@ final class Preferences: ObservableObject {
         // default is visible.
         sidebarVisible = defaults.object(forKey: Key.sidebarVisible) as? Bool ?? true
 
-        fontName = defaults.string(forKey: Key.fontName) ?? "SF Mono"
+        let legacyFontName = defaults.string(forKey: Key.fontName) ?? "SF Mono"
         let storedSize = defaults.object(forKey: Key.fontSize) as? Double
-        fontSize = Self.clampFontSize(CGFloat(storedSize ?? 13))
+        let legacyFontSize = Self.clampFontSize(CGFloat(storedSize ?? 13))
+        fontName = legacyFontName
+        fontSize = legacyFontSize
 
         let storedThreshold = defaults.object(forKey: Key.compactionThreshold) as? Double
         compactionThreshold = min(max(storedThreshold ?? 0.85, 0.1), 1.0)
 
         elsewhereExpanded = defaults.object(forKey: Key.elsewhereExpanded) as? Bool ?? false
+
+        let storedInspector = defaults.object(forKey: Key.inspectorWidth) as? Double
+        inspectorWidth = Self.clampWidth(CGFloat(storedInspector ?? 280))
+        // Hidden until asked for. The left sidebar is what the window is about;
+        // this one is a tool you open, use and close.
+        inspectorVisible = defaults.object(forKey: Key.inspectorVisible) as? Bool ?? false
+
+        let storedSettings = defaults.dictionary(forKey: Key.terminalSettings) ?? [:]
+        unknownTerminalKeys = storedSettings
+        var loaded = TerminalSettings(json: storedSettings)
+
+        // The font used to live in two flat keys. Adopt them once, so an
+        // existing install does not silently reset to the default font the
+        // first time it runs a build that has this panel.
+        if storedSettings["font"] == nil {
+            loaded.font.name = legacyFontName
+            loaded.font.size = legacyFontSize
+        }
+        terminal = loaded
+
+        // Keep the legacy flat keys in step: `⌘+` / `⌘-` and anything else
+        // still reading them must not disagree with the panel. One source of
+        // truth, two spellings, until the flat keys can be dropped.
+        fontName = loaded.font.name
+        fontSize = loaded.font.size
+    }
+
+    private func persistTerminalSettings() {
+        let encoded = terminal.json(preserving: unknownTerminalKeys)
+        unknownTerminalKeys = encoded
+        defaults.set(encoded, forKey: Key.terminalSettings)
     }
 
     /// The font every terminal view uses.
@@ -95,12 +159,17 @@ final class Preferences: ObservableObject {
     /// written can stop resolving, and a terminal with no font is not a state
     /// worth supporting.
     var terminalFont: NSFont {
-        NSFont(name: fontName, size: fontSize)
-            ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        MonospacedFonts.font(named: terminal.font.name, size: terminal.font.size)
     }
 
     func adjustFontSize(by delta: CGFloat) {
-        fontSize = Self.clampFontSize(fontSize + delta)
+        let next = Self.clampFontSize(terminal.font.size + delta)
+        terminal.font.size = next
+        fontSize = next
+    }
+
+    func setInspectorWidth(_ width: CGFloat) {
+        inspectorWidth = Self.clampWidth(width)
     }
 
     func setSidebarWidth(_ width: CGFloat) {

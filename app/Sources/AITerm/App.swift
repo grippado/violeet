@@ -21,7 +21,6 @@ struct AITermApp: App {
         WindowGroup {
             ContentView(preferences: state.preferences)
                 .environmentObject(state)
-                .background(WindowConfigurator())
                 .onAppear {
                     delegate.state = state
                     // One tab, always, on launch. Sessions are not restored —
@@ -63,6 +62,11 @@ private struct AITermCommands: Commands {
                 state.toggleSidebar()
             }
             .keyboardShortcut("s", modifiers: [.command, .option])
+
+            Button(state.preferences.inspectorVisible ? "Hide Settings" : "Show Settings") {
+                state.toggleInspector()
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
 
             Divider()
 
@@ -152,21 +156,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// Gives the window an autosave name, which is how its frame survives a quit.
 ///
-/// AppKit persists the rectangle in `UserDefaults` under this name, restores it
-/// on the next launch, and keeps it on-screen when the display arrangement
-/// changed in between. Storing the frame by hand would be a second source of
-/// truth for the same rectangle, and a worse one.
-private struct WindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let probe = NSView(frame: .zero)
-        DispatchQueue.main.async {
-            guard let window = probe.window else { return }
-            window.setFrameAutosaveName("aiterm.main")
-            window.title = "aiterm"
-            window.tabbingMode = .disallowed
-        }
-        return probe
-    }
 
-    func updateNSView(_ view: NSView, context: Context) {}
-}

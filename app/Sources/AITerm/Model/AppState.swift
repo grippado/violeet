@@ -61,6 +61,38 @@ final class AppState: ObservableObject {
         elsewhereSessions.contains { $0.lifecycle == .waitingForYou }
     }
 
+    /// Hand keyboard focus back to the terminal.
+    ///
+    /// This is the settings panel's central requirement, not a nicety. A panel
+    /// you cannot touch without having to click back into the terminal is a
+    /// panel that interrupts the thing the window is for — and the interruption
+    /// is silent, because a terminal that has lost first responder looks
+    /// identical to one that has it right up until you type.
+    ///
+    /// Asynchronous on purpose. A control that is finishing its own
+    /// first-responder change would undo a synchronous call here: AppKit
+    /// resolves the click after the SwiftUI action runs, so setting the
+    /// responder back inside the action loses the race.
+    func focusTerminal() {
+        guard let view = selectedTab?.session.view else { return }
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.makeFirstResponder(view)
+        }
+    }
+
+    /// Push the current settings onto every live terminal.
+    ///
+    /// Every tab, not only the visible one: a background tab whose font is
+    /// stale is a tab that reflows the moment you switch to it, and the agent
+    /// inside it has been composing for the wrong width the whole time.
+    func applyTerminalSettings() {
+        let settings = preferences.terminal
+        for tab in tabs {
+            tab.session.apply(settings)
+        }
+    }
+
     /// The title to render for a session, made unique across the window.
     ///
     /// The rule lives in `SessionCard.uniqueTitles(for:)`; this only supplies
@@ -122,13 +154,13 @@ final class AppState: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
-        // The font is shared by every terminal, so the views are updated here
-        // rather than each one watching preferences.
-        preferences.$fontSize
-            .combineLatest(preferences.$fontName)
+        // Everything visual is one publisher now: a change anywhere in the
+        // settings value is pushed to every live terminal, including the fonts
+        // the ⌘+ / ⌘- shortcuts change.
+        preferences.$terminal
             .dropFirst()
-            .sink { [weak self] _, _ in
-                MainActor.assumeIsolated { self?.applyFontToAllTabs() }
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.applyTerminalSettings() }
             }
             .store(in: &cancellables)
     }
@@ -151,7 +183,15 @@ final class AppState: ObservableObject {
         let tab = TabModel(font: preferences.terminalFont, directory: cwd)
 
         daemon.send(.registerTab(tabID: tab.tabID, cwd: cwd))
-        tab.start(socketPath: Discovery.socketPath())
+        // Before the shell is spawned: the PTY takes its initial window size
+        // from the view's cell dimensions, and a tab that started at the
+        // default font and was resized afterwards would hand its child one
+        // size and then immediately a different one.
+        tab.session.apply(preferences.terminal)
+        tab.start(
+            socketPath: Discovery.socketPath(),
+            shell: preferences.terminal.behaviour.shellOverride
+        )
 
         tabs.append(tab)
         selectedTabID = tab.tabID
@@ -223,11 +263,13 @@ final class AppState: ObservableObject {
         preferences.sidebarVisible.toggle()
     }
 
-    private func applyFontToAllTabs() {
-        let font = preferences.terminalFont
-        for tab in tabs {
-            tab.session.view.font = font
-        }
+    /// Show or hide the right sidebar, and give the keyboard back either way.
+    ///
+    /// The shortcut is the one path into the panel that starts from the
+    /// terminal having focus, so it is also the one most likely to lose it.
+    func toggleInspector() {
+        preferences.inspectorVisible.toggle()
+        focusTerminal()
     }
 
     // MARK: - Daemon messages

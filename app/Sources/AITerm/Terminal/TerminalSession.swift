@@ -52,8 +52,11 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     /// A **login** shell, deliberately: an app launched from Finder inherits
     /// almost no environment, so anything short of `-l` gives the user a `PATH`
     /// without Homebrew in it and a shell that does not look like their shell.
-    func start(inDirectory directory: String, socketPath: String) {
-        let shell = Self.userShell()
+    /// `shellOverride` empty means the account's own shell. A configured shell
+    /// that has since been uninstalled falls back rather than failing: a tab
+    /// that opens to nothing is worse than a tab that opens to zsh.
+    func start(inDirectory directory: String, socketPath: String, shell shellOverride: String = "") {
+        let shell = Self.resolveShell(shellOverride)
         let name = (shell as NSString).lastPathComponent
 
         currentDirectory = directory
@@ -96,6 +99,13 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         return variables.map { "\($0.key)=\($0.value)" }
     }
 
+    static func resolveShell(_ override: String) -> String {
+        guard !override.isEmpty, FileManager.default.isExecutableFile(atPath: override) else {
+            return userShell()
+        }
+        return override
+    }
+
     /// `$SHELL`, else the account's shell, else `/bin/zsh`.
     static func userShell() -> String {
         if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
@@ -108,6 +118,89 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
             if !shell.isEmpty { return shell }
         }
         return "/bin/zsh"
+    }
+
+    // MARK: - Live settings
+
+    /// Push the whole settings value onto this terminal.
+    ///
+    /// # The part that is not cosmetic
+    ///
+    /// Font family, size and line spacing change the **cell** size, which
+    /// changes how many columns and rows fit — and the program on the other end
+    /// of the PTY has no way to notice on its own. Without `TIOCSWINSZ` and the
+    /// `SIGWINCH` it raises, aiterm redraws at 90 columns while Claude Code
+    /// keeps composing for 120, and its layout tears the moment anything
+    /// redraws.
+    ///
+    /// Measured in SwiftTerm 1.15.0, the chain already exists and is complete:
+    /// `view.font = …` → `resetFont()` → `resize(cols:rows:)` →
+    /// `sizeChanged(source: Terminal)` → `LocalProcessTerminalView.sizeChanged`
+    /// → `PseudoTerminalHelpers.setWinSize` → `ioctl(TIOCSWINSZ)`, which is what
+    /// makes the kernel signal the foreground process group. `lineSpacing` goes
+    /// through the same `resetFont()`.
+    ///
+    /// Two conditions guard it inside SwiftTerm, and both are worth knowing:
+    /// `resetFont` only resizes when the view has a non-zero frame, and
+    /// `sizeChanged` only touches the PTY while the process is running. Every
+    /// tab is mounted at full size at all times (see `ContentView`), so a
+    /// background tab satisfies the first — which is the whole reason the
+    /// unselected terminals are kept in the hierarchy rather than torn down.
+    ///
+    /// `syncWindowSize` is belt and braces for the case those guards skip: a
+    /// change that produces the same column count raises no `sizeChanged`, and
+    /// re-asserting a size that has not moved costs one `ioctl` and no signal.
+    func apply(_ settings: TerminalSettings) {
+        let font = MonospacedFonts.font(named: settings.font.name, size: settings.font.size)
+        if view.font != font {
+            view.font = font
+        }
+        if view.lineSpacing != settings.font.lineSpacing {
+            view.lineSpacing = settings.font.lineSpacing
+        }
+
+        view.installColors(settings.appearance.ansi.map(\.swiftTerm))
+        view.nativeForegroundColor = settings.appearance.foreground.nsColor
+        view.nativeBackgroundColor = settings.appearance.background.nsColor
+        view.caretColor = settings.appearance.cursorColor.nsColor
+
+        view.getTerminal().setCursorStyle(
+            settings.cursor.shape.swiftTermStyle(blinking: settings.cursor.blinks)
+        )
+        view.changeScrollback(settings.behaviour.scrollbackLines)
+        // DECAWM, fed to the emulator rather than set through a property:
+        // SwiftTerm keeps `setWraparound` internal, and the escape sequence is
+        // the interface every other program uses for this anyway. Fed to the
+        // *terminal*, not written to the PTY — the child must not receive it as
+        // input.
+        view.getTerminal().feed(text: settings.behaviour.wrapLines ? "\u{1b}[?7h" : "\u{1b}[?7l")
+
+        // Translucency: the view must stop filling its own background before
+        // anything behind the window can be seen through it. Layer alpha rather
+        // than a translucent colour, so the text keeps its full opacity — a
+        // faded foreground is unreadable long before the background is
+        // interestingly transparent.
+        view.layer?.opacity = 1
+        view.alphaValue = 1
+        view.nativeBackgroundColor = settings.window.isTranslucent
+            ? settings.appearance.background.nsColor.withAlphaComponent(settings.window.opacity)
+            : settings.appearance.background.nsColor
+
+        syncWindowSize()
+        view.needsDisplay = true
+    }
+
+    /// Re-assert the current grid size on the PTY.
+    ///
+    /// Idempotent and cheap. Sending a size the child already has raises no
+    /// `SIGWINCH`, so this cannot cause a spurious redraw in the program.
+    func syncWindowSize() {
+        guard !hasExited, view.process.running else { return }
+        var size = view.getWindowSize()
+        _ = PseudoTerminalHelpers.setWinSize(
+            masterPtyDescriptor: view.process.childfd,
+            windowSize: &size
+        )
     }
 
     // MARK: - Working directory

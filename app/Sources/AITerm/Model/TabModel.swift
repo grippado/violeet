@@ -45,8 +45,9 @@ final class TabModel: ObservableObject, Identifiable {
         }
     }
 
-    func start(socketPath: String) {
-        session.start(inDirectory: currentDirectory, socketPath: socketPath)
+    /// `shell` empty means the account's own shell, resolved at spawn.
+    func start(socketPath: String, shell: String = "") {
+        session.start(inDirectory: currentDirectory, socketPath: socketPath, shell: shell)
     }
 
     func terminate() {

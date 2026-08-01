@@ -20,6 +20,7 @@
 // an agent that writes while you are looking elsewhere is not reflowing text
 // into a stale grid.
 
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -29,6 +30,7 @@ struct ContentView: View {
     /// Width while a drag is in flight. Committed to preferences on release, so
     /// dragging writes `UserDefaults` once instead of sixty times a second.
     @State private var dragWidth: CGFloat?
+    @State private var inspectorDragWidth: CGFloat?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -45,15 +47,42 @@ struct ContentView: View {
                 )
             }
             terminals
+
+            if preferences.inspectorVisible {
+                // Dragged from the left edge, so the gesture grows the panel by
+                // moving *towards* it — the mirror of the left handle rather
+                // than a copy of it.
+                SidebarResizeHandle(
+                    width: inspectorDragWidth ?? preferences.inspectorWidth,
+                    inverted: true,
+                    onDrag: { inspectorDragWidth = $0 },
+                    onCommit: { width in
+                        inspectorDragWidth = nil
+                        preferences.setInspectorWidth(width)
+                    }
+                )
+                InspectorView(preferences: preferences)
+                    .frame(width: inspectorDragWidth ?? preferences.inspectorWidth)
+            }
         }
         .frame(minWidth: 640, minHeight: 400)
+        // Configured from here, not from the `App` body: this view observes
+        // `preferences`, so it re-renders when translucency changes. The scene
+        // body does not, and the backdrop would only appear on relaunch.
+        .background(WindowConfigurator(settings: preferences.terminal))
     }
 
     private var terminals: some View {
         ZStack {
             // The window's own background, so the gap below the last row of
             // cells is the terminal's colour and not the sidebar material.
-            Color(nsColor: .textBackgroundColor)
+            //
+            // Not painted at all when the window is translucent: a filled
+            // rectangle behind the terminal is exactly what would make the
+            // translucency invisible, and this is the layer people forget.
+            if !preferences.terminal.window.isTranslucent {
+                Color(nsColor: preferences.terminal.appearance.background.nsColor)
+            }
 
             ForEach(state.tabs) { tab in
                 let isSelected = tab.tabID == state.selectedTabID
@@ -76,6 +105,9 @@ struct ContentView: View {
 /// The draggable seam between sidebar and terminal.
 private struct SidebarResizeHandle: View {
     let width: CGFloat
+    /// The right-hand handle grows its panel as the drag moves left, so the
+    /// translation is subtracted rather than added.
+    var inverted: Bool = false
     let onDrag: (CGFloat) -> Void
     let onCommit: (CGFloat) -> Void
 
@@ -98,13 +130,17 @@ private struct SidebarResizeHandle: View {
                     .gesture(
                         DragGesture(coordinateSpace: .global)
                             .onChanged { value in
-                                onDrag(clamp(width + value.translation.width))
+                                onDrag(clamp(width + delta(value.translation.width)))
                             }
                             .onEnded { value in
-                                onCommit(clamp(width + value.translation.width))
+                                onCommit(clamp(width + delta(value.translation.width)))
                             }
                     )
             )
+    }
+
+    private func delta(_ translation: CGFloat) -> CGFloat {
+        inverted ? -translation : translation
     }
 
     private func clamp(_ value: CGFloat) -> CGFloat {
@@ -130,3 +166,78 @@ private struct EmptyWindowView: View {
         }
     }
 }
+
+
+/// AppKit persists the rectangle in `UserDefaults` under this name, restores it
+/// on the next launch, and keeps it on-screen when the display arrangement
+/// changed in between. Storing the frame by hand would be a second source of
+/// truth for the same rectangle, and a worse one.
+private struct WindowConfigurator: NSViewRepresentable {
+    /// Only the window-level settings are read here. Passed in rather than
+    /// observed so this view updates when translucency changes and at no other
+    /// time.
+    let settings: TerminalSettings
+
+    func makeNSView(context: Context) -> NSView {
+        let probe = NSView(frame: .zero)
+        DispatchQueue.main.async {
+            guard let window = probe.window else { return }
+            window.setFrameAutosaveName("aiterm.main")
+            window.title = "aiterm"
+            window.tabbingMode = .disallowed
+            apply(to: window)
+        }
+        return probe
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        guard let window = view.window else { return }
+        apply(to: window)
+    }
+
+    /// Make the window able to show what is behind it.
+    ///
+    /// Three things have to agree or the effect does not appear at all, which
+    /// is why this is one function and not three call sites:
+    ///
+    ///  1. **The window** must be non-opaque with a clear background colour.
+    ///     `isOpaque = true` is the default and it short-circuits everything
+    ///     downstream — AppKit will not composite through an opaque window
+    ///     however transparent its contents are.
+    ///  2. **The backdrop** is an `NSVisualEffectView` behind the content, and
+    ///     it is what turns "clear" into "frosted". Without it, translucency is
+    ///     a plain window into whatever is behind, which is unreadable over
+    ///     anything busy.
+    ///  3. **The terminal's own background** must be translucent too, which
+    ///     `TerminalSession.apply` does. A fully painted terminal over a
+    ///     perfectly transparent window is still opaque.
+    private func apply(to window: NSWindow) {
+        let translucent = settings.window.isTranslucent
+        window.isOpaque = !translucent
+        window.backgroundColor = translucent ? .clear : .windowBackgroundColor
+
+        guard let contentView = window.contentView else { return }
+        let existing = contentView.subviews.compactMap { $0 as? BackdropView }.first
+
+        guard translucent, settings.window.blur else {
+            existing?.removeFromSuperview()
+            return
+        }
+
+        let backdrop = existing ?? {
+            let view = BackdropView()
+            view.blendingMode = .behindWindow
+            view.material = .hudWindow
+            view.state = .active
+            view.autoresizingMask = [.width, .height]
+            // Index 0: behind everything the app draws, in front of nothing.
+            contentView.addSubview(view, positioned: .below, relativeTo: nil)
+            return view
+        }()
+        backdrop.frame = contentView.bounds
+    }
+}
+
+/// Tagged so the configurator can find its own backdrop again rather than
+/// guessing at subview positions.
+private final class BackdropView: NSVisualEffectView {}
