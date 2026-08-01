@@ -174,6 +174,18 @@ final class Preferences: ObservableObject {
         fontSize = next
     }
 
+    /// Back to the size the app ships with.
+    ///
+    /// The counterpart to ⌘+ and ⌘-, and not a nicety: without it the only way
+    /// back from twelve presses of ⌘- is twelve presses of ⌘+ while counting.
+    /// The default is read off `FontSettings` rather than written here, so the
+    /// number this restores cannot drift from the number a fresh install gets.
+    func resetFontSize() {
+        let standard = TerminalSettings.FontSettings().size
+        terminal.font.size = standard
+        fontSize = standard
+    }
+
     func setInspectorWidth(_ width: CGFloat) {
         inspectorWidth = Self.clampWidth(width)
     }

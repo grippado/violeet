@@ -62,6 +62,19 @@ VERSION="${VERSION#v}"
 # count is the cheapest monotonic number a git checkout already has.
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
 
+# Which commit this bundle came from. The version string does not identify a
+# build during development — `0.9.2-dev` is cut a dozen times a day — so a bug
+# report that quotes only the version points at a range and not a revision. The
+# About panel shows this; `unknown` is left in place when there is no checkout,
+# and the panel then shows nothing rather than a hash that is not one.
+GIT_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")"
+if [[ "$GIT_COMMIT" != "unknown" ]] && ! git diff --quiet HEAD 2>/dev/null; then
+  # A build with uncommitted changes is not the commit it names, and saying so
+  # here is cheaper than working it out from a bug report that does not
+  # reproduce.
+  GIT_COMMIT="$GIT_COMMIT-dirty"
+fi
+
 echo "==> aiterm $VERSION (build $BUILD_NUMBER)"
 
 # ---------------------------------------------------------------------------
@@ -118,6 +131,7 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :AITermGitCommit $GIT_COMMIT" "$APP/Contents/Info.plist"
 
 # ---------------------------------------------------------------------------
 # Sign

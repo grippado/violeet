@@ -346,22 +346,9 @@ private struct DaemonStatusLine: View {
         .padding(.vertical, 7)
     }
 
-    private var color: Color {
-        switch status {
-        case .connected: return .green
-        case .connecting: return .yellow
-        case .disconnected: return .secondary
-        case .protocolMismatch: return .orange
-        }
-    }
+    // Both come from `DaemonClient.Status` itself, so the status-bar menu and
+    // this footer cannot come to describe the same state differently.
+    private var color: Color { status.indicatorColor }
 
-    private var label: String {
-        switch status {
-        case .connected:
-            return sessionCount == 1 ? "daemon · 1 session" : "daemon · \(sessionCount) sessions"
-        case .connecting: return "connecting…"
-        case .disconnected: return "daemon offline"
-        case .protocolMismatch(let version): return "daemon speaks v\(version)"
-        }
-    }
+    private var label: String { status.summary(sessionCount: sessionCount) }
 }

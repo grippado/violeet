@@ -37,6 +37,14 @@
 	-->
 	<key>CFBundleIconFile</key>
 	<string>aiterm</string>
+	<!--
+	  The commit this bundle was built from, overwritten by
+	  scripts/package.sh. `unknown` is the honest value for a bundle assembled
+	  by hand: the About panel shows nothing rather than a hash that would send
+	  a bug report to the wrong revision.
+	-->
+	<key>AITermGitCommit</key>
+	<string>unknown</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
