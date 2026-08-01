@@ -39,6 +39,7 @@ struct ContentView: View {
                     .frame(width: dragWidth ?? preferences.sidebarWidth)
                 SidebarResizeHandle(
                     width: dragWidth ?? preferences.sidebarWidth,
+                    fill: Color(nsColor: terminalBackground),
                     onDrag: { dragWidth = $0 },
                     onCommit: { width in
                         dragWidth = nil
@@ -54,12 +55,8 @@ struct ContentView: View {
                 // than a copy of it.
                 SidebarResizeHandle(
                     width: inspectorDragWidth ?? preferences.inspectorWidth,
+                    fill: Color(nsColor: terminalBackground),
                     inverted: true,
-                    // No rule on this side. Measured: the terminal fills its
-                    // box to within half a point, so the gap reported between
-                    // it and the panel was the divider plus the panel's own
-                    // leading padding, read together as a seam. The material
-                    // edge is boundary enough on its own.
                     showsRule: false,
                     onDrag: { inspectorDragWidth = $0 },
                     onCommit: { width in
@@ -111,6 +108,12 @@ struct ContentView: View {
             ForEach(state.tabs) { tab in
                 let isSelected = tab.tabID == state.selectedTabID
                 TerminalHostView(session: tab.session, isSelected: isSelected)
+                    // Padding shrinks the pane, which shrinks the grid, which
+                    // the child is told about through the same TIOCSWINSZ path
+                    // a font change uses — SwiftTerm recomputes on any frame
+                    // change, so nothing extra is needed here.
+                    .padding(.horizontal, preferences.terminal.padding.horizontal)
+                    .padding(.vertical, preferences.terminal.padding.vertical)
                     .opacity(isSelected ? 1 : 0)
                     // A hidden terminal must not eat clicks meant for the one
                     // on top of it.
@@ -129,6 +132,19 @@ struct ContentView: View {
 /// The draggable seam between sidebar and terminal.
 private struct SidebarResizeHandle: View {
     let width: CGFloat
+    /// What the seam is painted with.
+    ///
+    /// Not `Color.clear`, and that was the whole bug behind a bright line
+    /// beside the settings panel. Below 100% opacity the window is non-opaque,
+    /// so a column with nothing drawn in it does not fall back to the window's
+    /// background — it shows the **desktop**. One point of wallpaper between
+    /// the terminal and the panel, gone at 100% because an opaque window fills
+    /// whatever its views do not.
+    ///
+    /// Measured after three wrong answers: the terminal host sits at
+    /// x=241…819 and the panel starts at x=820, so the layout was never off by
+    /// more than the single point this view occupies.
+    let fill: Color
     /// The right-hand handle grows its panel as the drag moves left, so the
     /// translation is subtracted rather than added.
     var inverted: Bool = false
@@ -147,6 +163,7 @@ private struct SidebarResizeHandle: View {
         }
         // Wider than it looks: a one-pixel target is a one-pixel target.
         .frame(width: 1)
+        .background(fill)
             .overlay(
                 Rectangle()
                     .fill(Color.clear)

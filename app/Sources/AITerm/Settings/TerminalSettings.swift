@@ -30,6 +30,7 @@ import SwiftTerm
 struct TerminalSettings: Equatable {
     var appearance = Appearance()
     var font = FontSettings()
+    var padding = PaddingSettings()
     var cursor = CursorSettings()
     var window = WindowSettings()
     var behaviour = BehaviourSettings()
@@ -61,6 +62,19 @@ struct TerminalSettings: Equatable {
 
         static let sizeRange: ClosedRange<CGFloat> = 8...32
         static let lineSpacingRange: ClosedRange<CGFloat> = 0.8...2.0
+    }
+
+    /// Breathing room between the grid and the edges of its pane.
+    ///
+    /// Its own thing rather than part of `FontSettings`, because it costs
+    /// columns and rows the same way the font does but for a different reason:
+    /// the font decides how big a cell is, this decides how much of the pane is
+    /// not cells at all. Both end at the same place — the child has to be told.
+    struct PaddingSettings: Equatable {
+        var horizontal: CGFloat = 0
+        var vertical: CGFloat = 0
+
+        static let range: ClosedRange<CGFloat> = 0...32
     }
 
     // MARK: Cursor

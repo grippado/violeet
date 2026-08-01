@@ -78,6 +78,8 @@ struct TerminalSettingsCodecTests {
         settings.font.name = "Menlo"
         settings.font.size = 15
         settings.font.lineSpacing = 1.25
+        settings.padding.horizontal = 12
+        settings.padding.vertical = 8
         settings.cursor.shape = .underline
         settings.cursor.blinks = false
         settings.window.opacity = 0.75

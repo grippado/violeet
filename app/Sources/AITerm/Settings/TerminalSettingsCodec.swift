@@ -52,6 +52,15 @@ extension TerminalSettings {
             }
         }
 
+        if let padding = json["padding"] as? [String: Any] {
+            if let h = padding["horizontal"] as? Double {
+                self.padding.horizontal = clamp(CGFloat(h), to: PaddingSettings.range)
+            }
+            if let v = padding["vertical"] as? Double {
+                self.padding.vertical = clamp(CGFloat(v), to: PaddingSettings.range)
+            }
+        }
+
         if let cursor = json["cursor"] as? [String: Any] {
             if let shape = cursor["shape"] as? String,
                let parsed = CursorSettings.Shape(rawValue: shape) {
@@ -102,6 +111,11 @@ extension TerminalSettings {
         fontOut["size"] = Double(font.size)
         fontOut["lineSpacing"] = Double(font.lineSpacing)
         out["font"] = fontOut
+
+        var paddingOut = previous["padding"] as? [String: Any] ?? [:]
+        paddingOut["horizontal"] = Double(padding.horizontal)
+        paddingOut["vertical"] = Double(padding.vertical)
+        out["padding"] = paddingOut
 
         var cursorOut = previous["cursor"] as? [String: Any] ?? [:]
         cursorOut["shape"] = cursor.shape.rawValue

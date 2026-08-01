@@ -280,6 +280,29 @@ struct SettingsPanel: View {
                     onCommit: state.focusTerminal
                 )
             }
+            SettingRow(
+                label: "Padding",
+                hint: "Space between the text and the edges of the pane. Costs columns and rows, and every tab's program is told."
+            ) {
+                QuietStepper(
+                    value: Double(settings.padding.horizontal),
+                    range: Self.paddingRange,
+                    step: 2,
+                    format: { String(format: "%.0f ↔", $0) },
+                    onChange: { value in editing { $0.padding.horizontal = CGFloat(value) } },
+                    onCommit: state.focusTerminal
+                )
+            }
+            SettingRow(label: "Vertical padding") {
+                QuietStepper(
+                    value: Double(settings.padding.vertical),
+                    range: Self.paddingRange,
+                    step: 2,
+                    format: { String(format: "%.0f ↕", $0) },
+                    onChange: { value in editing { $0.padding.vertical = CGFloat(value) } },
+                    onCommit: state.focusTerminal
+                )
+            }
             SettingRow(label: "Line spacing") {
                 QuietStepper(
                     value: Double(settings.font.lineSpacing),
@@ -425,6 +448,9 @@ struct SettingsPanel: View {
     private static let sizeRange: ClosedRange<Double> =
         Double(TerminalSettings.FontSettings.sizeRange.lowerBound)
             ... Double(TerminalSettings.FontSettings.sizeRange.upperBound)
+    private static let paddingRange: ClosedRange<Double> =
+        Double(TerminalSettings.PaddingSettings.range.lowerBound)
+            ... Double(TerminalSettings.PaddingSettings.range.upperBound)
     private static let lineSpacingRange: ClosedRange<Double> =
         Double(TerminalSettings.FontSettings.lineSpacingRange.lowerBound)
             ... Double(TerminalSettings.FontSettings.lineSpacingRange.upperBound)
