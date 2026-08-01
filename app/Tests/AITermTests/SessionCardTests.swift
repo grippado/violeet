@@ -76,6 +76,30 @@ struct CardHonestyTests {
     }
 }
 
+@Suite("Context readout")
+struct ContextReadoutTests {
+    /// A measured number is not withheld because a different number is missing.
+    ///
+    /// The occupancy is real whether or not the window size is known. Only the
+    /// ratio and the percentage depend on the size, so only those disappear.
+    @Test func occupancy_is_shown_even_when_the_window_size_is_unknown() {
+        var card = SessionCard(registered: registered())
+        card.contextUsedTokens = 48_000
+        card.contextSizeTokens = nil
+
+        #expect(card.contextFraction == nil, "no proportion without a total")
+        #expect(Fmt.tokens(card.contextUsedTokens) == "48k", "but the count survives")
+    }
+
+    /// And nothing at all when there is nothing at all.
+    @Test func an_unmeasured_context_is_still_a_dash() {
+        var card = SessionCard(registered: registered())
+        card.contextUsedTokens = nil
+        card.contextSizeTokens = nil
+        #expect(Fmt.tokens(card.contextUsedTokens) == "—")
+    }
+}
+
 @Suite("Card state")
 struct CardStateTests {
     /// A pending permission request outranks the `state` field. The two agree

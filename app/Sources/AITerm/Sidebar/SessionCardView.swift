@@ -195,11 +195,19 @@ struct SessionCardView: View {
         .help(contextHelp)
     }
 
-    /// `28% · 56k/200k`, or a dash when the window is unknown.
+    /// `28% · 56k/200k` when the window is known, `56k` when it is not.
+    ///
+    /// The absolute occupancy is knowledge we actually have, and it is useful on
+    /// its own — someone who knows their own window is 1M can read `56k` and
+    /// place it. It was previously suppressed along with the percentage, which
+    /// threw away a measured number because a *different* number was missing.
+    ///
+    /// Only the ratio and the percentage depend on the window size, so only
+    /// they disappear. The hatched gauge beside this is what says the total is
+    /// unknown; this stays a plain count.
     private var contextReadout: String {
-        guard let used = card.contextUsedTokens, let size = card.contextSizeTokens else {
-            return Fmt.unknown
-        }
+        guard let used = card.contextUsedTokens else { return Fmt.unknown }
+        guard let size = card.contextSizeTokens else { return Fmt.tokens(used) }
         return "\(Fmt.percent(card.contextFraction)) · \(Fmt.tokens(used))/\(Fmt.tokens(size))"
     }
 
@@ -212,7 +220,15 @@ struct SessionCardView: View {
 
     private var contextHelp: String {
         guard card.contextFraction != nil else {
-            return "Context window size unknown for this model, so the fill cannot be computed."
+            return """
+            Tokens currently in the model's context window.
+
+            The window's total size is not something aiterm can see for this \
+            session, so there is no percentage — the count is measured, the \
+            proportion would be invented.
+
+            This is not your plan's usage limit.
+            """
         }
         return """
         How full the model's context window is — the conversation it can still \
@@ -324,7 +340,7 @@ private struct ContextGauge: View {
         }
         .frame(height: 6)
         .help(fraction == nil
-            ? "Context window size unknown for this model, so the fill cannot be computed."
+            ? "The window's total size is unknown, so there is no fill level to show. The count beside this bar is real."
             : "Context window \(Fmt.percent(fraction)) full.")
     }
 }
