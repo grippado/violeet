@@ -86,7 +86,7 @@ struct InspectorView: View {
             }
             .help("Hide this panel (⌥⌘I)")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .padding(.vertical, 7)
     }
 

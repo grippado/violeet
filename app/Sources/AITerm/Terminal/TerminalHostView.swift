@@ -25,6 +25,7 @@ struct TerminalHostView: NSViewRepresentable {
 
     func updateNSView(_ view: LocalProcessTerminalView, context: Context) {
         guard isSelected else { return }
+        Self.dumpLayout(view)
         // Deferred: during a SwiftUI update pass the view may not be in a
         // window yet, and `makeFirstResponder` on a windowless view is a silent
         // no-op that leaves the user typing into nothing.
@@ -33,6 +34,30 @@ struct TerminalHostView: NSViewRepresentable {
             if window.firstResponder !== view {
                 window.makeFirstResponder(view)
             }
+        }
+    }
+
+    /// Print where the terminal actually ended up, when `AITERM_DEBUG_LAYOUT` is
+    /// set.
+    ///
+    /// Added after two wrong guesses at a visible gap between the terminal and
+    /// the right sidebar — first blamed on the scroller gutter, then on the
+    /// panel's padding, neither measured. A screenshot shows that something is
+    /// wrong and never which view owns the pixels; this prints the frames so
+    /// the next answer comes from numbers.
+    private static func dumpLayout(_ view: LocalProcessTerminalView) {
+        guard ProcessInfo.processInfo.environment["AITERM_DEBUG_LAYOUT"] != nil else { return }
+        DispatchQueue.main.async {
+            let cell = view.getOptimalFrameSize()
+            let superBounds = view.superview?.bounds ?? .zero
+            FileHandle.standardError.write(Data(
+                """
+                [layout] terminal=\(view.frame) super=\(superBounds) \
+                optimal=\(cell.size) cols=\(view.getTerminal().cols) \
+                window=\(view.window?.frame.size ?? .zero)
+
+                """.utf8
+            ))
         }
     }
 }

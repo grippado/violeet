@@ -311,18 +311,73 @@ struct Swatch: View {
     }
 }
 
-/// A colour, edited without opening a window.
+/// A collapsible section header, in the sidebar's own idiom.
 ///
-/// The swatch grid is the primary surface and the hex field is the escape
-/// hatch. This is the whole replacement for `ColorPicker`: the system picker is
-/// a panel, a panel is a window, and a window takes key status away from the
-/// terminal — which is not "focus moved within the window", it is the session
-/// no longer receiving keystrokes at all.
-struct ColorControl: View {
+/// The summary on the right is what makes collapsing acceptable: six closed
+/// headers carrying only names would be a menu you have to open to read.
+struct DisclosureSection<Content: View>: View {
+    let title: String
+    let summary: String
+    let isExpanded: Bool
+    let toggle: () -> Void
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            QuietButton(action: toggle) {
+                HStack(spacing: 5) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text(title)
+                        .font(.system(size: 9, weight: .semibold))
+                    Spacer(minLength: 8)
+                    Text(summary)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundStyle(Color.secondary.opacity(0.85))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
+            }
+
+            if isExpanded {
+                content
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 10)
+                    .transition(.opacity)
+            }
+            Divider().opacity(0.5)
+        }
+    }
+}
+
+/// One colour: what it is, what it could be, and a way to type an exact value.
+///
+/// # What the first version got wrong
+///
+/// It put a swatch, a hex box and a row of unlabelled squares in a right-hand
+/// column with the label far to the left, and the ANSI editor appeared
+/// somewhere below the grid calling itself "Slot 11". Three surfaces competing
+/// on one line, none of them saying what they were for.
+///
+/// This is one block per colour, reading top to bottom: the name, the colour it
+/// is now beside the exact value, then the colours available in one click. The
+/// hex box is the escape hatch, not the main event.
+///
+/// # Still no `ColorPicker`
+///
+/// It opens `NSColorPanel`, which is a window, and a window takes key status
+/// from the terminal — not "focus moved within the window", the session stops
+/// receiving keystrokes. See the note at the top of this file.
+struct ColorField: View {
+    let label: String
     let value: RGB
-    /// Colours offered as one-click choices. Usually the current palette, so
-    /// picking a background that matches the theme takes one click.
-    let palette: [RGB]
+    /// Colours offered as one-click choices. Usually the current theme, so
+    /// matching the cursor to the text is a click rather than a hex string.
+    let choices: [RGB]
     let onChange: (RGB) -> Void
     let onCommit: () -> Void
 
@@ -330,17 +385,25 @@ struct ColorControl: View {
     @FocusState private var editing: Bool
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 5) {
-            HStack(spacing: 5) {
-                Swatch(color: value, isSelected: false, size: 18) {}
-                    .allowsHitTesting(false)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(nsColor: value.nsColor))
+                    .frame(width: 26, height: 20)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color.primary.opacity(0.20), lineWidth: 1)
+                    )
 
                 TextField("#RRGGBB", text: $draft)
                     .textFieldStyle(.plain)
                     .font(.system(size: 10, design: .monospaced))
-                    .frame(width: 68)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
                     .background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.14)))
                     .focused($editing)
                     // Return commits and leaves. Nothing is applied while
@@ -349,26 +412,26 @@ struct ColorControl: View {
                     // keystroke would be both wrong and unpleasant.
                     .onSubmit(commit)
                     .onChange(of: editing) { _, focused in
-                        if focused {
-                            draft = value.hex
-                        } else {
-                            // Clicking away is a cancel, not a commit. The
-                            // field goes back to the truth rather than keeping
-                            // a half-typed value that was never applied.
-                            draft = value.hex
-                            onCommit()
-                        }
+                        // Clicking away is a cancel, not a commit: the field
+                        // goes back to the colour actually in use rather than
+                        // keeping a half-typed value that was never applied.
+                        draft = value.hex
+                        if !focused { onCommit() }
+                    }
+                    .onChange(of: value) { _, new in
+                        if !editing { draft = new.hex }
                     }
             }
 
-            if !palette.isEmpty {
-                HStack(spacing: 3) {
-                    ForEach(Array(palette.enumerated()), id: \.offset) { _, color in
-                        Swatch(color: color, isSelected: color == value, size: 13) {
+            if !choices.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(Array(choices.enumerated()), id: \.offset) { _, color in
+                        Swatch(color: color, isSelected: color == value, size: 15) {
                             onChange(color)
                             onCommit()
                         }
                     }
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -382,44 +445,5 @@ struct ColorControl: View {
         draft = value.hex
         editing = false
         onCommit()
-    }
-}
-
-/// The 16 ANSI colours as a grid: normal on top, bright below.
-struct AnsiPaletteGrid: View {
-    let colors: [RGB]
-    let selected: Int?
-    let onSelect: (Int) -> Void
-
-    private static let names = [
-        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-    ]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            row(offset: 0, label: "normal")
-            row(offset: 8, label: "bright")
-        }
-    }
-
-    private func row(offset: Int, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-            HStack(spacing: 3) {
-                ForEach(0..<8, id: \.self) { i in
-                    let index = offset + i
-                    Swatch(
-                        color: colors.indices.contains(index) ? colors[index] : RGB(0, 0, 0),
-                        isSelected: selected == index,
-                        size: 18
-                    ) {
-                        onSelect(index)
-                    }
-                    .help("\(label) \(Self.names[i])")
-                }
-            }
-        }
     }
 }

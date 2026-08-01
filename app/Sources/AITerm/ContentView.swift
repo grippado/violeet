@@ -55,6 +55,12 @@ struct ContentView: View {
                 SidebarResizeHandle(
                     width: inspectorDragWidth ?? preferences.inspectorWidth,
                     inverted: true,
+                    // No rule on this side. Measured: the terminal fills its
+                    // box to within half a point, so the gap reported between
+                    // it and the panel was the divider plus the panel's own
+                    // leading padding, read together as a seam. The material
+                    // edge is boundary enough on its own.
+                    showsRule: false,
                     onDrag: { inspectorDragWidth = $0 },
                     onCommit: { width in
                         inspectorDragWidth = nil
@@ -112,13 +118,21 @@ private struct SidebarResizeHandle: View {
     /// The right-hand handle grows its panel as the drag moves left, so the
     /// translation is subtracted rather than added.
     var inverted: Bool = false
+    /// Whether to draw a line. The drag area is the same either way.
+    var showsRule: Bool = true
     let onDrag: (CGFloat) -> Void
     let onCommit: (CGFloat) -> Void
 
     var body: some View {
-        Divider()
-            // Wider than it looks: a one-pixel target is a one-pixel target.
-            .frame(width: 1)
+        Group {
+            if showsRule {
+                Divider()
+            } else {
+                Color.clear
+            }
+        }
+        // Wider than it looks: a one-pixel target is a one-pixel target.
+        .frame(width: 1)
             .overlay(
                 Rectangle()
                     .fill(Color.clear)
