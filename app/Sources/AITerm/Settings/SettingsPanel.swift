@@ -100,9 +100,10 @@ struct SettingsPanel: View {
             return settings.cursor.shape.label.lowercased()
                 + (settings.cursor.blinks ? ", blinking" : "")
         case .window:
-            return settings.window.isTranslucent
+            let opacity = settings.window.isTranslucent
                 ? String(format: "%.0f%%", settings.window.opacity * 100)
                 : "opaque"
+            return "\(opacity), \(Int(settings.window.interfaceFontSize)) pt"
         case .terminal:
             return "\(settings.behaviour.scrollbackLines / 1000)k lines"
         }
@@ -170,10 +171,10 @@ struct SettingsPanel: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 2))
-                Text(theme.name).font(.system(size: 10))
+                Text(theme.name).appFont(.caption)
                 Spacer(minLength: 0)
                 if isSelected {
-                    Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+                    Image(systemName: "checkmark").appFont(.small, weight: .bold)
                 }
             }
             .padding(.horizontal, 6)
@@ -210,7 +211,7 @@ struct SettingsPanel: View {
                 .padding(.top, 2)
             } else {
                 Text("Click a colour to edit it.")
-                    .font(.system(size: 9))
+                    .appFont(.small)
                     .foregroundStyle(.tertiary)
             }
         }
@@ -219,7 +220,7 @@ struct SettingsPanel: View {
     private func ansiRow(offset: Int, label: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
-                .font(.system(size: 9))
+                .appFont(.small)
                 .foregroundStyle(.tertiary)
             HStack(spacing: 4) {
                 ForEach(0..<8, id: \.self) { i in
@@ -349,6 +350,21 @@ struct SettingsPanel: View {
 
     private var windowSection: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Above opacity, because it is the one setting here somebody may
+            // need before they can comfortably read the rest of this panel.
+            SettingRow(
+                label: "Text size",
+                hint: "The window's own text: this panel, the sidebar, menus. The FONT section above is the terminal's, and ⌘+ / ⌘- move that one."
+            ) {
+                QuietStepper(
+                    value: Double(settings.window.interfaceFontSize),
+                    range: Self.interfaceFontSizeRange,
+                    step: 1,
+                    format: { String(format: "%.0f pt", $0) },
+                    onChange: { size in editing { $0.window.interfaceFontSize = CGFloat(size) } },
+                    onCommit: state.focusTerminal
+                )
+            }
             SettingRow(
                 label: "Opacity",
                 hint: "Below 100% the terminal's background lets what is behind the window through. Text stays fully opaque."
@@ -454,6 +470,9 @@ struct SettingsPanel: View {
     private static let lineSpacingRange: ClosedRange<Double> =
         Double(TerminalSettings.FontSettings.lineSpacingRange.lowerBound)
             ... Double(TerminalSettings.FontSettings.lineSpacingRange.upperBound)
+    private static let interfaceFontSizeRange: ClosedRange<Double> =
+        Double(TerminalSettings.WindowSettings.interfaceFontSizeRange.lowerBound)
+            ... Double(TerminalSettings.WindowSettings.interfaceFontSizeRange.upperBound)
 
     /// Mutate, apply to every terminal, and give the keyboard back.
     ///

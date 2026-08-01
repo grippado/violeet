@@ -120,7 +120,24 @@ struct TerminalSettings: Equatable {
         /// nobody can see.
         var blur: Bool = true
 
+        /// Body size for the window's own text: the sidebar, this panel, the
+        /// About box. Everything else in the chrome is an offset from it — see
+        /// `AppFont`.
+        ///
+        /// Deliberately *not* the terminal's font size, which lives in
+        /// `FontSettings` and is what ⌘+ and ⌘- move. The two were one control
+        /// by accident of there being only one, and they answer different
+        /// questions: the terminal's size reflows the child process and is
+        /// changed to fit a diff on screen; this one is changed once, because
+        /// of a display or a pair of eyes, and should not move when the first
+        /// one does.
+        var interfaceFontSize: CGFloat = defaultInterfaceFontSize
+
         static let opacityRange: ClosedRange<Double> = 0.3...1.0
+        /// The system's own body size, which is what the rest of macOS uses for
+        /// the same kind of text.
+        static let defaultInterfaceFontSize: CGFloat = 13
+        static let interfaceFontSizeRange: ClosedRange<CGFloat> = 10...20
 
         var isTranslucent: Bool { opacity < 0.999 }
     }

@@ -36,7 +36,12 @@ struct EditableName: View {
     /// The text to show. Not always `name.text`: the sidebar qualifies
     /// colliding names, and what the user sees is what they should be editing.
     let display: String
-    let font: Font
+    /// Which rung of the chrome's type scale the name is set in, and at
+    /// what weight. Not a resolved `Font`: the scale is an environment
+    /// value the user can move, and a `Font` computed by a caller would be
+    /// a size frozen at the moment that caller was built.
+    let step: AppFont.Step
+    var weight: Font.Weight = .regular
     let colour: Color
 
     /// Commit a new name. Empty means the user cleared the field, which is
@@ -73,13 +78,13 @@ struct EditableName: View {
     private var label: some View {
         HStack(spacing: 4) {
             Text(display)
-                .font(font)
+                .appFont(step, weight: weight)
                 .foregroundStyle(colour)
                 .lineLimit(1)
                 .truncationMode(.middle)
             if name.isLocked {
                 Image(systemName: "pin.fill")
-                    .font(.system(size: 8))
+                    .appFont(.micro)
                     .foregroundStyle(.tertiary)
                     .help("Renamed by you. Automatic naming will not change it — right-click for “Use automatic name”.")
             }
@@ -94,7 +99,7 @@ struct EditableName: View {
     private var field: some View {
         TextField("", text: $draft)
             .textFieldStyle(.plain)
-            .font(font)
+            .appFont(step, weight: weight)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.18)))

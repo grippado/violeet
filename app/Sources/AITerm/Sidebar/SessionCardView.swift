@@ -128,7 +128,7 @@ struct SessionCardView: View {
                 // that a command ran and nothing about which one; three lines
                 // is where the tool call usually becomes readable.
                 Text(action)
-                    .font(.system(size: 10))
+                    .appFont(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
                     .truncationMode(.tail)
@@ -148,7 +148,7 @@ struct SessionCardView: View {
     private func pathRow(_ path: String) -> some View {
         Label(path, systemImage: "folder")
             .labelStyle(.titleAndIcon)
-            .font(.system(size: 10))
+            .appFont(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.head)
@@ -163,7 +163,7 @@ struct SessionCardView: View {
     private func originRow(_ origin: String) -> some View {
         Label(origin, systemImage: "terminal")
             .labelStyle(.titleAndIcon)
-            .font(.system(size: 10))
+            .appFont(.caption)
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -184,14 +184,15 @@ struct SessionCardView: View {
             // application, and two glyphs for one fact read as two facts.
             if card.tabID == nil, card.originLabel == nil {
                 Image(systemName: "arrow.up.forward.app")
-                    .font(.system(size: 9))
+                    .appFont(.small)
                     .foregroundStyle(.tertiary)
                     .help("Running outside aiterm — there is no tab to switch to.")
             }
             EditableName(
                 name: name,
                 display: title,
-                font: .system(size: 13, weight: .semibold),
+                step: .title,
+                weight: .semibold,
                 colour: .primary,
                 onRename: onRename,
                 onRelease: onRelease,
@@ -201,7 +202,7 @@ struct SessionCardView: View {
             if let branch = card.gitBranch, !branch.isEmpty {
                 Label(branch, systemImage: "arrow.triangle.branch")
                     .labelStyle(.titleAndIcon)
-                    .font(.system(size: 10))
+                    .appFont(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -212,7 +213,7 @@ struct SessionCardView: View {
 
     private var stateBadge: some View {
         Text(card.lifecycle.label)
-            .font(.system(size: 10, weight: waiting ? .bold : .medium))
+            .appFont(.caption, weight: waiting ? .bold : .medium)
             .foregroundStyle(waiting ? CardTheme.attention : .secondary)
             .lineLimit(1)
             .fixedSize()
@@ -231,7 +232,7 @@ struct SessionCardView: View {
 
     private func pill(_ text: String, border: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium))
+            .appFont(.caption, weight: .medium)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
             .overlay(
@@ -257,7 +258,7 @@ struct SessionCardView: View {
     private var contextRow: some View {
         HStack(spacing: 6) {
             Text("ctx")
-                .font(.system(size: 10, weight: .medium))
+                .appFont(.caption, weight: .medium)
                 .foregroundStyle(.secondary)
                 .frame(width: 22, alignment: .leading)
 
@@ -267,7 +268,7 @@ struct SessionCardView: View {
             )
 
             Text(contextReadout)
-                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .appFont(.caption, weight: .medium, monospacedDigit: true)
                 .foregroundStyle(contextTint)
                 .lineLimit(1)
                 .fixedSize()
@@ -373,10 +374,10 @@ struct SessionCardView: View {
     private func limitStat(_ label: String, _ percent: Double?, _ resetsAt: String?) -> some View {
         HStack(spacing: 3) {
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .appFont(.caption, weight: .medium)
                 .foregroundStyle(.secondary)
             Text(percent.map { String(format: "%.0f%%", $0) } ?? Fmt.unknown)
-                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .appFont(.caption, weight: .medium, monospacedDigit: true)
                 // Uses the same ramp as the context gauge, because "how full is
                 // this thing" is the same question with the same answer colours.
                 .foregroundStyle(percent.map {
@@ -384,7 +385,7 @@ struct SessionCardView: View {
                 } ?? .secondary)
             if let countdown = Fmt.countdown(to: resetsAt) {
                 Text(countdown)
-                    .font(.system(size: 9).monospacedDigit())
+                    .appFont(.small, monospacedDigit: true)
                     .foregroundStyle(.tertiary)
             }
         }
@@ -452,10 +453,10 @@ struct SessionCardView: View {
 
     private func tokenStat(_ label: String, _ arrow: String, _ value: String, _ color: Color) -> some View {
         HStack(spacing: 3) {
-            Text(arrow).font(.system(size: 10, weight: .bold)).foregroundStyle(color)
-            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(arrow).appFont(.caption, weight: .bold).foregroundStyle(color)
+            Text(label).appFont(.caption).foregroundStyle(.secondary)
             Text(value)
-                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .appFont(.caption, weight: .medium, monospacedDigit: true)
                 .foregroundStyle(.primary)
         }
     }

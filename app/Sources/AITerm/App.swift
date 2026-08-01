@@ -107,14 +107,18 @@ private struct AITermCommands: Commands {
 
             Divider()
 
-            Button("Bigger Text") { state.preferences.adjustFontSize(by: 1) }
+            // Named for the terminal, not just "Text". The window's own text
+            // is a separate setting now (Settings → WINDOW → Text size), and
+            // two controls over "text" with no way to tell which is which is
+            // the confusion this naming exists to prevent.
+            Button("Bigger Terminal Text") { state.preferences.adjustFontSize(by: 1) }
                 .keyboardShortcut("+", modifiers: .command)
-            Button("Smaller Text") { state.preferences.adjustFontSize(by: -1) }
+            Button("Smaller Terminal Text") { state.preferences.adjustFontSize(by: -1) }
                 .keyboardShortcut("-", modifiers: .command)
             // ⌘0 is where every browser and editor puts "back to normal", and
             // without it the only way back from twelve presses of ⌘- is twelve
             // presses of ⌘+.
-            Button("Actual Size") { state.preferences.resetFontSize() }
+            Button("Actual Terminal Text") { state.preferences.resetFontSize() }
                 .keyboardShortcut("0", modifiers: .command)
         }
 
@@ -129,11 +133,17 @@ private struct AITermCommands: Commands {
             // ⌘1…⌘8 are positional; ⌘9 is "the last one", which is what every
             // browser trained everybody to expect and is more useful than an
             // eighth-and-ninth distinction nobody counts to.
-            ForEach(1...9, id: \.self) { number in
-                Button(number == 9 ? "Last Tab" : "Tab \(number)") {
-                    state.selectTab(number: number)
-                }
-                .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
+            //
+            // Built from the tabs that exist, not from a fixed 1…9. The menu is
+            // the only place a shortcut is discoverable, and nine entries above
+            // one open tab advertise eight windows onto nothing. Not `.disabled`
+            // for the reason recorded on ⌘W: a disabled item's key equivalent
+            // does not fire, and the flag latches on a stale snapshot. Rebuilding
+            // the *items* has no such snapshot — `state.tabs` is `@Published`,
+            // so the menu is regenerated as tabs open and close.
+            ForEach(TabMenuEntry.entries(count: state.tabs.count)) { entry in
+                Button(entry.title) { state.selectTab(number: entry.number) }
+                    .keyboardShortcut(entry.shortcut, modifiers: .command)
             }
         }
     }

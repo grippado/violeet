@@ -34,7 +34,11 @@ enum AboutWindow {
             return
         }
 
+        // Its own window, so it is outside the scene that ContentView sets
+        // the type scale in. Injected here instead, from the same setting,
+        // so the About box is not the one pane that ignores it.
         let view = AboutView(daemonStatus: state.daemon.status)
+            .environment(\.appFont, AppFont(body: state.preferences.terminal.window.interfaceFontSize))
         let hosting = NSHostingView(rootView: view)
         let panel = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 380, height: 420),
@@ -97,17 +101,17 @@ private struct AboutView: View {
                     .frame(width: 72, height: 72)
 
                 Text("aiterm")
-                    .font(.system(size: 20, weight: .semibold))
+                    .appFont(.display, weight: .semibold)
 
                 Text(BuildInfo.versionLine)
-                    .font(.system(size: 11, design: .monospaced))
+                    .appFont(.body, design: .monospaced)
                     .foregroundStyle(.secondary)
                     // Selectable, because the reason it is on screen is that
                     // somebody is about to paste it into an issue.
                     .textSelection(.enabled)
 
                 Text("A native macOS terminal for running AI coding agents as tabs.")
-                    .font(.system(size: 11))
+                    .appFont(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -140,7 +144,7 @@ private struct AboutView: View {
                     .fill(daemonStatus.indicatorColor)
                     .frame(width: 6, height: 6)
                 Text("\(daemonStatus.shortLabel) · protocol v\(Protocol.version)")
-                    .font(.system(size: 10))
+                    .appFont(.caption)
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
             }
@@ -153,10 +157,10 @@ private struct AboutView: View {
     private func row(_ label: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
-                .font(.system(size: 11))
+                .appFont(.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 74, alignment: .leading)
-            Text(value).font(.system(size: 11))
+            Text(value).appFont(.body)
             Spacer(minLength: 0)
         }
     }
@@ -164,7 +168,7 @@ private struct AboutView: View {
     private func row(_ label: String, link: String, label linkLabel: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
-                .font(.system(size: 11))
+                .appFont(.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 74, alignment: .leading)
             LinkText(url: link, label: linkLabel)
@@ -188,17 +192,11 @@ private struct LinkText: View {
 
     var body: some View {
         Text(label)
-            .font(.system(size: 11))
+            .appFont(.body)
             .foregroundStyle(Color.accentColor)
             .underline(hovering)
-            .onHover { inside in
-                hovering = inside
-                if inside {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
+            .onHover { inside in hovering = inside }
+            .pointingHand()
             .onTapGesture {
                 guard let target = URL(string: url) else { return }
                 NSWorkspace.shared.open(target)

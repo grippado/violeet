@@ -69,6 +69,11 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 400)
+        // One place the chrome's type scale enters the hierarchy. Every label
+        // below reads it out of the environment, so moving the setting moves
+        // all of them together — and the terminal, whose font is its own
+        // setting entirely, does not move at all.
+        .environment(\.appFont, AppFont(body: preferences.terminal.window.interfaceFontSize))
         // Configured from here, not from the `App` body: this view observes
         // `preferences`, so it re-renders when translucency changes. The scene
         // body does not, and the backdrop would only appear on relaunch.
@@ -208,7 +213,7 @@ private struct EmptyWindowView: View {
     var body: some View {
         VStack(spacing: 10) {
             Text("No tabs")
-                .font(.system(size: 15, weight: .medium))
+                .appFont(.headline, weight: .medium)
                 .foregroundStyle(.secondary)
             Button("New Tab") { state.newTab() }
                 .keyboardShortcut("t", modifiers: .command)

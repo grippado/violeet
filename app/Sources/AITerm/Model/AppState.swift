@@ -341,6 +341,8 @@ final class AppState: ObservableObject {
                 MainActor.assumeIsolated { self?.applyTerminalSettings() }
             }
             .store(in: &cancellables)
+
+        installKeyMonitor()
     }
 
     // MARK: - Keyboard

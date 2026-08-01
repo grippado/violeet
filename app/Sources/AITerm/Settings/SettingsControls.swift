@@ -45,14 +45,14 @@ struct SettingRow<Content: View>: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(label)
-                    .font(.system(size: 11))
+                    .appFont(.body)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 content
             }
             if let hint {
                 Text(hint)
-                    .font(.system(size: 9))
+                    .appFont(.small)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -69,7 +69,7 @@ struct SettingGroup<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title.uppercased())
-                .font(.system(size: 9, weight: .semibold))
+                .appFont(.small, weight: .semibold)
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 2)
             content
@@ -85,6 +85,12 @@ struct SettingGroup<Content: View>: View {
 /// Every interactive thing in the panel is built on this, so there is one place
 /// the focus contract is implemented and one place it can be got wrong.
 struct QuietButton<Label: View>: View {
+    /// Read rather than passed: callers disable these from the outside, with
+    /// `.disabled(!enabled)` on the button they built — so the flag arrives
+    /// through the environment, and asking for it here is what lets the cursor
+    /// tell the truth about a stepper that has hit the end of its range.
+    @Environment(\.isEnabled) private var isEnabled
+
     let action: () -> Void
     @ViewBuilder var label: Label
 
@@ -92,6 +98,9 @@ struct QuietButton<Label: View>: View {
         Button(action: action) { label }
             .buttonStyle(.plain)
             .focusable(false)
+            // Every interactive thing in the panel is built on this, which is
+            // also why the cursor is set here and not at thirty call sites.
+            .pointingHand(isEnabled)
     }
 }
 
@@ -118,7 +127,7 @@ struct QuietStepper: View {
                 set(value - step)
             }
             Text(format(value))
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .appFont(.body, weight: .medium, monospacedDigit: true)
                 .frame(minWidth: 42)
             stepButton("plus", enabled: value < range.upperBound) {
                 set(value + step)
@@ -134,7 +143,7 @@ struct QuietStepper: View {
     private func stepButton(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         QuietButton(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
+                .appFont(.small, weight: .bold)
                 .frame(width: 20, height: 18)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
@@ -172,7 +181,7 @@ struct QuietSlider: View {
             .controlSize(.small)
             .focusable(false)
             Text(format(value))
-                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .appFont(.caption, weight: .medium, monospacedDigit: true)
                 .foregroundStyle(.secondary)
                 .frame(width: 38, alignment: .trailing)
         }
@@ -199,7 +208,7 @@ struct QuietSegmented<Value: Hashable>: View {
                     onCommit()
                 }) {
                     Text(option.label)
-                        .font(.system(size: 10, weight: selection == option.value ? .semibold : .regular))
+                        .appFont(.caption, weight: selection == option.value ? .semibold : .regular)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
                         .background(
@@ -258,11 +267,11 @@ struct QuietMenu: View {
         } label: {
             HStack(spacing: 4) {
                 Text(selection.isEmpty ? title : selection)
-                    .font(.system(size: 10))
+                    .appFont(.caption)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 7, weight: .semibold))
+                    .appFont(.badge, weight: .semibold)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 7)
@@ -273,6 +282,7 @@ struct QuietMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .focusable(false)
+        .pointingHand()
     }
 }
 
@@ -327,12 +337,12 @@ struct DisclosureSection<Content: View>: View {
             QuietButton(action: toggle) {
                 HStack(spacing: 5) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
+                        .appFont(.micro, weight: .semibold)
                     Text(title)
-                        .font(.system(size: 9, weight: .semibold))
+                        .appFont(.small, weight: .semibold)
                     Spacer(minLength: 8)
                     Text(summary)
-                        .font(.system(size: 9))
+                        .appFont(.small)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -387,7 +397,7 @@ struct ColorField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .appFont(.caption, weight: .medium)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 6) {
@@ -401,7 +411,7 @@ struct ColorField: View {
 
                 TextField("#RRGGBB", text: $draft)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 10, design: .monospaced))
+                    .appFont(.caption, design: .monospaced)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.14)))

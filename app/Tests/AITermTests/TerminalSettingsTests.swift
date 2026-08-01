@@ -84,6 +84,7 @@ struct TerminalSettingsCodecTests {
         settings.cursor.blinks = false
         settings.window.opacity = 0.75
         settings.window.blur = false
+        settings.window.interfaceFontSize = 16
         settings.behaviour.scrollbackLines = 50_000
         settings.behaviour.shellOverride = "/bin/bash"
         settings.behaviour.wrapLines = false
@@ -133,6 +134,15 @@ struct TerminalSettingsCodecTests {
         let huge = TerminalSettings(json: ["font": ["size": 400.0], "window": ["opacity": 4.0]])
         #expect(huge.font.size == TerminalSettings.FontSettings.sizeRange.upperBound)
         #expect(huge.window.opacity == TerminalSettings.WindowSettings.opacityRange.upperBound)
+
+        #expect(
+            TerminalSettings(json: ["window": ["interfaceFontSize": 99.0]]).window.interfaceFontSize
+                == TerminalSettings.WindowSettings.interfaceFontSizeRange.upperBound
+        )
+        #expect(
+            TerminalSettings(json: ["window": ["interfaceFontSize": 1.0]]).window.interfaceFontSize
+                == TerminalSettings.WindowSettings.interfaceFontSizeRange.lowerBound
+        )
 
         let tiny = TerminalSettings(json: ["font": ["size": -3.0], "window": ["opacity": 0.0]])
         #expect(tiny.font.size == TerminalSettings.FontSettings.sizeRange.lowerBound)

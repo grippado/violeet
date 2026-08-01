@@ -54,6 +54,7 @@ struct SidebarView: View {
                         )
                         .contentShape(Rectangle())
                         .onTapGesture { reveal(card) }
+                        .pointingHand(card.tabID != nil)
                         .help(card.tabID == nil
                             ? "Running outside aiterm. Shown because it is a real session, but there is no tab to reveal."
                             : "Click to switch to this session's tab.")
@@ -76,6 +77,7 @@ struct SidebarView: View {
                             )
                             .contentShape(Rectangle())
                             .onTapGesture { state.selectedTabID = tab.tabID }
+                            .pointingHand()
                         }
                     }
 
@@ -178,11 +180,12 @@ struct SidebarView: View {
     private var header: some View {
         HStack {
             Text("Sessions")
-                .font(.system(size: 11, weight: .semibold))
+                .appFont(.body, weight: .semibold)
                 .foregroundStyle(.secondary)
             Spacer()
             Button { state.newTab() } label: { Image(systemName: "plus") }
                 .buttonStyle(.plain)
+                .pointingHand()
                 .foregroundStyle(.secondary)
                 .help("New tab (⌘T)")
         }
@@ -193,7 +196,7 @@ struct SidebarView: View {
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold))
+            .appFont(.small, weight: .semibold)
             .foregroundStyle(.tertiary)
             .padding(.top, 6)
             .padding(.leading, 2)
@@ -202,10 +205,10 @@ struct SidebarView: View {
     private var emptyHint: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("No sessions yet")
-                .font(.system(size: 11, weight: .medium))
+                .appFont(.body, weight: .medium)
                 .foregroundStyle(.secondary)
             Text("Run an agent in a tab. Cards appear when its hooks reach the daemon.")
-                .font(.system(size: 10))
+                .appFont(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -247,11 +250,11 @@ private struct ElsewhereHeader: View {
         Button(action: toggle) {
             HStack(spacing: 5) {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 8, weight: .semibold))
+                    .appFont(.micro, weight: .semibold)
                 Text("ELSEWHERE")
-                    .font(.system(size: 9, weight: .semibold))
+                    .appFont(.small, weight: .semibold)
                 Text("\(count)")
-                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .appFont(.small, weight: .medium, monospacedDigit: true)
                     .padding(.horizontal, 4)
                     .background(
                         Capsule().fill(waiting
@@ -260,11 +263,11 @@ private struct ElsewhereHeader: View {
                     )
                 if waiting {
                     Text("waiting for you")
-                        .font(.system(size: 9, weight: .bold))
+                        .appFont(.small, weight: .bold)
                         .foregroundStyle(CardTheme.attention)
                 } else if !expanded, !apps.isEmpty {
                     Text(apps.joined(separator: ", "))
-                        .font(.system(size: 9))
+                        .appFont(.small)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -279,6 +282,7 @@ private struct ElsewhereHeader: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointingHand()
         .help(expanded
             ? "Hide sessions running outside aiterm"
             : "\(count) session(s) running outside aiterm — click to show")
@@ -306,7 +310,8 @@ private struct TabRow: View {
             EditableName(
                 name: name,
                 display: name.text,
-                font: .system(size: 11, weight: isSelected ? .semibold : .regular),
+                step: .body,
+                weight: isSelected ? .semibold : .regular,
                 colour: .primary,
                 onRename: onRename,
                 onRelease: onRelease,
@@ -337,7 +342,7 @@ private struct DaemonStatusLine: View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 6, height: 6)
             Text(label)
-                .font(.system(size: 10))
+                .appFont(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 0)

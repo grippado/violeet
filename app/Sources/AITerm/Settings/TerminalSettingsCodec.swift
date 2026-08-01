@@ -74,6 +74,12 @@ extension TerminalSettings {
                 self.window.opacity = clamp(opacity, to: WindowSettings.opacityRange)
             }
             if let blur = window["blur"] as? Bool { self.window.blur = blur }
+            if let size = window["interfaceFontSize"] as? Double {
+                self.window.interfaceFontSize = clamp(
+                    CGFloat(size),
+                    to: WindowSettings.interfaceFontSizeRange
+                )
+            }
         }
 
         if let behaviour = json["behaviour"] as? [String: Any] {
@@ -125,6 +131,7 @@ extension TerminalSettings {
         var windowOut = previous["window"] as? [String: Any] ?? [:]
         windowOut["opacity"] = window.opacity
         windowOut["blur"] = window.blur
+        windowOut["interfaceFontSize"] = Double(window.interfaceFontSize)
         out["window"] = windowOut
 
         var behaviourOut = previous["behaviour"] as? [String: Any] ?? [:]

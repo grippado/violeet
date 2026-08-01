@@ -59,8 +59,8 @@ struct InspectorView: View {
             ForEach(InspectorPanel.allCases) { item in
                 QuietButton(action: { panel = item }) {
                     HStack(spacing: 4) {
-                        Image(systemName: item.symbol).font(.system(size: 10))
-                        Text(item.title).font(.system(size: 11, weight: .semibold))
+                        Image(systemName: item.symbol).appFont(.caption)
+                        Text(item.title).appFont(.body, weight: .semibold)
                     }
                     .foregroundStyle(panel == item ? Color.primary : Color.secondary)
                     .padding(.horizontal, 6)
@@ -81,7 +81,7 @@ struct InspectorView: View {
                 state.focusTerminal()
             }) {
                 Image(systemName: "sidebar.right")
-                    .font(.system(size: 11))
+                    .appFont(.body)
                     .foregroundStyle(.secondary)
             }
             .help("Hide this panel (⌥⌘I)")
