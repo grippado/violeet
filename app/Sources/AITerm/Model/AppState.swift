@@ -259,8 +259,14 @@ final class AppState: ObservableObject {
 
     // MARK: - Appearance
 
+    /// Show or hide the sessions sidebar, and give the keyboard back.
+    ///
+    /// The same reason as `toggleInspector`: the shortcut is pressed while the
+    /// terminal has focus, and the layout change is exactly the moment AppKit
+    /// might decide focus belongs somewhere else.
     func toggleSidebar() {
         preferences.sidebarVisible.toggle()
+        focusTerminal()
     }
 
     /// Show or hide the right sidebar, and give the keyboard back either way.

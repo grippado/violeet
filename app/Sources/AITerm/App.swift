@@ -57,11 +57,33 @@ private struct AITermCommands: Commands {
                 .keyboardShortcut("w", modifiers: .command)
         }
 
+        // `⌘,` is where every macOS user looks for settings, so it has to work
+        // — but SwiftUI's `Settings` scene opens a *window*, which is the one
+        // thing this panel exists not to be: a separate window takes key status
+        // from the terminal and the session stops receiving keystrokes.
+        //
+        // Replacing the standard item is what lets the familiar shortcut do the
+        // right thing. `.appSettings` is the group AppKit puts "Settings…" in,
+        // so replacing it swaps the behaviour without leaving a dead menu entry
+        // that opens an empty window beside the working one.
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { state.toggleInspector() }
+                .keyboardShortcut(",", modifiers: .command)
+        }
+
         CommandGroup(after: .sidebar) {
             Button(state.preferences.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
                 state.toggleSidebar()
             }
-            .keyboardShortcut("s", modifiers: [.command, .option])
+            // `⌘.` rather than the old `⌥⌘S`: this is a sidebar people collapse
+            // to read a wide diff and open again a second later, and it should
+            // be one hand. SwiftUI binds one shortcut per item, so it is a
+            // replacement and not an addition.
+            //
+            // The classic Mac meaning of `⌘.` is "cancel", but nothing in this
+            // window cancels — interrupting the program in the terminal is
+            // `Ctrl-C`, which never reaches the menu bar.
+            .keyboardShortcut(".", modifiers: .command)
 
             Button(state.preferences.inspectorVisible ? "Hide Settings" : "Show Settings") {
                 state.toggleInspector()
