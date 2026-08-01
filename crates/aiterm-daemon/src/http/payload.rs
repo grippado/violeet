@@ -115,6 +115,13 @@ pub struct HookPayload {
     pub tool_input: Option<serde_json::Value>,
     /// Undocumented shape in v2.1.220; forwarded verbatim and never parsed.
     pub permission_suggestions: Option<serde_json::Value>,
+    /// What the user typed. Present on `UserPromptSubmit` and nowhere else.
+    ///
+    /// This is the only channel that carries the prompt at the moment it is
+    /// submitted — the transcript has it too, but not for another few hundred
+    /// milliseconds, and the whole point of naming from the prompt is that the
+    /// card is named before the first reply lands.
+    pub prompt: Option<String>,
 }
 
 impl HookPayload {

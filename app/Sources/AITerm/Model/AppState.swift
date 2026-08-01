@@ -61,6 +61,14 @@ final class AppState: ObservableObject {
         elsewhereSessions.contains { $0.lifecycle == .waitingForYou }
     }
 
+    /// The title to render for a session, made unique across the window.
+    ///
+    /// The rule lives in `SessionCard.uniqueTitles(for:)`; this only supplies
+    /// the window's set of cards.
+    func displayTitle(for card: SessionCard) -> String {
+        SessionCard.uniqueTitles(for: Array(sessions.values))[card.sessionID] ?? card.baseTitle
+    }
+
     /// The distinct terminal applications the hidden sessions are running in,
     /// in the order the cards appear.
     ///

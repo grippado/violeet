@@ -62,6 +62,17 @@ impl TranscriptReader for ClaudeCodeReader {
             // exactly the bug this shape prevents.
             "assistant" => parse_assistant(object.get("message"), at),
 
+            // Claude Code's own name for the session. Not a content line and it
+            // carries no timestamp; the key is camelCase where most of the
+            // schema is not, which is why it is read explicitly rather than
+            // guessed at.
+            "ai-title" => match string_at(object.get("aiTitle")) {
+                Some(text) if !text.trim().is_empty() => {
+                    vec![TranscriptEvent::AiTitle { text, at }]
+                }
+                _ => Vec::new(),
+            },
+
             "user" => {
                 // A tool result arrives as a user line. Two spellings observed:
                 // a `tool_result` content block, and a `sourceToolUseID` on the
@@ -246,6 +257,105 @@ fn truncate(text: &str, max: usize) -> String {
         out.push('…');
     }
     out
+}
+
+/// What a look at the *start* of a transcript can tell us about its name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeadScan {
+    /// Claude Code's own title, if it had already generated one.
+    pub ai_title: Option<String>,
+    /// The text of the session's first user message.
+    pub first_prompt: Option<String>,
+}
+
+impl HeadScan {
+    pub fn is_empty(&self) -> bool {
+        self.ai_title.is_none() && self.first_prompt.is_none()
+    }
+}
+
+/// How far into a transcript to look for a name.
+///
+/// `ai-title` was measured landing on line 12 of every transcript that has one,
+/// and one case at 127 after a resume. 512 covers both with room to spare while
+/// staying a bounded read on a file that can be 15 MB.
+const HEAD_SCAN_LINES: usize = 512;
+
+/// Read the head of a transcript for the two things that can name a session.
+///
+/// This is what answers the adopted-session case. A session already running
+/// when aiterm first saw it has no first `UserPromptSubmit` to hook — but its
+/// first prompt is still sitting in the file, and so, usually, is Claude Code's
+/// own title. Reading them gives an adopted session **the same name by the same
+/// rules** as one aiterm started, which is what keeps the sidebar to a single
+/// register instead of two kinds of card.
+///
+/// Deliberately separate from the tail reader, which starts at the end on
+/// purpose (replaying a 15 MB backlog as if it were live would flood the
+/// sidebar). This reads forward from the start, stops at
+/// [`HEAD_SCAN_LINES`] or as soon as it has both answers, and is run once.
+pub fn scan_head(path: &std::path::Path) -> std::io::Result<HeadScan> {
+    use std::io::BufRead;
+
+    let file = std::fs::File::open(path)?;
+    let mut found = HeadScan::default();
+
+    for line in std::io::BufReader::new(file).lines().take(HEAD_SCAN_LINES) {
+        let Ok(line) = line else { continue };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(object) = value.as_object() else { continue };
+
+        match object.get("type").and_then(Value::as_str) {
+            Some("ai-title") => {
+                if let Some(t) = string_at(object.get("aiTitle")) {
+                    if !t.trim().is_empty() {
+                        found.ai_title = Some(t);
+                    }
+                }
+            }
+            Some("user") if found.first_prompt.is_none() => {
+                // A tool result also arrives as a `user` line. It is not a
+                // prompt, and naming a session after one would be naming it
+                // after its own output.
+                if tool_result_id(object.get("message")).is_some()
+                    || object.get("sourceToolUseID").is_some()
+                {
+                    continue;
+                }
+                if let Some(text) = user_text(object.get("message")) {
+                    found.first_prompt = Some(text);
+                }
+            }
+            _ => {}
+        }
+
+        if found.ai_title.is_some() && found.first_prompt.is_some() {
+            break;
+        }
+    }
+    Ok(found)
+}
+
+/// The text of a user message, whether the content is a bare string or the
+/// block form.
+fn user_text(message: Option<&Value>) -> Option<String> {
+    let content = message?.get("content")?;
+    if let Some(s) = content.as_str() {
+        return (!s.trim().is_empty()).then(|| s.to_string());
+    }
+    let blocks = content.as_array()?;
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) == Some("text") {
+            if let Some(t) = string_at(block.get("text")) {
+                if !t.trim().is_empty() {
+                    return Some(t);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn string_at(value: Option<&Value>) -> Option<String> {

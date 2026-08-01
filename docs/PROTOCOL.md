@@ -1,6 +1,6 @@
 # aiterm socket protocol
 
-> **Wire version `v` = 1. Document revision 4.**
+> **Wire version `v` = 1. Document revision 5.**
 >
 > These are two different numbers and conflating them has now cost time twice:
 > two separate tracks were briefed that the protocol was "v2, frozen", read
@@ -160,9 +160,12 @@ An explicit `null` means *became unknown*.
 | `title` | string \| null | |
 | `model` | string \| null | |
 | `cwd` | string \| null | Emitted on `cwd-changed`. |
+| `title_source` | string \| null | `cwd` \| `prompt` \| `ai_title` \| `user`. Who named the session — see below. |
 | `context_window_used_tokens` | integer \| null | Current occupancy of the context window. Absolute, not a delta, and it **falls** on compaction. |
 | `context_window_size_tokens` | integer \| null | The model's window. The app computes the percentage for display; it does not compute the inputs. |
-| `cumulative_input_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
+| `cumulative_input_tokens` | integer \| null | Monotonic. **Fresh input only** — see below. Never decreases. |
+| `cumulative_cache_read_tokens` | integer \| null | Monotonic. Prompt tokens served from the cache. |
+| `cumulative_cache_creation_tokens` | integer \| null | Monotonic. Prompt tokens written into the cache. |
 | `cumulative_output_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
 | `cumulative_tokens_partial` | boolean \| null | `true` when the cumulative pair counts only part of the session. See below. |
 | `five_hour_limit_used_percent` | number \| null | 0–100. The Claude.ai subscription's 5-hour window. |
@@ -224,6 +227,51 @@ It has to complete before the response is written, because the kernel's view of
 the connection stops existing when the socket closes.
 
 Added in document revision 4, and again an addition: the wire `v` stays `1`.
+
+**The prompt side is three numbers, not one, because they have three
+prices.** `cumulative_input_tokens` counts only input that was neither read
+from nor written to the cache, and on its own it is not what the session cost.
+Measured across four real transcripts:
+
+| session | `input` | `cache_read` | `cache_creation` | understated by |
+|---|---|---|---|---|
+| 11.2 MB | 628 | 120 795 446 | 833 136 | 193 677x |
+| 12.9 MB | 58 565 | 210 051 939 | 1 133 697 | 3 607x |
+| 15.4 MB | 1 558 | 239 984 106 | 2 632 530 | 155 724x |
+| 10.8 MB | 1 242 | 265 631 149 | 1 052 986 | 214 723x |
+
+Two independent implementations — the Rust reader and a Python script written
+against the same files — agree on every figure. This shipped as a card reading
+`in ~170` for a session holding 187k in its window, which is what exposed it.
+
+They are kept apart rather than summed for two reasons. **Price**: a cache read
+costs a fraction of fresh input and a cache write costs more than it, so one
+merged number cannot be turned into money by anyone downstream. **Scale**: cache
+reads were 99.5% of the prompt side in every session measured, so a merged
+figure would be the cache reads wearing a different label, and fresh input would
+vanish — the same failure as before, mirrored.
+
+Added in document revision 5. An addition, so the wire `v` stays `1`.
+
+**`title_source` says who named the session**, and exists because the
+precedence is not visible from the title alone. In rank order:
+
+| source | when | outranks |
+|---|---|---|
+| `cwd` | nothing has named it; the client falls back to the path's last component | — |
+| `prompt` | the first `UserPromptSubmit`, derived from what the user typed | `cwd` |
+| `ai_title` | Claude Code's own `ai-title` line in the transcript | `prompt` |
+| `user` | `rename_session`. Sticky: nothing overwrites it | everything |
+
+A title is only ever replaced by one that outranks it, which is what stops a
+name from flickering between derivations — and what makes a manual rename
+final. The daemon persists the pair to `~/.aiterm/titles.json` so a restart does
+not rename every card back to its folder.
+
+`ai-title` rather than `summary` on measurement: `summary` appears in **none**
+of the transcripts on the machine this was built on, while `ai-title` lands on
+line 12 of every session that gets that far, carries one stable value for the
+session's life, and is written in the language of the conversation.
 
 **The rate-limit fields come from a different channel entirely.** They are not
 in the transcript and not in any hook: Claude Code reports them, along with the

@@ -31,6 +31,14 @@ async fn start() -> Harnessed {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("daemon.sock");
 
+    // Persisted session titles go in the temp dir, not in the developer's real
+    // `~/.aiterm/`. Not hypothetical: the rename test below wrote `"s1": "my
+    // run"` into a live store the first time it ran. Every test in this binary
+    // sets the same value, so setting it here repeatedly is harmless.
+    unsafe {
+        std::env::set_var("AITERM_STATE_DIR", dir.path());
+    }
+
     let hub = Hub::new(Registry::with_default_ttl());
     let server = SocketServer::bind(&path, hub.clone()).expect("bind");
     tokio::spawn(server.serve());

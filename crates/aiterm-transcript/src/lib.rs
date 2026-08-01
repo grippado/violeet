@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 
 pub mod claude_code;
 pub mod tail;
+pub mod title;
 pub mod watch;
 
 pub use claude_code::ClaudeCodeReader;
@@ -64,6 +65,14 @@ pub enum TranscriptEvent {
     /// The context window was compacted. Carries the daemon's best evidence
     /// that occupancy fell, straight from the file rather than inferred.
     Compaction(Compaction),
+    /// The title Claude Code generated for this session.
+    ///
+    /// Measured across twelve recent transcripts: it lands on **line 12**, one
+    /// exchange in, and every one of those files carried exactly **one**
+    /// distinct value for the whole session — it does not churn. It is written
+    /// in the language the conversation is in. This is a real name, produced by
+    /// the agent for exactly this purpose, and it costs aiterm nothing to read.
+    AiTitle { text: String, at: Option<String> },
     /// A line we parsed but do not model. Kept so callers can count activity
     /// without this crate having to know every `type` Claude Code emits.
     Other { kind: String, at: Option<String> },
@@ -77,6 +86,7 @@ impl TranscriptEvent {
             Self::ToolUse(t) => t.at.as_deref(),
             Self::ToolResult { at, .. } => at.as_deref(),
             Self::Compaction(c) => c.at.as_deref(),
+            Self::AiTitle { at, .. } => at.as_deref(),
             Self::Other { at, .. } => at.as_deref(),
         }
     }
@@ -183,10 +193,29 @@ pub struct Compaction {
 /// last-write-wins from one turn, cost is a sum over turns.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Telemetry {
-    /// Monotonic. For cost.
+    /// Monotonic. Fresh input only — the part of the prompt that was neither
+    /// read from nor written to the cache.
+    ///
+    /// **On its own this is not what the session cost.** Measured across four
+    /// real transcripts, it is between 628 and 58 565 tokens while the prompt
+    /// side actually consumed 121–267 *million*: a factor of 3 607x to
+    /// 214 723x. Reported alone it produced a card reading `in ~170` for a
+    /// session holding 187k in its window, which is what exposed the bug.
     pub cumulative_input_tokens: Option<u64>,
     /// Monotonic. For cost.
     pub cumulative_output_tokens: Option<u64>,
+    /// Monotonic. Prompt tokens served from the cache.
+    ///
+    /// Kept apart from `cumulative_input_tokens` rather than summed into it,
+    /// for two reasons. It is priced differently — a tenth of base input — so
+    /// one merged number cannot be turned into money by anyone. And it
+    /// dominates the sum so completely (99.5% in the measured sessions) that
+    /// merging would hide fresh input entirely, which is the same failure as
+    /// today's, only mirrored.
+    pub cumulative_cache_read_tokens: Option<u64>,
+    /// Monotonic. Prompt tokens written into the cache, priced *above* base
+    /// input. Separate for the same reason.
+    pub cumulative_cache_creation_tokens: Option<u64>,
 
     /// Current occupancy. Falls on compaction. NOT a running total.
     pub context_window_used_tokens: Option<u64>,
@@ -212,6 +241,10 @@ pub struct Telemetry {
     /// a human, blocked on the network, or simply slow is not knowable here.
     /// The pending-HITL signal comes from the daemon's hook (ADR-004).
     pub in_flight_tool: Option<String>,
+
+    /// The title Claude Code generated for this session, if it has generated
+    /// one yet. See [`TranscriptEvent::AiTitle`].
+    pub ai_title: Option<String>,
 
     pub turn_count: u64,
     pub last_event_at: Option<String>,
@@ -271,11 +304,23 @@ impl Telemetry {
                 if !already_counted {
                     add_into(&mut self.cumulative_input_tokens, turn.usage.input_tokens);
                     add_into(&mut self.cumulative_output_tokens, turn.usage.output_tokens);
+                    add_into(
+                        &mut self.cumulative_cache_read_tokens,
+                        turn.usage.cache_read_input_tokens,
+                    );
+                    add_into(
+                        &mut self.cumulative_cache_creation_tokens,
+                        turn.usage.cache_creation_input_tokens,
+                    );
                 }
             }
 
             TranscriptEvent::UserTurn { .. } => {
                 self.turn_count += 1;
+            }
+
+            TranscriptEvent::AiTitle { text, .. } => {
+                self.ai_title = Some(text.clone());
             }
 
             TranscriptEvent::ToolUse(tool) => {

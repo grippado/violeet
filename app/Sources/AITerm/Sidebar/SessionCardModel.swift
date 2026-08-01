@@ -28,6 +28,8 @@ struct SessionCard: Identifiable, Equatable {
     var title: String?
     var model: String?
     var state: String?
+    /// `cwd` | `prompt` | `ai_title` | `user`. Who named this session.
+    var titleSource: String?
     var gitBranch: String?
     var lastAction: String?
     var lastEventAt: String?
@@ -42,6 +44,11 @@ struct SessionCard: Identifiable, Equatable {
     var contextSizeTokens: Int?
     var cumulativeInputTokens: Int?
     var cumulativeOutputTokens: Int?
+    /// Prompt tokens served from, and written into, the cache. Separate from
+    /// the input counter because they are priced differently — see
+    /// `SessionUpdated`.
+    var cumulativeCacheReadTokens: Int?
+    var cumulativeCacheCreationTokens: Int?
     /// See `SessionUpdated.cumulativeTokensPartial`.
     var cumulativeTokensPartial: Bool?
 
@@ -79,6 +86,7 @@ struct SessionCard: Identifiable, Equatable {
         title = patch.title.applied(to: title)
         model = patch.model.applied(to: model)
         cwd = patch.cwd.applied(to: cwd)
+        titleSource = patch.titleSource.applied(to: titleSource)
         gitBranch = patch.gitBranch.applied(to: gitBranch)
         lastAction = patch.lastAction.applied(to: lastAction)
         lastEventAt = patch.lastEventAt.applied(to: lastEventAt)
@@ -90,6 +98,9 @@ struct SessionCard: Identifiable, Equatable {
         contextSizeTokens = patch.contextWindowSizeTokens.applied(to: contextSizeTokens)
         cumulativeInputTokens = patch.cumulativeInputTokens.applied(to: cumulativeInputTokens)
         cumulativeOutputTokens = patch.cumulativeOutputTokens.applied(to: cumulativeOutputTokens)
+        cumulativeCacheReadTokens = patch.cumulativeCacheReadTokens.applied(to: cumulativeCacheReadTokens)
+        cumulativeCacheCreationTokens =
+            patch.cumulativeCacheCreationTokens.applied(to: cumulativeCacheCreationTokens)
         cumulativeTokensPartial = patch.cumulativeTokensPartial.applied(to: cumulativeTokensPartial)
         fiveHourLimitUsedPercent = patch.fiveHourLimitUsedPercent.applied(to: fiveHourLimitUsedPercent)
         fiveHourLimitResetsAt = patch.fiveHourLimitResetsAt.applied(to: fiveHourLimitResetsAt)
@@ -101,12 +112,84 @@ struct SessionCard: Identifiable, Equatable {
 // MARK: - Presentation
 
 extension SessionCard {
-    /// The headline. The cwd for now; automatic naming is the next task.
-    var displayTitle: String {
+    /// The headline, before the window makes it unique.
+    ///
+    /// The daemon names a session from its first prompt within a second of it
+    /// starting, and upgrades that to Claude Code's own `ai-title` one exchange
+    /// later. The working directory's last component is what is left when
+    /// neither has arrived — for a session that has not been prompted yet, or
+    /// one whose transcript we cannot read.
+    ///
+    /// Use `AppState.displayTitle(for:)` to render: two sessions can carry the
+    /// same name, and telling them apart is the window's job, not the card's.
+    var baseTitle: String {
         if let title, !title.isEmpty { return title }
         guard let cwd, !cwd.isEmpty else { return "unknown" }
         let name = (cwd as NSString).lastPathComponent
         return name.isEmpty ? cwd : name
+    }
+
+    /// The titles to render for `cards`, made unique among themselves.
+    ///
+    /// Two sessions genuinely can be called the same thing — two checkouts of
+    /// one repository, or the same task started twice — and a sidebar with two
+    /// identical rows is one you cannot act on: the whole point of the name is
+    /// to pick the right card. A colliding pair is qualified with what
+    /// distinguishes it, which is usually the parent directory.
+    ///
+    /// Done here rather than in the daemon deliberately. The daemon holds the
+    /// session's real name; adding a qualifier there would mean rewriting the
+    /// title of a session the user never touched, emitting a rename nobody
+    /// asked for, and persisting a name that is only correct for as long as the
+    /// other session happens to exist.
+    ///
+    /// A free function over the cards rather than a method on `AppState`
+    /// because it depends on nothing else — which is also what makes it
+    /// testable without standing up a main-actor view model.
+    static func uniqueTitles(for cards: some Collection<SessionCard>) -> [String: String] {
+        var byTitle: [String: [SessionCard]] = [:]
+        for card in cards {
+            byTitle[card.baseTitle, default: []].append(card)
+        }
+
+        var titles: [String: String] = [:]
+        for (title, colliding) in byTitle {
+            guard colliding.count > 1 else { continue }
+
+            // The parent directory only helps if it actually separates them.
+            // Two sessions in the *same* checkout collide on the parent too,
+            // and `aiterm · personal` twice is the problem this is here to
+            // solve, wearing a longer name. When it does not separate, the
+            // whole group falls to session ids — all of it, so the qualifiers
+            // stay of one kind and the rows read as a set.
+            let parents = colliding.map(\.parentDirectory)
+            let separates = Set(parents.compactMap { $0 }).count == colliding.count
+
+            for card in colliding {
+                let qualifier = separates ? (card.parentDirectory ?? card.shortID) : card.shortID
+                titles[card.sessionID] = "\(title) · \(qualifier)"
+            }
+        }
+        return titles
+    }
+
+    /// The directory containing `cwd`, when there is one worth naming.
+    ///
+    /// `personal/aiterm` against `isaac/aiterm` is the collision that actually
+    /// happens, and the parent is what a person would say out loud to tell the
+    /// two apart. `nil` when there is no cwd, or when the parent repeats the
+    /// title and so distinguishes nothing.
+    var parentDirectory: String? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        let parent = ((cwd as NSString).deletingLastPathComponent as NSString).lastPathComponent
+        guard !parent.isEmpty, parent != baseTitle else { return nil }
+        return parent
+    }
+
+    /// The last resort. It identifies without describing, which is why it is
+    /// last.
+    var shortID: String {
+        String(sessionID.prefix(4))
     }
 
     /// The working directory, with `$HOME` abbreviated to `~`.

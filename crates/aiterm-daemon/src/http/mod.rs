@@ -255,6 +255,17 @@ async fn hook_event(
     }
     let outcome = hub.observe_hook(obs, now);
 
+    // Name the session from what the user just typed. This runs on the hook
+    // rather than off the transcript because it has to be on screen before the
+    // first reply is: the transcript route is hundreds of milliseconds later,
+    // and a card that is nameless for the length of a turn is a card you cannot
+    // find. Claude Code's own `ai-title` upgrades it one exchange in.
+    if event == HookEvent::UserPromptSubmit {
+        if let Some(prompt) = payload.prompt.as_deref() {
+            hub.offer_title_from_prompt(&session_id, prompt, now);
+        }
+    }
+
     if let Some(rejected) = &outcome.rejected_transition {
         eprintln!("aiterm-daemon: session {session_id}: ignoring {rejected}");
     }

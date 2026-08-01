@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 aiterm-proto = { path = "../aiterm-proto" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 serde.workspace = true
 
 # `preserve_order` is not a preference here, it is the whole "never corrupt the

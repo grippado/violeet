@@ -7,6 +7,8 @@
 //! - `aiterm install-hooks` — write the aiterm hook entries into the user's
 //!   Claude Code settings
 //! - `aiterm uninstall-hooks` — take them back out, leaving other hooks intact
+//! - `aiterm sessions` — what the daemon thinks is running, for debugging
+//!   without opening the app
 //!
 //! # No argument-parsing crate
 //!
@@ -21,6 +23,7 @@ mod doctor;
 mod hooks;
 mod install_record;
 mod probe;
+mod sessions;
 mod settings;
 mod statusline;
 mod ui;
@@ -79,6 +82,13 @@ fn main() -> ExitCode {
 
     match command.as_deref() {
         Some("doctor") => run_doctor(&style),
+        Some("sessions") => match sessions::run(&style) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{} {e}", style.red("×"));
+                ExitCode::FAILURE
+            }
+        },
         Some("install-hooks") => run_install(&options, &style),
         Some("uninstall-hooks") => run_uninstall(&options, &style),
         Some("install-statusline") => run_install_statusline(&options, &style),

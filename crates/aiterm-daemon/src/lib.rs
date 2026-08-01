@@ -33,6 +33,7 @@ pub mod http;
 pub mod origin;
 pub mod registry;
 pub mod socket;
+pub mod titles;
 pub mod transcript;
 
 /// The protocol's Rust projection, re-exported from `aiterm-proto`.

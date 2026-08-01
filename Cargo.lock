@@ -7,6 +7,7 @@ name = "aiterm-cli"
 version = "0.0.0"
 dependencies = [
  "aiterm-proto",
+ "chrono",
  "serde",
  "serde_json",
 ]

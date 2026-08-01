@@ -44,7 +44,7 @@ use std::time::{Duration, Instant};
 use aiterm_transcript::{watch_shared, ClaudeCodeReader, Telemetry, TranscriptSession, WatchHandle};
 use chrono::Utc;
 
-use crate::registry::SessionState;
+use crate::registry::{SessionState, TitleSource};
 use crate::socket::Hub;
 use crate::wire::{self, DaemonToApp, SessionUpdated};
 
@@ -127,6 +127,7 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
     // Claude Code creates it, and the watch is on the parent directory
     // precisely so the creation is seen.
     let already_exists = path.exists();
+
     let reader = Box::new(ClaudeCodeReader::new());
     let (handle, updates, shared) = match watch_shared(path, reader, already_exists) {
         Ok(pair) => pair,
@@ -228,6 +229,51 @@ pub fn finalize(hub: &Hub, session_id: &str) {
 /// Everything here is a **sparse patch**: a field that did not change is not
 /// sent, and `None` is never rendered as zero. The registry holds the previous
 /// values, so the comparison is against what the app was last told.
+/// Name a session from the head of its own transcript.
+///
+/// This is the answer to the adopted-session case: one already running when
+/// aiterm first saw it has no first `UserPromptSubmit` to hook, but its first
+/// prompt is still in the file, and so, usually, is Claude Code's `ai-title` —
+/// both within the first dozen lines. Reading them gives an adopted session the
+/// same name, by the same rules, as one aiterm started, which is what keeps the
+/// sidebar to a single register instead of two kinds of card.
+///
+/// The alternative considered was leaving it on the working directory until a
+/// summary turned up. Rejected on measurement: `summary` appears in **none** of
+/// the transcripts on this machine, so "until" would have meant "never" — and
+/// the outside sessions, the ones you most need to identify because you cannot
+/// see their window, would have been the only ones permanently named after a
+/// folder.
+///
+/// Called once, when the session is first registered, and not from `follow`:
+/// the watch is started before the registry knows the session exists, and a
+/// title offered to a session that is not there yet goes nowhere.
+///
+/// The stronger source wins on its own: `offer_title` refuses a downgrade, so
+/// offering the derived name first and the `ai-title` second cannot leave the
+/// weaker one in place — and a session the human already renamed keeps its name
+/// through both.
+pub fn name_from_head(hub: &Hub, session_id: &str, path: &Path) {
+    let scan = match aiterm_transcript::claude_code::scan_head(path) {
+        Ok(scan) if !scan.is_empty() => scan,
+        // Unreadable, or a file with nothing nameable in its first lines. The
+        // session keeps whatever it has; there is no worse name to fall to.
+        _ => return,
+    };
+    let now = Utc::now();
+
+    if let Some(derived) = scan
+        .first_prompt
+        .as_deref()
+        .and_then(aiterm_transcript::title::from_prompt)
+    {
+        hub.offer_title(session_id, &derived, TitleSource::Prompt, now);
+    }
+    if let Some(ai) = &scan.ai_title {
+        hub.offer_title(session_id, ai, TitleSource::AiTitle, now);
+    }
+}
+
 fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
     let now = Utc::now();
 
@@ -267,6 +313,8 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
         }
         copy_token_field!(cumulative_input_tokens);
         copy_token_field!(cumulative_output_tokens);
+        copy_token_field!(cumulative_cache_read_tokens);
+        copy_token_field!(cumulative_cache_creation_tokens);
 
         // Travels with the pair it qualifies. Sent whenever it changes,
         // including from unknown to `false`, because "this total is complete"
@@ -278,6 +326,21 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
         }
         copy_token_field!(context_window_used_tokens);
         copy_token_field!(context_window_size_tokens);
+
+        // --- the name -------------------------------------------------------
+        //
+        // Claude Code's own title for the session, which outranks anything
+        // derived from the first prompt and is taken as soon as it appears.
+        // `offer_title` enforces the ordering, so a human rename still wins.
+        if let Some(title) = &telemetry.ai_title {
+            if session.offer_title(title, TitleSource::AiTitle, now) {
+                patch.title = Some(session.title.clone());
+                patch.title_source = Some(
+                    session.title_source.as_wire().map(str::to_string),
+                );
+                anything = true;
+            }
+        }
 
         // --- model ---------------------------------------------------------
         if let Some(model) = &telemetry.model {

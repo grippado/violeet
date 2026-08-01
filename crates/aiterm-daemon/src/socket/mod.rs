@@ -28,7 +28,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::hitl::{HitlRegistry, HitlRequest, NewHitl, Resolution};
-use crate::registry::{HookObservation, HookOutcome, Registry, Session};
+use crate::registry::{HookObservation, HookOutcome, Registry, Session, TitleSource};
 use crate::wire::{
     self, AppToDaemon, DaemonToApp, HitlOrigin, HitlPending, HitlResolved, Rejected,
     SessionRegistered, SessionUpdated, PROTOCOL_VERSION,
@@ -55,6 +55,9 @@ pub struct Hub {
     /// Transcripts currently being followed. A third lock, and like the other
     /// two it is never held while either of them is.
     transcripts: crate::transcript::SharedSupervisor,
+    /// Session names that outlive this process. A fourth lock, held only for
+    /// the length of a get or a put and never while another one is.
+    titles: Arc<Mutex<crate::titles::TitleStore>>,
     tx: broadcast::Sender<String>,
 }
 
@@ -73,6 +76,7 @@ impl Hub {
             transcripts: Arc::new(Mutex::new(
                 crate::transcript::TranscriptSupervisor::new(),
             )),
+            titles: Arc::new(Mutex::new(crate::titles::TitleStore::load())),
             tx,
         }
     }
@@ -170,6 +174,82 @@ impl Hub {
         })
     }
 
+    /// Name a session from the prompt the user just submitted.
+    ///
+    /// Runs on the hook rather than off the transcript so the card has a name
+    /// before the first reply lands. `offer_title` decides whether it takes:
+    /// a session Claude Code has already titled, or one the human renamed,
+    /// keeps what it has.
+    pub fn offer_title_from_prompt(
+        &self,
+        session_id: &str,
+        prompt: &str,
+        now: chrono::DateTime<Utc>,
+    ) {
+        let Some(title) = aiterm_transcript::title::from_prompt(prompt) else {
+            return;
+        };
+        self.offer_title(session_id, &title, TitleSource::Prompt, now);
+    }
+
+    /// Offer a title from `source`, publish it if it took, and persist it.
+    ///
+    /// The single funnel every naming path goes through, so precedence and
+    /// persistence cannot disagree with each other.
+    pub fn offer_title(
+        &self,
+        session_id: &str,
+        title: &str,
+        source: TitleSource,
+        now: chrono::DateTime<Utc>,
+    ) -> bool {
+        let msg = {
+            let mut registry = self.lock();
+            let Some(session) = registry.session_mut(session_id) else {
+                return false;
+            };
+            if !session.offer_title(title, source, now) {
+                return false;
+            }
+            let mut patch = SessionUpdated::new(session_id, now);
+            patch.title = Some(session.title.clone());
+            patch.title_source = Some(session.title_source.as_wire().map(str::to_string));
+            patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
+            DaemonToApp::SessionUpdated(patch)
+        };
+
+        // Outside the registry lock, and before the broadcast: a title the app
+        // has been shown must already be one a restart would restore.
+        self.remember_title(session_id, title, source);
+        self.broadcast(&msg);
+        true
+    }
+
+    fn remember_title(&self, session_id: &str, title: &str, source: TitleSource) {
+        match self.titles.lock() {
+            Ok(mut g) => g.put(session_id, title, source),
+            Err(p) => p.into_inner().put(session_id, title, source),
+        }
+    }
+
+    /// The name this session had before the daemon last stopped, if any.
+    fn remembered_title(&self, session_id: &str) -> Option<(String, TitleSource)> {
+        let guard = match self.titles.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        guard
+            .get(session_id)
+            .map(|(t, s)| (t.to_string(), s))
+    }
+
+    fn forget_title(&self, session_id: &str) {
+        match self.titles.lock() {
+            Ok(mut g) => g.forget(session_id),
+            Err(p) => p.into_inner().forget(session_id),
+        }
+    }
+
     /// True when we already know where this session is running.
     ///
     /// The HTTP layer asks before spending anything on resolving it, which is
@@ -248,6 +328,28 @@ impl Hub {
         }
         if let Some(msg) = origin_msg {
             self.broadcast(&msg);
+        }
+
+        // A session we have seen before under a different daemon. Restored as
+        // a patch after `session_registered` rather than folded into it,
+        // because the two locks are never held at once and the registry lock is
+        // already gone by here. The app sees the card appear and be named in
+        // the same batch of messages.
+        if outcome.created {
+            if let Some((title, source)) = self.remembered_title(&outcome.session_id) {
+                self.offer_title(&outcome.session_id, &title, source, now);
+            }
+            // And, for a session that was already running when we met it, the
+            // name sitting in the head of its own transcript. Once, here, at
+            // registration — `follow` runs before the registry knows the
+            // session exists, so a title offered from there goes nowhere.
+            let path = self
+                .lock()
+                .session(&outcome.session_id)
+                .and_then(|s| s.transcript_path.clone());
+            if let Some(path) = path {
+                crate::transcript::name_from_head(self, &outcome.session_id, &path);
+            }
         }
         outcome
     }
@@ -390,6 +492,19 @@ impl Hub {
         }
         if session.tokens.cumulative_output_tokens.is_some() {
             patch.cumulative_output_tokens = Some(session.tokens.cumulative_output_tokens);
+        }
+        if session.tokens.cumulative_cache_read_tokens.is_some() {
+            patch.cumulative_cache_read_tokens = Some(session.tokens.cumulative_cache_read_tokens);
+        }
+        if session.tokens.cumulative_cache_creation_tokens.is_some() {
+            patch.cumulative_cache_creation_tokens =
+                Some(session.tokens.cumulative_cache_creation_tokens);
+        }
+        // The title rides in `session_registered`; its provenance does not, and
+        // a client that reconnects would otherwise never learn whether the name
+        // it is showing is the human's or a generated one.
+        if let Some(source) = session.title_source.as_wire() {
+            patch.title_source = Some(Some(source.to_string()));
         }
         if session.tokens.context_window_used_tokens.is_some() {
             patch.context_window_used_tokens = Some(session.tokens.context_window_used_tokens);
@@ -535,6 +650,10 @@ impl Hub {
         }
 
         self.forget_transcript(session_id);
+        // The name outlives the daemon, not the session. Keeping it would grow
+        // the file for the life of the machine and would re-title a session id
+        // that will never be reused.
+        self.forget_title(session_id);
         self.broadcast(&DaemonToApp::SessionEnded(wire::SessionEnded {
             v: PROTOCOL_VERSION,
             ts: wire::timestamp(now),
@@ -637,20 +756,12 @@ impl Hub {
             }
 
             AppToDaemon::RenameSession { session_id, title } => {
-                let patch = {
-                    let mut registry = self.lock();
-                    registry.rename_session(&session_id, &title, now).then(|| {
-                        let mut patch = SessionUpdated::new(&session_id, now);
-                        patch.title = Some(Some(title));
-                        patch
-                    })
-                };
-
-                // An unknown session produces nothing. The protocol has no error
-                // reply and inventing one would be a unilateral extension.
-                if let Some(patch) = patch {
-                    self.broadcast(&DaemonToApp::SessionUpdated(patch));
-                }
+                // Through the same funnel as every other naming path, so a
+                // manual rename is persisted and outranks what follows it.
+                // An unknown session produces nothing: the protocol has no
+                // error reply and inventing one would be a unilateral
+                // extension.
+                self.offer_title(&session_id, &title, TitleSource::User, now);
                 Vec::new()
             }
 

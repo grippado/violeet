@@ -97,10 +97,22 @@ struct SessionUpdated: Equatable {
     let title: Patch<String>
     let model: Patch<String>
     let cwd: Patch<String>
+    /// Where `title` came from: `cwd` | `prompt` | `ai_title` | `user`.
+    let titleSource: Patch<String>
     let contextWindowUsedTokens: Patch<Int>
     let contextWindowSizeTokens: Patch<Int>
     let cumulativeInputTokens: Patch<Int>
     let cumulativeOutputTokens: Patch<Int>
+    /// Prompt tokens served from, and written into, the cache.
+    ///
+    /// Separate from `cumulativeInputTokens` on the wire because the three are
+    /// priced differently. Measured on real transcripts, cache reads are 99.5%
+    /// of everything the prompt side consumed — `cumulativeInputTokens` alone
+    /// was 628 against 121 million — so a card that shows only the first is not
+    /// rounding, it is reporting a different quantity than the one the reader
+    /// thinks they are looking at.
+    let cumulativeCacheReadTokens: Patch<Int>
+    let cumulativeCacheCreationTokens: Patch<Int>
     /// `true` when the cumulative pair counts only part of the session.
     ///
     /// The daemon starts reading a transcript from its end, so a session
@@ -127,6 +139,64 @@ struct SessionUpdated: Equatable {
     let lastAction: Patch<String>
     let lastEventAt: Patch<String>
     let tabID: Patch<String>
+
+    /// Everything absent unless named.
+    ///
+    /// Written out rather than left to the memberwise default because absent is
+    /// the protocol's own default — a field nobody mentions is one the daemon
+    /// said nothing about. It also means adding a field to the protocol does
+    /// not break every construction site: the test suite went several rounds
+    /// without compiling for exactly that reason, and a suite that cannot build
+    /// is a suite that is not testing anything.
+    init(
+        sessionID: String,
+        state: String? = nil,
+        title: Patch<String> = .unchanged,
+        model: Patch<String> = .unchanged,
+        cwd: Patch<String> = .unchanged,
+        titleSource: Patch<String> = .unchanged,
+        contextWindowUsedTokens: Patch<Int> = .unchanged,
+        contextWindowSizeTokens: Patch<Int> = .unchanged,
+        cumulativeInputTokens: Patch<Int> = .unchanged,
+        cumulativeOutputTokens: Patch<Int> = .unchanged,
+        cumulativeCacheReadTokens: Patch<Int> = .unchanged,
+        cumulativeCacheCreationTokens: Patch<Int> = .unchanged,
+        cumulativeTokensPartial: Patch<Bool> = .unchanged,
+        fiveHourLimitUsedPercent: Patch<Double> = .unchanged,
+        fiveHourLimitResetsAt: Patch<String> = .unchanged,
+        sevenDayLimitUsedPercent: Patch<Double> = .unchanged,
+        sevenDayLimitResetsAt: Patch<String> = .unchanged,
+        originApp: Patch<String> = .unchanged,
+        originTTY: Patch<String> = .unchanged,
+        gitBranch: Patch<String> = .unchanged,
+        lastAction: Patch<String> = .unchanged,
+        lastEventAt: Patch<String> = .unchanged,
+        tabID: Patch<String> = .unchanged
+    ) {
+        self.sessionID = sessionID
+        self.state = state
+        self.title = title
+        self.model = model
+        self.cwd = cwd
+        self.titleSource = titleSource
+        self.contextWindowUsedTokens = contextWindowUsedTokens
+        self.contextWindowSizeTokens = contextWindowSizeTokens
+        self.cumulativeInputTokens = cumulativeInputTokens
+        self.cumulativeOutputTokens = cumulativeOutputTokens
+        self.cumulativeCacheReadTokens = cumulativeCacheReadTokens
+        self.cumulativeCacheCreationTokens = cumulativeCacheCreationTokens
+        self.cumulativeTokensPartial = cumulativeTokensPartial
+        self.fiveHourLimitUsedPercent = fiveHourLimitUsedPercent
+        self.fiveHourLimitResetsAt = fiveHourLimitResetsAt
+        self.sevenDayLimitUsedPercent = sevenDayLimitUsedPercent
+        self.sevenDayLimitResetsAt = sevenDayLimitResetsAt
+        self.originApp = originApp
+        self.originTTY = originTTY
+        self.gitBranch = gitBranch
+        self.lastAction = lastAction
+        self.lastEventAt = lastEventAt
+        self.tabID = tabID
+    }
 }
 
 struct HitlPending: Equatable {
@@ -253,10 +323,13 @@ enum DaemonMessageDecoder {
                 title: Patch.decode(from: container, key: DynamicKey("title")),
                 model: Patch.decode(from: container, key: DynamicKey("model")),
                 cwd: Patch.decode(from: container, key: DynamicKey("cwd")),
+                titleSource: Patch.decode(from: container, key: DynamicKey("title_source")),
                 contextWindowUsedTokens: Patch.decode(from: container, key: DynamicKey("context_window_used_tokens")),
                 contextWindowSizeTokens: Patch.decode(from: container, key: DynamicKey("context_window_size_tokens")),
                 cumulativeInputTokens: Patch.decode(from: container, key: DynamicKey("cumulative_input_tokens")),
                 cumulativeOutputTokens: Patch.decode(from: container, key: DynamicKey("cumulative_output_tokens")),
+                cumulativeCacheReadTokens: Patch.decode(from: container, key: DynamicKey("cumulative_cache_read_tokens")),
+                cumulativeCacheCreationTokens: Patch.decode(from: container, key: DynamicKey("cumulative_cache_creation_tokens")),
                 cumulativeTokensPartial: Patch.decode(from: container, key: DynamicKey("cumulative_tokens_partial")),
                 fiveHourLimitUsedPercent: Patch.decode(from: container, key: DynamicKey("five_hour_limit_used_percent")),
                 fiveHourLimitResetsAt: Patch.decode(from: container, key: DynamicKey("five_hour_limit_resets_at")),

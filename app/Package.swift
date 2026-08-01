@@ -1,4 +1,9 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
+//
+// 6.0 and not 5.9 because swift-testing is only wired into the test target from
+// 6.0 onward. Under 5.9 `import Testing` does not resolve outside a full Xcode
+// install, and the suite sat in the repository uncompiled and unrun for several
+// rounds — which is worse than having no tests, because it reads as coverage.
 //
 // This manifest is what builds the app and what runs its tests. The shipped
 // .app bundle is assembled by `scripts/package.sh` from the binary this
@@ -11,7 +16,21 @@ let package = Package(
     name: "AITerm",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.15.0")
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.15.0"),
+        // swift-testing as a package, not from the toolchain.
+        //
+        // Measured on this machine: Command Line Tools ships only
+        // `libTestingMacros.dylib`, not the `Testing` library itself, so
+        // `import Testing` does not resolve without a full Xcode install. The
+        // suite sat in this repository uncompiled and unrun for several rounds
+        // because of it, which is worse than having no tests — it reads as
+        // coverage.
+        //
+        // Taking it as a package rather than requiring Xcode keeps `swift test`
+        // runnable in CI, which builds per-arch precisely to avoid needing the
+        // full toolchain. It warns that Swift 6 bundles its own; that warning is
+        // for people who have Xcode.
+        .package(url: "https://github.com/swiftlang/swift-testing", from: "0.10.0")
     ],
     targets: [
         .executableTarget(
@@ -27,7 +46,14 @@ let package = Package(
                 "Terminal/README.md",
                 "Sidebar/README.md",
                 "Daemon/README.md",
-            ]
+            ],
+            // The manifest is 6.0 only so the test target gets swift-testing.
+            // The *language mode* stays 5: Swift 6 strict concurrency rejects
+            // three places in `DaemonClient` where `self` crosses onto the
+            // reader thread, and migrating that is real work with real risk to
+            // the reconnect path — not something to smuggle in alongside a
+            // change whose whole point was to make the tests runnable.
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         // Tests the wire projection, and for now only the wire projection.
         //
@@ -38,8 +64,12 @@ let package = Package(
         // bug from the outside and points nowhere near this file.
         .testTarget(
             name: "AITermTests",
-            dependencies: ["AITerm"],
-            path: "Tests/AITermTests"
+            dependencies: [
+                "AITerm",
+                .product(name: "Testing", package: "swift-testing"),
+            ],
+            path: "Tests/AITermTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
 )

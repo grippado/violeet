@@ -96,6 +96,13 @@ pub struct SessionUpdated {
     pub model: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Patch<String>,
+    /// Where `title` came from: `cwd` | `prompt` | `ai_title` | `user`.
+    ///
+    /// Travels with the title so the app can say who named the session, and so
+    /// a client can tell a name the human chose from one aiterm derived. The
+    /// precedence itself is enforced in the daemon, not here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_source: Patch<String>,
 
     // The four token quantities. Two pairs that measure different things: the
     // first is how full the window is *now* and falls on compaction, the second
@@ -110,6 +117,16 @@ pub struct SessionUpdated {
     pub cumulative_input_tokens: Patch<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cumulative_output_tokens: Patch<u64>,
+    /// Prompt tokens served from, and written into, the cache.
+    ///
+    /// Separate fields rather than folded into `cumulative_input_tokens`,
+    /// because the three are priced differently and because cache reads
+    /// dominate the sum — measured 99.5% of prompt-side tokens — so a merged
+    /// number would hide fresh input completely. See the note below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_cache_read_tokens: Patch<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_cache_creation_tokens: Patch<u64>,
     /// `true` when the cumulative pair counts only part of the session.
     ///
     /// The daemon reads a transcript from its end, so a session already running
@@ -180,6 +197,9 @@ impl SessionUpdated {
             && self.context_window_size_tokens.is_none()
             && self.cumulative_input_tokens.is_none()
             && self.cumulative_output_tokens.is_none()
+            && self.cumulative_cache_read_tokens.is_none()
+            && self.cumulative_cache_creation_tokens.is_none()
+            && self.title_source.is_none()
             && self.cumulative_tokens_partial.is_none()
             && self.five_hour_limit_used_percent.is_none()
             && self.five_hour_limit_resets_at.is_none()

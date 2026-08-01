@@ -43,6 +43,7 @@ struct SidebarView: View {
                     ForEach(state.localSessions) { card in
                         SessionCardView(
                             card: card,
+                            title: state.displayTitle(for: card),
                             isSelected: card.tabID != nil && card.tabID == state.selectedTabID,
                             compactionThreshold: preferences.compactionThreshold
                         )
@@ -120,6 +121,7 @@ struct SidebarView: View {
                             ForEach(state.elsewhereSessions) { card in
                                 SessionCardView(
                                     card: card,
+                                    title: state.displayTitle(for: card),
                                     isSelected: false,
                                     compactionThreshold: preferences.compactionThreshold
                                 )

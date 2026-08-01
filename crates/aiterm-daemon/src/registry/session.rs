@@ -101,6 +101,12 @@ impl TabBinding {
 pub struct TokenTelemetry {
     pub cumulative_input_tokens: Option<u64>,
     pub cumulative_output_tokens: Option<u64>,
+    /// Prompt tokens served from, and written into, the cache. Kept apart from
+    /// the input counter because they are priced differently and because cache
+    /// reads dominate the sum so heavily that merging would hide fresh input
+    /// entirely. See `aiterm_transcript::Telemetry`.
+    pub cumulative_cache_read_tokens: Option<u64>,
+    pub cumulative_cache_creation_tokens: Option<u64>,
     pub context_window_used_tokens: Option<u64>,
     pub context_window_size_tokens: Option<u64>,
     /// Whether the cumulative pair covers the whole session.
@@ -119,6 +125,8 @@ impl TokenTelemetry {
         Self {
             cumulative_input_tokens: None,
             cumulative_output_tokens: None,
+            cumulative_cache_read_tokens: None,
+            cumulative_cache_creation_tokens: None,
             context_window_used_tokens: None,
             context_window_size_tokens: None,
             cumulative_tokens_partial: None,
@@ -129,6 +137,8 @@ impl TokenTelemetry {
     pub fn is_fully_unknown(&self) -> bool {
         self.cumulative_input_tokens.is_none()
             && self.cumulative_output_tokens.is_none()
+            && self.cumulative_cache_read_tokens.is_none()
+            && self.cumulative_cache_creation_tokens.is_none()
             && self.context_window_used_tokens.is_none()
             && self.context_window_size_tokens.is_none()
             && self.cumulative_tokens_partial.is_none()
@@ -174,11 +184,45 @@ impl RateLimits {
 pub enum TitleSource {
     /// Nothing has named it yet.
     None,
-    /// Derived by the daemon. TODO(track-C): naming logic is a future task;
-    /// today nothing writes this.
-    Derived,
-    /// Set by the human through `rename_session`. Sticky.
+    /// The path's last component. The weakest name there is: it describes the
+    /// folder, not the work, and two checkouts of one repository share it.
+    Cwd,
+    /// Derived from the session's first prompt. Available within a second of
+    /// the session starting, which is why it is the name rather than a
+    /// placeholder.
+    Prompt,
+    /// Claude Code's own `ai-title`. Measured landing one exchange in, and
+    /// stable for the life of the session. Better than anything aiterm can
+    /// derive, so it upgrades over `Prompt`.
+    AiTitle,
+    /// Set by the human through `rename_session`. Sticky: nothing outranks it.
     User,
+}
+
+impl TitleSource {
+    /// How much authority a source has. A title is only ever replaced by one
+    /// that outranks it, which is what stops a name from flickering between
+    /// two derivations — and what makes the manual rename final.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Cwd => 1,
+            Self::Prompt => 2,
+            Self::AiTitle => 3,
+            Self::User => 4,
+        }
+    }
+
+    /// The wire spelling.
+    pub fn as_wire(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Cwd => Some("cwd"),
+            Self::Prompt => Some("prompt"),
+            Self::AiTitle => Some("ai_title"),
+            Self::User => Some("user"),
+        }
+    }
 }
 
 /// One agent session.
@@ -285,16 +329,34 @@ impl Session {
         self.touch(now);
     }
 
-    /// Set a machine-derived title, unless the human already named it.
-    /// Returns whether it took.
-    pub fn set_derived_title(&mut self, title: impl Into<String>, now: DateTime<Utc>) -> bool {
-        if self.title_source == TitleSource::User {
+    /// Offer a title from `source`. It takes only if `source` outranks
+    /// whatever named the session already, and only if the text is different.
+    ///
+    /// Returns whether the title changed, so the caller knows whether there is
+    /// anything to publish.
+    ///
+    /// The rank check is what makes the sequence stable: the first prompt names
+    /// the session immediately, Claude Code's own `ai-title` upgrades it once,
+    /// and a human rename ends the conversation. Nothing downgrades, so a
+    /// re-read of the transcript cannot walk a good name backwards.
+    pub fn offer_title(
+        &mut self,
+        title: impl Into<String>,
+        source: TitleSource,
+        now: DateTime<Utc>,
+    ) -> bool {
+        if source.rank() < self.title_source.rank() {
             return false;
         }
-        self.title = Some(title.into());
-        self.title_source = TitleSource::Derived;
+        let title = title.into();
+        if title.trim().is_empty() {
+            return false;
+        }
+        let changed = self.title.as_deref() != Some(title.as_str());
+        self.title = Some(title);
+        self.title_source = source;
         self.touch(now);
-        true
+        changed
     }
 
     /// Whether this session has gone quiet for longer than `ttl`.
@@ -403,11 +465,47 @@ mod tests {
     #[test]
     fn user_title_is_sticky_against_derived_naming() {
         let mut s = session();
-        assert!(s.set_derived_title("auto name", t(1)));
+        assert!(s.offer_title("auto name", TitleSource::Prompt, t(1)));
         s.set_user_title("mine", t(2));
-        assert!(!s.set_derived_title("auto again", t(3)));
+        assert!(!s.offer_title("auto again", TitleSource::Prompt, t(3)));
+        assert!(
+            !s.offer_title("Claude's own title", TitleSource::AiTitle, t(4)),
+            "not even the best generated name overwrites one the human chose"
+        );
         assert_eq!(s.title.as_deref(), Some("mine"));
         assert_eq!(s.title_source, TitleSource::User);
+    }
+
+    /// The intended sequence: the first prompt names it in under a second, and
+    /// Claude Code's own title upgrades it one exchange later.
+    #[test]
+    fn the_ai_title_upgrades_a_prompt_derived_name_but_not_the_reverse() {
+        let mut s = session();
+        assert!(s.offer_title("Arrumar o parser", TitleSource::Prompt, t(1)));
+        assert!(s.offer_title("Corrigir o parser de transcripts", TitleSource::AiTitle, t(2)));
+        assert_eq!(s.title.as_deref(), Some("Corrigir o parser de transcripts"));
+
+        assert!(
+            !s.offer_title("Arrumar o parser", TitleSource::Prompt, t(3)),
+            "a re-read of the first prompt must not walk the name backwards"
+        );
+        assert_eq!(s.title.as_deref(), Some("Corrigir o parser de transcripts"));
+    }
+
+    /// Re-offering the same title at the same rank is not a change, so nothing
+    /// is published — a transcript re-read must not churn the sidebar.
+    #[test]
+    fn re_offering_the_same_title_reports_no_change() {
+        let mut s = session();
+        assert!(s.offer_title("mesmo nome", TitleSource::AiTitle, t(1)));
+        assert!(!s.offer_title("mesmo nome", TitleSource::AiTitle, t(2)));
+    }
+
+    #[test]
+    fn an_empty_title_is_never_accepted() {
+        let mut s = session();
+        assert!(!s.offer_title("   ", TitleSource::AiTitle, t(1)));
+        assert_eq!(s.title, None);
     }
 
     #[test]

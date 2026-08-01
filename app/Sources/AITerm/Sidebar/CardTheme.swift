@@ -74,6 +74,11 @@ enum CardTheme {
     /// `IN ↑` green, `OUT ↓` red, exactly as aitop renders them.
     static let tokenIn = Color(hex: 0x5FD75F)
     static let tokenOut = Color(hex: 0xFF8787)
+    /// `CACHE ⟳`. Blue rather than a shade of the green: cache reads are not a
+    /// larger `in`, they are a differently-priced quantity, and giving them a
+    /// family resemblance to input would invite exactly the addition the four
+    /// separate fields exist to prevent.
+    static let tokenCache = Color(hex: 0x6FB7FF)
 
     // MARK: Attention
 

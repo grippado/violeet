@@ -40,6 +40,9 @@ import SwiftUI
 
 struct SessionCardView: View {
     let card: SessionCard
+    /// The name as the window decided to show it — qualified when another
+    /// session carries the same one. See `AppState.displayTitle(for:)`.
+    let title: String
     let isSelected: Bool
     /// Fraction of the window at which compaction is near. From preferences so
     /// the card does not decide policy.
@@ -175,7 +178,7 @@ struct SessionCardView: View {
                     .foregroundStyle(.tertiary)
                     .help("Running outside aiterm — there is no tab to switch to.")
             }
-            Text(card.displayTitle)
+            Text(title)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -387,6 +390,21 @@ struct SessionCardView: View {
                 Fmt.tokens(card.cumulativeInputTokens, partial: partial),
                 CardTheme.tokenIn
             )
+            // The number that was missing, and the one that dominates. Measured
+            // on real sessions, cache reads are 99.5% of everything the prompt
+            // side consumed: `in` alone read 628 where the true figure was 121
+            // million. A card without this one is not showing a rounded total,
+            // it is showing a different quantity.
+            //
+            // Cache *creation* is on the wire but not on the card — it is
+            // priced differently, so it cannot be added to this, and it ran
+            // under 1% of cache reads in every session measured. It is in the
+            // tooltip, where a number that small belongs.
+            tokenStat(
+                "cache", "⟳",
+                Fmt.tokens(card.cumulativeCacheReadTokens, partial: partial),
+                CardTheme.tokenCache
+            )
             tokenStat(
                 "out", "↓",
                 Fmt.tokens(card.cumulativeOutputTokens, partial: partial),
@@ -394,10 +412,27 @@ struct SessionCardView: View {
             )
         }
         .fixedSize()
-        // The tilde is easy to miss and the tooltip is where "why" lives.
-        .help(partial
-            ? "Tokens this session has spent, counted from when aiterm started watching it — not from its start, so the real total is higher."
-            : "Tokens this session has spent, in total.")
+        // The tilde is easy to miss and the tooltip is where "why" lives. The
+        // breakdown is here too, because the three are priced differently and
+        // adding them together is the mistake this card is arranged to avoid.
+        .help(tokenHelp(partial: partial))
+    }
+
+    private func tokenHelp(partial: Bool) -> String {
+        let scope = partial
+            ? "Counted from when aiterm started watching this session, not from its start — the real totals are higher."
+            : "Totals for this session."
+        return """
+        \(scope)
+
+        in — fresh prompt tokens, neither read from nor written to the cache
+        cache — prompt tokens served from the cache, priced well below fresh input
+        out — tokens the model produced
+        cache written — \(Fmt.tokens(card.cumulativeCacheCreationTokens, partial: partial))
+
+        The three are priced differently, which is why they are three numbers \
+        and not one.
+        """
     }
 
     private func tokenStat(_ label: String, _ arrow: String, _ value: String, _ color: Color) -> some View {
@@ -427,7 +462,7 @@ struct SessionCardView: View {
     /// The visual signal for `waiting for you` is colour and motion, and both
     /// are invisible to a screen reader — so the state is spoken first.
     private var accessibilityLabel: String {
-        var parts = [card.lifecycle.label, card.displayTitle]
+        var parts = [card.lifecycle.label, title]
         parts.append("agent \(card.agent)")
         parts.append("model \(card.model ?? "unknown")")
         if let fraction = card.contextFraction {

@@ -159,21 +159,12 @@ struct CardPatchTests {
         card.gitBranch = "main"
         card.cumulativeOutputTokens = 1_000
 
+        // Only the fields this patch actually carries. Everything else
+        // defaults to absent, which is what the daemon would have sent.
         card.apply(SessionUpdated(
             sessionID: "s1",
-            state: nil,
-            title: .unchanged,
-            model: .unchanged,          // absent: keep opus
-            cwd: .unchanged,
             contextWindowUsedTokens: .value(500),
-            contextWindowSizeTokens: .unchanged,
-            cumulativeInputTokens: .unchanged,
-            cumulativeOutputTokens: .unchanged,
-            cumulativeTokensPartial: .unchanged,
-            gitBranch: .unknown,        // explicit null: branch became unknown
-            lastAction: .unchanged,
-            lastEventAt: .unchanged,
-            tabID: .unchanged
+            gitBranch: .unknown        // explicit null: branch became unknown
         ))
 
         #expect(card.model == "claude-opus-5", "an absent field must not be read as null")
@@ -188,15 +179,7 @@ struct CardPatchTests {
         var card = SessionCard(registered: registered())
         card.cumulativeTokensPartial = true
 
-        card.apply(SessionUpdated(
-            sessionID: "s1", state: nil, title: .unchanged, model: .unchanged,
-            cwd: .unchanged, contextWindowUsedTokens: .unchanged,
-            contextWindowSizeTokens: .unchanged, cumulativeInputTokens: .unchanged,
-            cumulativeOutputTokens: .unchanged,
-            cumulativeTokensPartial: .value(false),
-            gitBranch: .unchanged, lastAction: .unchanged,
-            lastEventAt: .unchanged, tabID: .unchanged
-        ))
+        card.apply(SessionUpdated(sessionID: "s1", cumulativeTokensPartial: .value(false)))
 
         #expect(card.cumulativeTokensPartial == false)
         #expect(Fmt.tokens(8_000, partial: card.cumulativeTokensPartial == true) == "8.0k")
@@ -227,15 +210,50 @@ struct CardThemeTests {
     @Test func the_card_carries_the_whole_path_and_not_only_its_last_component() {
         var card = SessionCard(registered: registered())
         card.cwd = "\(NSHomeDirectory())/www/personal/aiterm"
-        #expect(card.displayTitle == "aiterm")
+        #expect(card.baseTitle == "aiterm")
         #expect(card.pathLabel == "~/www/personal/aiterm")
     }
 
     /// A session whose cwd never arrived shows no path rather than an empty
     /// folder row.
     @Test func no_working_directory_means_no_path_row() {
-        let card = SessionCard(registered: registered())
+        let card = SessionCard(registered: registered(cwd: nil))
         #expect(card.pathLabel == nil)
+    }
+
+    /// Two checkouts of one repository produce the same name, and a sidebar
+    /// with two identical rows is one you cannot act on.
+    @Test func a_colliding_name_is_qualified_by_its_parent_directory() {
+        var a = SessionCard(registered: registered(id: "a"))
+        a.cwd = "/Users/x/www/personal/aiterm"
+        var b = SessionCard(registered: registered(id: "b"))
+        b.cwd = "/Users/x/work/isaac/aiterm"
+
+        let titles = SessionCard.uniqueTitles(for: [a, b])
+        #expect(titles["a"] == "aiterm · personal")
+        #expect(titles["b"] == "aiterm · isaac")
+    }
+
+    /// A name nothing else shares is left exactly as it is — the qualifier is
+    /// for collisions, not decoration.
+    @Test func a_unique_name_is_never_qualified() {
+        var only = SessionCard(registered: registered(id: "a"))
+        only.cwd = "/Users/x/www/personal/aiterm"
+        #expect(SessionCard.uniqueTitles(for: [only]).isEmpty)
+        #expect(only.baseTitle == "aiterm")
+    }
+
+    /// Same name, same parent: there is nothing descriptive left, so the id is
+    /// what tells them apart.
+    @Test func an_identical_path_falls_back_to_the_session_id() {
+        var a = SessionCard(registered: registered(id: "aaaa1111"))
+        a.cwd = "/Users/x/www/personal/aiterm"
+        var b = SessionCard(registered: registered(id: "bbbb2222"))
+        b.cwd = "/Users/x/www/personal/aiterm"
+
+        let titles = SessionCard.uniqueTitles(for: [a, b])
+        #expect(titles["aaaa1111"] == "aiterm · aaaa")
+        #expect(titles["bbbb2222"] == "aiterm · bbbb")
     }
 
     /// Two agents in the same terminal are indistinguishable by application
