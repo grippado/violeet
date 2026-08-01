@@ -19,6 +19,7 @@
 
 mod doctor;
 mod hooks;
+mod install_record;
 mod probe;
 mod settings;
 mod statusline;
@@ -234,6 +235,7 @@ fn run_install(options: &Options, style: &Style) -> ExitCode {
         }
     }
 
+    install_record::set(Some(true), None);
     println!(
         "{} installed {} hook events against port {port}",
         style.green("✓"),
@@ -507,6 +509,7 @@ fn run_uninstall(options: &Options, style: &Style) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    install_record::set(Some(false), None);
     println!("{} removed {removed} aiterm hook entr(ies)", style.green("✓"));
     ExitCode::SUCCESS
 }
@@ -647,6 +650,7 @@ fn run_install_statusline(options: &Options, style: &Style) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    install_record::set(None, Some(true));
     println!("{} status line wrapped against port {port}", style.green("✓"));
     println!(
         "  {}",
@@ -756,6 +760,7 @@ fn run_uninstall_statusline(options: &Options, style: &Style) -> ExitCode {
     let _ = std::fs::remove_file(&wrapper);
     let _ = std::fs::remove_file(&parked);
 
+    install_record::set(None, Some(false));
     println!("{} your status line is back as it was", style.green("✓"));
     ExitCode::SUCCESS
 }

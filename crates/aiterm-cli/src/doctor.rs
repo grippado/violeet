@@ -169,6 +169,11 @@ pub fn run(cwd: &Path) -> Vec<Check> {
         None => checks.push(Check::fail("settings file").detail("HOME is not set")),
     }
 
+    // --- the third silent one ---------------------------------------------
+    if let Some(Ok(s)) = &settings {
+        checks.push(overwritten_check(s));
+    }
+
     // --- a second silent one ----------------------------------------------
     if let Some(Ok(h)) = &health {
         checks.push(unknown_model_check(&h.unknown_window_models));
@@ -311,6 +316,63 @@ fn describe_group(group: &serde_json::Value) -> String {
         .unwrap_or_default();
 
     format!("matcher {matcher}: {}", commands.join(" ; "))
+}
+
+/// Did something rewrite the settings file after we wrote it?
+///
+/// This exists because a settings file is not only ours. Dotfile managers
+/// commonly *generate* `~/.claude/settings.json` from a base plus an overlay —
+/// on this machine, `merge-settings.sh` does exactly that with
+/// `jq -s '.[0] * .[1]' base overlay > settings.json`, which reconstructs the
+/// file from scratch. Anything `aiterm install-hooks` wrote is gone the next
+/// time that runs.
+///
+/// The failure is invisible: the user runs their dotfile installer for an
+/// unrelated reason, the hooks disappear, and the sidebar simply stops filling
+/// in. Nothing errors. They would reasonably conclude aiterm is broken.
+///
+/// So install records what it wrote, and this compares. It cannot name the
+/// culprit — that would mean knowing about every dotfile manager — but "you
+/// installed these and they are no longer there" is enough to point at one.
+fn overwritten_check(settings: &Settings) -> Check {
+    let Some(record) = crate::install_record::read() else {
+        return Check::ok("installed configuration is still in place")
+            .detail("nothing installed by aiterm yet, so nothing to lose");
+    };
+
+    let mut missing: Vec<&str> = Vec::new();
+    if record.hooks {
+        let absent: Vec<&str> = hooks::all_events()
+            .into_iter()
+            .filter(|e| {
+                !settings
+                    .groups_for(e)
+                    .iter()
+                    .any(|g| hooks::group_is_ours(g))
+            })
+            .collect();
+        if !absent.is_empty() {
+            missing.push("hooks");
+        }
+    }
+    if record.statusline && !crate::statusline::is_ours(settings) {
+        missing.push("the status line wrapper");
+    }
+
+    if missing.is_empty() {
+        return Check::ok("installed configuration is still in place");
+    }
+
+    Check::fail("installed configuration is still in place")
+        .detail(format!(
+            "aiterm installed {} and {} no longer there. Something rewrote \
+             ~/.claude/settings.json — a dotfile manager that generates it from \
+             a template will do this silently, and the only symptom is a sidebar \
+             that stops filling in.",
+            missing.join(" and "),
+            if missing.len() == 1 { "it is" } else { "they are" }
+        ))
+        .fix("re-run the install, and write it into your dotfile manager's source file rather than the generated one so it survives the next sync")
 }
 
 /// A session whose context window size we do not know.
