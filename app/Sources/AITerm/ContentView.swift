@@ -209,7 +209,17 @@ private struct WindowConfigurator: NSViewRepresentable {
     private func apply(to window: NSWindow) {
         let translucent = settings.window.isTranslucent
         window.isOpaque = !translucent
-        window.backgroundColor = translucent ? .clear : .windowBackgroundColor
+        // The terminal's own background, not `.windowBackgroundColor`.
+        //
+        // A character grid is a whole number of cells wide, so the last cell
+        // almost never lands exactly on the edge and a few points are left
+        // over. Whatever the window is filled with shows through there — and
+        // the system colour is a light grey that reads as a seam between the
+        // terminal and whatever is beside it. Invisible while that edge was the
+        // window's own; obvious the moment a sidebar was put next to it.
+        window.backgroundColor = translucent
+            ? .clear
+            : settings.appearance.background.nsColor
     }
 }
 

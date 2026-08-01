@@ -198,8 +198,36 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         view.layer?.backgroundColor = background.cgColor
         view.layer?.isOpaque = !settings.window.isTranslucent
 
+        releaseScrollerGutter()
         syncWindowSize()
         view.needsDisplay = true
+    }
+
+    /// Give the terminal back the strip SwiftTerm reserves for its scroller.
+    ///
+    /// `reservedScrollerWidth` is `NSScroller.scrollerWidth(…)` unless the
+    /// scroller is hidden, and it is subtracted from the width the grid is laid
+    /// out in — so roughly fifteen points down the right-hand edge belong to a
+    /// scrollbar that, in `.overlay` style, is not drawn. That was invisible
+    /// while it sat against the window's edge. Put a sidebar beside it and it
+    /// reads as a seam between the two, which is what it was reported as.
+    ///
+    /// Hiding the scroller is what releases the width; there is no public
+    /// setter, so the subview is found by type. Nothing is lost with it: the
+    /// scroller is auto-hiding, the wheel and the trackpad scroll through a
+    /// different path entirely, and fifteen points of dead column beside a
+    /// panel is worse than a scrollbar that was never on screen.
+    private func releaseScrollerGutter() {
+        for subview in view.subviews {
+            guard let scroller = subview as? NSScroller, !scroller.isHidden else { continue }
+            scroller.isHidden = true
+            // The reserved width is read during layout, so the grid only widens
+            // on the next pass. SwiftUI lays this view out constantly; asking
+            // explicitly means the change lands on this frame rather than the
+            // next time something else happens to move.
+            view.needsLayout = true
+            view.layoutSubtreeIfNeeded()
+        }
     }
 
     /// Re-assert the current grid size on the PTY.
