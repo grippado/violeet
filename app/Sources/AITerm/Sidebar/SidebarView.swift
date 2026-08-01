@@ -24,6 +24,10 @@ struct SidebarView: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject var preferences: Preferences
 
+    /// How tall the expanded outside-sessions panel may grow.
+    private static let elsewhereMaxHeight: CGFloat = 320
+    @State private var elsewhereContentHeight: CGFloat = 0
+
     /// Tabs that no session has claimed.
     private var unclaimedTabs: [TabModel] {
         let claimed = Set(state.sessions.values.compactMap(\.tabID))
@@ -53,29 +57,6 @@ struct SidebarView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
-                    if !state.elsewhereSessions.isEmpty {
-                        ElsewhereHeader(
-                            count: state.elsewhereSessions.count,
-                            waiting: state.hasWaitingElsewhere,
-                            apps: state.elsewhereApps,
-                            expanded: preferences.elsewhereExpanded
-                        ) {
-                            preferences.elsewhereExpanded.toggle()
-                        }
-
-                        if preferences.elsewhereExpanded {
-                            ForEach(state.elsewhereSessions) { card in
-                                SessionCardView(
-                                    card: card,
-                                    isSelected: false,
-                                    compactionThreshold: preferences.compactionThreshold
-                                )
-                                .help("Running outside aiterm. Shown because it is a real session, but there is no tab here to reveal.")
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                            }
-                        }
-                    }
-
                     if !unclaimedTabs.isEmpty {
                         sectionLabel("tabs")
                         ForEach(unclaimedTabs) { tab in
@@ -94,15 +75,76 @@ struct SidebarView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 6)
                 .animation(.easeInOut(duration: 0.22), value: state.orderedSessions.map(\.id))
-                .animation(.easeInOut(duration: 0.18), value: preferences.elsewhereExpanded)
             }
+            .frame(maxHeight: .infinity)
 
-            Spacer(minLength: 0)
+            elsewhereSection
+
             Divider()
             DaemonStatusLine(status: state.daemon.status, sessionCount: state.sessions.count)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.ultraThinMaterial)
+    }
+
+    /// Sessions running outside aiterm, pinned to the foot of the sidebar.
+    ///
+    /// Anchored at the bottom rather than mixed into the list above, because
+    /// the two halves answer different questions: above is what you opened here
+    /// and can switch to, below is what else is running on the machine. A
+    /// collapsed section is a single bar sitting on the status line, and
+    /// expanding it grows upward — the same way a bottom panel behaves in an
+    /// editor sidebar.
+    ///
+    /// It never takes more than `elsewhereMaxHeight`, and scrolls inside that,
+    /// so a machine with many outside sessions cannot squeeze the tabs you
+    /// actually opened off the screen.
+    @ViewBuilder
+    private var elsewhereSection: some View {
+        if !state.elsewhereSessions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Divider()
+                ElsewhereHeader(
+                    count: state.elsewhereSessions.count,
+                    waiting: state.hasWaitingElsewhere,
+                    apps: state.elsewhereApps,
+                    expanded: preferences.elsewhereExpanded
+                ) {
+                    preferences.elsewhereExpanded.toggle()
+                }
+                .padding(.horizontal, 7)
+
+                if preferences.elsewhereExpanded {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 5) {
+                            ForEach(state.elsewhereSessions) { card in
+                                SessionCardView(
+                                    card: card,
+                                    isSelected: false,
+                                    compactionThreshold: preferences.compactionThreshold
+                                )
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            }
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.bottom, 6)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: ElsewhereHeightKey.self,
+                                    value: proxy.size.height
+                                )
+                            }
+                        )
+                    }
+                    // Sized to its content up to the cap, so one card does not
+                    // reserve the room of five.
+                    .frame(height: min(elsewhereContentHeight, Self.elsewhereMaxHeight))
+                    .onPreferenceChange(ElsewhereHeightKey.self) { elsewhereContentHeight = $0 }
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: preferences.elsewhereExpanded)
+        }
     }
 
     /// Bring the tab a card belongs to to the front.
@@ -163,6 +205,14 @@ struct SidebarView: View {
 /// A collapsed section that could hide a blocked agent would defeat the one
 /// thing this product exists to do, so the header itself carries the signal
 /// upward.
+/// Measures the outside-sessions list so the panel can size to it.
+private struct ElsewhereHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private struct ElsewhereHeader: View {
     let count: Int
     let waiting: Bool
@@ -203,9 +253,10 @@ private struct ElsewhereHeader: View {
                 Spacer(minLength: 0)
             }
             .foregroundStyle(waiting ? CardTheme.attention : Color.secondary.opacity(0.75))
+            // Symmetric: this is a bar sitting on the status line now, not a
+            // heading introducing the list below it.
             .padding(.horizontal, 2)
-            .padding(.top, 8)
-            .padding(.bottom, 2)
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

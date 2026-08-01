@@ -109,8 +109,14 @@ extension SessionCard {
         return name.isEmpty ? cwd : name
     }
 
-    /// The full path, for the tooltip — the row shows only the leaf.
-    var subtitle: String? {
+    /// The working directory, with `$HOME` abbreviated to `~`.
+    ///
+    /// Shown on the card in its own right, not only as a tooltip. The title is
+    /// the path's last component, and a last component is not an address: two
+    /// checkouts of the same repository produce the same title, and a folder
+    /// named after an application produces a title that reads as that
+    /// application.
+    var pathLabel: String? {
         guard let cwd, !cwd.isEmpty else { return nil }
         return ProcessDirectory.abbreviated(cwd)
     }

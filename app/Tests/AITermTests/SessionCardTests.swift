@@ -221,6 +221,23 @@ struct CardThemeTests {
         #expect(CardTheme.toolLabel(for: "some-future-agent") == "some-future-agent")
     }
 
+    /// The title is only the path's last component, so the path itself has to
+    /// be on the card: `aiterm` as a title is indistinguishable from the
+    /// application of the same name, which is exactly how it was misread.
+    @Test func the_card_carries_the_whole_path_and_not_only_its_last_component() {
+        var card = SessionCard(registered: registered())
+        card.cwd = "\(NSHomeDirectory())/www/personal/aiterm"
+        #expect(card.displayTitle == "aiterm")
+        #expect(card.pathLabel == "~/www/personal/aiterm")
+    }
+
+    /// A session whose cwd never arrived shows no path rather than an empty
+    /// folder row.
+    @Test func no_working_directory_means_no_path_row() {
+        let card = SessionCard(registered: registered())
+        #expect(card.pathLabel == nil)
+    }
+
     /// Two agents in the same terminal are indistinguishable by application
     /// alone, and that is the common case — so the tty rides along whenever
     /// there is one.

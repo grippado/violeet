@@ -93,34 +93,53 @@ struct SessionCardView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
             titleRow
+            // The working directory, on every card. The title is only its last
+            // component, which is not an address: two checkouts of the same
+            // repository, or a folder whose name matches an app's, are
+            // indistinguishable without this line.
+            if let path = card.pathLabel {
+                pathRow(path)
+            }
             // Only for a card with no tab, and only when the origin was
-            // actually resolved. A session in a tab already answers "where",
-            // and repeating it for every card would cost a line on every card
-            // to tell the user something they can see.
+            // actually resolved. A session in a tab already answers "where" —
+            // the tab is the answer.
             if card.tabID == nil, let origin = card.originLabel {
                 originRow(origin)
             }
             pillRow
             contextRow
-            // Only when the account actually reports limits. An API-key user
-            // has none, and an empty row would read as "0% used".
-            if card.fiveHourLimitUsedPercent != nil || card.sevenDayLimitUsedPercent != nil {
-                limitsRow
-            }
-            tokenRow
+            usageRow
             if let action = card.lastAction, !action.isEmpty {
-                // The path is the informative end, so the middle is what goes.
+                // Wrapped over up to three lines rather than truncated to one.
+                // A single line of `Bash git commit -m "$(cat <<'EOF'…` says
+                // that a command ran and nothing about which one; three lines
+                // is where the tool call usually becomes readable.
                 Text(action)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                     .help(action)
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The working directory.
+    ///
+    /// Truncated at the **head**: the tail is the part that identifies the
+    /// session, and a path that loses its end loses everything.
+    private func pathRow(_ path: String) -> some View {
+        Label(path, systemImage: "folder")
+            .labelStyle(.titleAndIcon)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.head)
+            .help(card.cwd ?? path)
     }
 
     /// Where this session lives, for one aiterm did not start.
@@ -146,15 +165,15 @@ struct SessionCardView: View {
             // cannot be revealed in a tab, and clicking it does nothing. The
             // badge is what stops that from being a card that silently ignores
             // you.
-            if card.tabID == nil {
+            //
+            // Only when the origin row is not there to say it: with a resolved
+            // origin the card already carries a terminal icon naming the
+            // application, and two glyphs for one fact read as two facts.
+            if card.tabID == nil, card.originLabel == nil {
                 Image(systemName: "arrow.up.forward.app")
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
-                    .help(
-                        card.originLabel.map {
-                            "Running in \($0), outside aiterm — there is no tab to switch to."
-                        } ?? "Running outside aiterm — there is no tab to switch to."
-                    )
+                    .help("Running outside aiterm — there is no tab to switch to.")
             }
             Text(card.displayTitle)
                 .font(.system(size: 13, weight: .semibold))
@@ -289,13 +308,45 @@ struct SessionCardView: View {
     /// are labelled: shipped unlabelled, the context bar was read as this one.
     /// These come from the status line payload, which is the only place Claude
     /// Code reports them.
-    private var limitsRow: some View {
-        HStack(spacing: 10) {
-            limitStat("5h", card.fiveHourLimitUsedPercent, card.fiveHourLimitResetsAt)
-            limitStat("7d", card.sevenDayLimitUsedPercent, card.sevenDayLimitResetsAt)
-            Spacer(minLength: 0)
+    /// The limits and the token totals, on one line when they fit.
+    ///
+    /// Vertical room is the sidebar's scarcest resource, and these two groups
+    /// are both small and both read left-to-right, so they share a line. They
+    /// fall back to two lines rather than truncating: a clipped `~14k` is worse
+    /// than a second row, and how narrow the sidebar gets is the user's choice,
+    /// not something the card can assume.
+    private var usageRow: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                limits
+                tokens
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                if hasLimits {
+                    HStack(spacing: 10) { limits; Spacer(minLength: 0) }
+                }
+                HStack(spacing: 10) { tokens; Spacer(minLength: 0) }
+            }
         }
-        .help("Your Claude subscription's usage limits, and when each window resets.")
+    }
+
+    /// True only when the account actually reports limits. An API-key user has
+    /// none, and an empty pair would read as "0% used".
+    private var hasLimits: Bool {
+        card.fiveHourLimitUsedPercent != nil || card.sevenDayLimitUsedPercent != nil
+    }
+
+    @ViewBuilder
+    private var limits: some View {
+        if hasLimits {
+            HStack(spacing: 10) {
+                limitStat("5h", card.fiveHourLimitUsedPercent, card.fiveHourLimitResetsAt)
+                limitStat("7d", card.sevenDayLimitUsedPercent, card.sevenDayLimitResetsAt)
+            }
+            .fixedSize()
+            .help("Your Claude subscription's usage limits, and when each window resets.")
+        }
     }
 
     private func limitStat(_ label: String, _ percent: Double?, _ resetsAt: String?) -> some View {
@@ -325,7 +376,7 @@ struct SessionCardView: View {
     /// Arrows alone were not enough: `↑ 12  ↓ 1.7k` reads as two anonymous
     /// numbers, and the first thing asked about it was what it meant. The word
     /// costs four points of width and removes the question.
-    private var tokenRow: some View {
+    private var tokens: some View {
         let partial = card.cumulativeTokensPartial == true
         return HStack(spacing: 10) {
             tokenStat(
@@ -338,8 +389,8 @@ struct SessionCardView: View {
                 Fmt.tokens(card.cumulativeOutputTokens, partial: partial),
                 CardTheme.tokenOut
             )
-            Spacer(minLength: 0)
         }
+        .fixedSize()
         // The tilde is easy to miss and the tooltip is where "why" lives.
         .help(partial
             ? "Tokens this session has spent, counted from when aiterm started watching it — not from its start, so the real total is higher."
