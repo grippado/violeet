@@ -315,18 +315,21 @@ struct SessionCardView: View {
     /// fall back to two lines rather than truncating: a clipped `~14k` is worse
     /// than a second row, and how narrow the sidebar gets is the user's choice,
     /// not something the card can assume.
+    /// Tokens on the left, limits pushed to the right edge. What this session
+    /// spent belongs with the rest of the session's own numbers; the account's
+    /// limits are a different subject and sit apart from them.
     private var usageRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {
-                limits
                 tokens
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                limits
             }
             VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 10) { tokens; Spacer(minLength: 0) }
                 if hasLimits {
                     HStack(spacing: 10) { limits; Spacer(minLength: 0) }
                 }
-                HStack(spacing: 10) { tokens; Spacer(minLength: 0) }
             }
         }
     }
