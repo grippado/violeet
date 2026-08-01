@@ -8,7 +8,16 @@ status: accepted
 # ADR-002: The daemon is a separate process behind a Unix socket, not an FFI library
 
 > **Status:** accepted (2026-07-30)
-> **Context:** the Rust intelligence (session registry, hook endpoint, transcript reading) has to reach a SwiftUI app. Either it is linked into the app as a static library over FFI, or it runs as its own process and talks over IPC.
+> **Context:** the Rust intelligence (session registry, hook endpoint, transcript reading) has to reach a SwiftUI app.
+>
+> **Wording updated 2026-08-01.** The decision stands unchanged; the prose below
+> described transcript parsing as happening *inside the daemon process*, which
+> was true when this was written and is now imprecise. Parsing lives in the
+> `aiterm-transcript` crate, which the daemon depends on and links in. The
+> crate is a pure library — no socket, no registry, no runtime — but it does run
+> in the daemon's address space, so every blast-radius argument below applies to
+> it exactly as written. A panic in transcript parsing still must not be able to
+> kill live PTYs, and it still cannot, because the PTYs are in another process. Either it is linked into the app as a static library over FFI, or it runs as its own process and talks over IPC.
 
 ## Context and problem
 
@@ -87,7 +96,9 @@ by `type`.**
 
 **Static Rust library over FFI.** Simplest to ship, best latency. Rejected on
 the crash-blast-radius argument alone: a panic in transcript parsing must not be
-able to kill live PTYs. The hook-endpoint lifetime argument is independent and
+able to kill live PTYs. That argument is about *which process* the parsing runs
+in, not which crate it lives in — `aiterm-transcript` runs inside the daemon,
+which is the whole point of the daemon being separate from the app. The hook-endpoint lifetime argument is independent and
 also fatal.
 
 **Daemon in Swift, no Rust at all.** One language, one process, trivially

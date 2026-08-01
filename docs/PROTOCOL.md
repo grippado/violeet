@@ -1,7 +1,25 @@
 # aiterm socket protocol
 
-Status: **v1 — normative.** Revised 2026-07-31, between waves, absorbing the
-seven change requests in [`tracks/A-protocol-request.md`](tracks/A-protocol-request.md).
+> **Wire version `v` = 1. Document revision 2.**
+>
+> These are two different numbers and conflating them has now cost time twice:
+> two separate tracks were briefed that the protocol was "v2, frozen", read
+> "Status: v1" at the top of this file, and had to stop and work out which was
+> authoritative.
+>
+> - **`v` is what goes on the wire.** It is `1`. Every message carries `"v": 1`,
+>   `aiterm_proto::PROTOCOL_VERSION` is `1`, and a receiver drops anything
+>   greater. Changing it is a code change in three projections, not an edit
+>   here.
+> - **The revision number counts edits to this document.** Revision 2 is the
+>   2026-07-31 pass that absorbed the seven change requests in
+>   [`tracks/A-protocol-request.md`](tracks/A-protocol-request.md). It did not
+>   bump `v`, for the reason recorded below.
+>
+> When a brief says "the protocol is at v2", it means this document's second
+> revision. The wire is still `1`.
+
+Status: **normative.**
 
 This document is the contract between `aiterm-daemon` and its clients. The Rust
 types in `crates/aiterm-proto` and the Swift decoder in

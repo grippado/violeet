@@ -160,10 +160,16 @@ pub struct Session {
     state: SessionState,
     pub title: Option<String>,
     pub title_source: TitleSource,
+    /// The model the session is running on, read from its transcript. `None`
+    /// until a turn has been observed — never a default model name.
+    pub model: Option<String>,
+    /// The last tool the agent invoked, with a short summary of its input.
+    /// Also from the transcript.
+    pub last_action: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_event_at: DateTime<Utc>,
-    /// TODO(track-C): populated by the `aiterm-transcript` crate in Wave 2.
-    /// Every field stays `None` until then — not `0`.
+    /// Filled by `aiterm-transcript` via `crate::transcript`. Every field stays
+    /// `None` until a real reading arrives — never `0`.
     pub tokens: TokenTelemetry,
 }
 
@@ -185,6 +191,8 @@ impl Session {
             state: SessionState::Starting,
             title: None,
             title_source: TitleSource::None,
+            model: None,
+            last_action: None,
             created_at: now,
             last_event_at: now,
             tokens: TokenTelemetry::unknown(),

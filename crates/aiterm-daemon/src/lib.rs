@@ -15,10 +15,15 @@
 //! - [`socket`]   — the Unix socket server that speaks [`wire`] to clients.
 //! - [`http`]     — the loopback endpoint Claude Code's hooks POST to.
 //! - [`discovery`] — `~/.aiterm/daemon.json`, so clients need not guess a port.
+//! - [`transcript`] — follows session transcripts and publishes telemetry.
 //!
-//! Transcript reading and context math are deliberately *not* here: they live in
-//! the `aiterm-transcript` crate, which Track C owns. The daemon does not depend
-//! on it yet — that wiring lands in Wave 2 integration.
+//! Transcript **parsing** and context math are deliberately not here: they live
+//! in the `aiterm-transcript` crate, which knows nothing about sockets or the
+//! registry. [`transcript`] is only the wiring — when to publish, and what the
+//! numbers mean once the daemon's own knowledge is in the same room. That
+//! second part is the whole point: a tool in flight is `working` or
+//! `waiting_hitl` depending on whether this process is holding a permission
+//! request open, and only the daemon knows that.
 
 #![forbid(unsafe_code)]
 
@@ -27,6 +32,7 @@ pub mod hitl;
 pub mod http;
 pub mod registry;
 pub mod socket;
+pub mod transcript;
 
 /// The protocol's Rust projection, re-exported from `aiterm-proto`.
 ///

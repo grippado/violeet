@@ -39,6 +39,13 @@ pub enum HookEvent {
     PreCompact,
     SessionEnd,
     PermissionRequest,
+    /// The agent's working directory changed — a `cd`, typically.
+    ///
+    /// Added in wave 2. `aiterm install-hooks` had been installing this hook
+    /// since track C and the daemon was dropping it into `Unrecognized`, so the
+    /// cwd on a card went stale at the session's first `cd` and stayed stale.
+    /// It carries no matcher and fires on every change.
+    CwdChanged,
     /// Something this daemon does not know. Recorded as activity, nothing more.
     Unrecognized,
 }
@@ -56,6 +63,7 @@ impl HookEvent {
             "PreCompact" => Self::PreCompact,
             "SessionEnd" => Self::SessionEnd,
             "PermissionRequest" => Self::PermissionRequest,
+            "CwdChanged" => Self::CwdChanged,
             _ => Self::Unrecognized,
         }
     }
@@ -81,6 +89,10 @@ impl HookEvent {
             | Self::SubagentStop
             | Self::PreCompact => Some(SessionState::Working),
             Self::Notification | Self::Stop => Some(SessionState::Idle),
+            // A directory change says where the session is, not what it is
+            // doing. Mapping it to `Working` would make a `cd` in an idle
+            // terminal look like the agent woke up.
+            Self::CwdChanged => None,
             Self::PermissionRequest => Some(SessionState::WaitingHitl),
             Self::SessionEnd => Some(SessionState::Done),
             Self::Unrecognized => None,

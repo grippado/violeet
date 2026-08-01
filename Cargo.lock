@@ -16,6 +16,7 @@ name = "aiterm-daemon"
 version = "0.0.0"
 dependencies = [
  "aiterm-proto",
+ "aiterm-transcript",
  "axum",
  "chrono",
  "http-body-util",

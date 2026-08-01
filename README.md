@@ -7,7 +7,7 @@
 | Component | Language | Job |
 |---|---|---|
 | `aiterm-daemon` | Rust | Owns all intelligence: session registry, permission-request bookkeeping, HTTP endpoint for Claude Code hooks. Serves clients over a Unix socket. |
-| `aiterm-transcript` | Rust | JSONL transcript reading, token and context math. Not written yet. |
+| `aiterm-transcript` | Rust | JSONL transcript reading, token and context math. A pure library: it takes a path and returns typed events plus telemetry, and knows nothing about the socket or the registry. The daemon depends on it, not the other way round. |
 | `aiterm-app` | Swift / SwiftUI | Native macOS app. Terminal tabs via [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), sidebar in pure SwiftUI. A dumb client: renders and sends commands, computes nothing. |
 | `aiterm-cli` | Rust | `aiterm doctor`, `aiterm install-hooks`, `aiterm uninstall-hooks`. |
 | `aiterm-proto` | Rust | Serde types for the socket protocol, shared by daemon and CLI. |
@@ -16,14 +16,16 @@ The socket lives at `~/.aiterm/daemon.sock` and speaks JSON-lines — one object
 
 ## Status
 
-**The daemon works; nothing renders it yet.**
+**All four pieces exist and talk to each other.** Verified against a real Claude Code v2.1.220, not against mocks.
 
-- `aiterm-daemon` — session registry, Unix socket server, hook endpoint and HITL, end to end. 122 tests. You can run it, point Claude Code's hooks at it, and watch a permission request block and then resolve over the socket.
-- `aiterm-app` — a 19-line stub. This is the next piece of work.
-- `aiterm-transcript` — does not exist, so token and context readings are all `null` on the wire. Deliberately: nothing here invents a number it does not have.
-- `aiterm-cli` — `doctor` and `install-hooks` are not implemented, so hooks have to be installed by hand for now.
+- `aiterm-daemon` — session registry, Unix socket server, hook endpoint and HITL, plus transcript telemetry. Run it, point Claude Code's hooks at it, and watch a permission request block and then resolve over the socket.
+- `aiterm-app` — window, tabs and a working terminal via SwiftTerm, with the sidebar listing tabs. The session cards are the next piece of work.
+- `aiterm-transcript` — reads Claude Code JSONL incrementally and reports the four token numbers, the model and the last action. What it could *not* determine is written down as plainly as what it could: see [`docs/TRANSCRIPT_FORMAT.md`](docs/TRANSCRIPT_FORMAT.md) § 3.
+- `aiterm-cli` — `doctor`, `install-hooks` and `uninstall-hooks`.
 
-See [`docs/adr/`](docs/adr/) for the decisions that got us here, and [`docs/tracks/A.md`](docs/tracks/A.md) for what the daemon actually guarantees.
+Two numbers that look alike and are not: **window occupancy** falls when the context is compacted, **cumulative cost** only climbs. Adding the cumulative pair to estimate occupancy produces a plausible, wrong number, and the code says so at the point somebody would be tempted.
+
+See [`docs/adr/`](docs/adr/) for the decisions that got us here, and [`docs/tracks/`](docs/tracks/) for what each piece actually guarantees — including, in each log, what was measured versus inferred.
 
 ## Building
 

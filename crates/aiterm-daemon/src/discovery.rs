@@ -52,6 +52,12 @@ pub fn default_path() -> Option<PathBuf> {
 pub fn write(path: &Path, info: &DaemonInfo) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        // `create_dir_all` applies the process umask, which on a default macOS
+        // account yields 0755. That directory holds the control socket: a
+        // world-traversable path to it means any other account on the machine
+        // can reach the channel that resolves permission requests. The socket
+        // being 0600 does not help if the directory around it is not.
+        restrict(parent, 0o700)?;
     }
 
     let body = serde_json::to_string_pretty(info)
@@ -59,7 +65,27 @@ pub fn write(path: &Path, info: &DaemonInfo) -> io::Result<()> {
 
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, body)?;
+    // Tightened before the rename, so the file is never briefly world-readable
+    // under its final name. It carries the pid and the hook port — the two
+    // things needed to forge a hook (see ADR-005).
+    restrict(&tmp, 0o600)?;
     std::fs::rename(&tmp, path)
+}
+
+/// Set permissions, on Unix.
+///
+/// Applied unconditionally rather than only when they look wrong: reading first
+/// would be a check followed by a write, and the gap between them is exactly
+/// where a wrong mode survives.
+#[cfg(unix)]
+fn restrict(path: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn restrict(_path: &Path, _mode: u32) -> io::Result<()> {
+    Ok(())
 }
 
 /// Remove the file on a clean shutdown.

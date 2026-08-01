@@ -119,11 +119,27 @@ fn router(hub: Hub) -> Router {
 }
 
 async fn health(State(hub): State<Hub>) -> Response {
-    let sessions = hub
-        .registry()
-        .lock()
-        .map(|r| r.sessions().count())
-        .unwrap_or(0);
+    // Models whose context window size we could not resolve.
+    //
+    // Reported here so `aiterm doctor` can surface them. A model Anthropic
+    // ships tomorrow is not in the lookup table, which makes the window size
+    // `None`, which makes `compaction_imminent` `None` — and an alert that
+    // quietly stops firing is worse than one that never existed, because the
+    // user has learned to rely on it.
+    let (sessions, unknown_window_models) = match hub.registry().lock() {
+        Ok(r) => {
+            let count = r.sessions().count();
+            let mut models: Vec<String> = r
+                .sessions()
+                .filter(|s| s.tokens.context_window_size_tokens.is_none())
+                .filter_map(|s| s.model.clone())
+                .collect();
+            models.sort();
+            models.dedup();
+            (count, models)
+        }
+        Err(_) => (0, Vec::new()),
+    };
     let pending = hub.hitl().lock().map(|h| h.len()).unwrap_or(0);
 
     Json(serde_json::json!({
@@ -131,6 +147,7 @@ async fn health(State(hub): State<Hub>) -> Response {
         "protocol_version": crate::wire::PROTOCOL_VERSION,
         "sessions": sessions,
         "hitl_pending": pending,
+        "unknown_window_models": unknown_window_models,
     }))
     .into_response()
 }
@@ -195,6 +212,12 @@ async fn hook_event(
     }
 
     let obs = payload.observation(&session_id, tab_id_of(&headers), harness_of(&headers));
+    // Start following the transcript before recording the hook: the reader is
+    // idempotent per (session, path), so this is free once it is running, and
+    // doing it first means a session is never briefly known-but-unfollowed.
+    if let Some(path) = obs.transcript_path.clone() {
+        crate::transcript::follow(&hub, &session_id, &path);
+    }
     let outcome = hub.observe_hook(obs, now);
 
     if let Some(rejected) = &outcome.rejected_transition {
@@ -251,6 +274,9 @@ async fn permission_request(
     // Record the session first, so the app hears about it before it hears that
     // it is blocked.
     let obs = payload.observation(&session_id, tab_id.clone(), harness_of(&headers));
+    if let Some(path) = obs.transcript_path.clone() {
+        crate::transcript::follow(&hub, &session_id, &path);
+    }
     hub.observe_hook(obs, now);
 
     // Prefer the binding the registry settled on over the header: a late-bound

@@ -85,6 +85,13 @@ pub struct Health {
     pub protocol_version: u64,
     pub sessions: u64,
     pub hitl_pending: u64,
+    /// Models the daemon could not resolve a context window size for.
+    ///
+    /// Empty on an older daemon that does not report the field, which is
+    /// indistinguishable from "none" — an acceptable blind spot, since the
+    /// alternative is a check that fails against every daemon built before
+    /// this one.
+    pub unknown_window_models: Vec<String>,
 }
 
 /// One `GET /health` against loopback.
@@ -129,6 +136,16 @@ pub fn health(port: u16) -> Result<Health, String> {
         protocol_version: v.get("protocol_version").and_then(Value::as_u64).unwrap_or(0),
         sessions: v.get("sessions").and_then(Value::as_u64).unwrap_or(0),
         hitl_pending: v.get("hitl_pending").and_then(Value::as_u64).unwrap_or(0),
+        unknown_window_models: v
+            .get("unknown_window_models")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 

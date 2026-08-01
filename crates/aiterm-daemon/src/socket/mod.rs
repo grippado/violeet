@@ -52,6 +52,9 @@ const MAX_LINE_BYTES: u64 = 1024 * 1024;
 pub struct Hub {
     registry: Arc<Mutex<Registry>>,
     hitl: Arc<Mutex<HitlRegistry>>,
+    /// Transcripts currently being followed. A third lock, and like the other
+    /// two it is never held while either of them is.
+    transcripts: crate::transcript::SharedSupervisor,
     tx: broadcast::Sender<String>,
 }
 
@@ -67,6 +70,9 @@ impl Hub {
         Self {
             registry: Arc::new(Mutex::new(registry)),
             hitl: Arc::new(Mutex::new(hitl)),
+            transcripts: Arc::new(Mutex::new(
+                crate::transcript::TranscriptSupervisor::new(),
+            )),
             tx,
         }
     }
@@ -77,6 +83,30 @@ impl Hub {
 
     pub fn hitl(&self) -> &Arc<Mutex<HitlRegistry>> {
         &self.hitl
+    }
+
+    pub fn transcripts(&self) -> &Mutex<crate::transcript::TranscriptSupervisor> {
+        &self.transcripts
+    }
+
+    /// Stop following a session's transcript, releasing its thread and watch.
+    pub fn forget_transcript(&self, session_id: &str) {
+        match self.transcripts.lock() {
+            Ok(mut g) => g.forget(session_id),
+            Err(p) => p.into_inner().forget(session_id),
+        }
+    }
+
+    /// Is a permission request open for this session?
+    ///
+    /// The daemon's half of the cross-source state inference: the transcript
+    /// can see a tool in flight but not why it has not returned, and this is
+    /// the difference between `working` and `waiting_hitl`.
+    pub fn has_pending_hitl(&self, session_id: &str) -> bool {
+        match self.hitl.lock() {
+            Ok(g) => g.pending().any(|r| r.session_id == session_id),
+            Err(p) => p.into_inner().pending().any(|r| r.session_id == session_id),
+        }
     }
 
     /// Lock the registry, recovering from a poisoned mutex rather than
@@ -282,6 +312,11 @@ impl Hub {
     /// `hitl_pending` card for that session leaves the app garbage-collecting
     /// orphans, which is exactly the bookkeeping the protocol promises it will
     /// never have to do.
+    /// Announce a session's end and release what was following it.
+    ///
+    /// Dropping the transcript watcher here matters: it owns a thread and a
+    /// filesystem watch, and a daemon that ran for a day would otherwise hold
+    /// one of each for every session it had ever seen.
     pub fn publish_session_ended(
         &self,
         session_id: &str,
@@ -296,6 +331,7 @@ impl Hub {
             self.announce_resolved(request, HitlOrigin::DaemonError);
         }
 
+        self.forget_transcript(session_id);
         self.broadcast(&DaemonToApp::SessionEnded(wire::SessionEnded {
             v: PROTOCOL_VERSION,
             ts: wire::timestamp(now),
@@ -304,6 +340,7 @@ impl Hub {
             reason,
         }));
     }
+
 
     /// The tab a session is bound to, if it is bound at all.
     ///

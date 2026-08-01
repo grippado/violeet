@@ -169,6 +169,11 @@ pub fn run(cwd: &Path) -> Vec<Check> {
         None => checks.push(Check::fail("settings file").detail("HOME is not set")),
     }
 
+    // --- a second silent one ----------------------------------------------
+    if let Some(Ok(h)) = &health {
+        checks.push(unknown_model_check(&h.unknown_window_models));
+    }
+
     // --- the silent one ---------------------------------------------------
     checks.push(trust_check(cwd));
 
@@ -308,6 +313,30 @@ fn describe_group(group: &serde_json::Value) -> String {
     format!("matcher {matcher}: {}", commands.join(" ; "))
 }
 
+/// A model whose context window size we do not know.
+///
+/// The window size is not in the transcript — it comes from a lookup table on
+/// the model name (`docs/TRANSCRIPT_FORMAT.md` § 3). When Anthropic ships a
+/// model that table has never heard of, the size is `None`, so the fill
+/// percentage is `None`, so the compaction warning silently stops firing.
+///
+/// That is the worst shape a failure can take: a feature the user has learned
+/// to rely on turning itself off with no symptom. Naming the model is the whole
+/// fix — it turns "why did I get compacted without warning" into "add this
+/// model to the table".
+fn unknown_model_check(models: &[String]) -> Check {
+    if models.is_empty() {
+        return Check::ok("context window size is known for every live session");
+    }
+    Check::warn("context window size is known for every live session")
+        .detail(format!(
+            "no window size for: {}. The compaction warning is off for those \
+             sessions — not because they are safe, but because we cannot tell.",
+            models.join(", ")
+        ))
+        .fix("add the model to `window_size_for_model` in crates/aiterm-transcript")
+}
+
 /// Project settings in an untrusted directory are ignored without a word.
 fn trust_check(cwd: &Path) -> Check {
     match probe::project_is_trusted(cwd) {
@@ -390,4 +419,31 @@ pub fn report(checks: &[Check], style: &Style) -> bool {
     println!();
 
     healthy
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The failure this check exists to make visible: a model nobody has told
+    /// the lookup table about turns the compaction warning off, and nothing
+    /// else would ever say so.
+    #[test]
+    fn an_unknown_model_is_a_warning_that_names_it() {
+        let check = unknown_model_check(&["claude-something-6".to_string()]);
+        assert!(matches!(check.status, Status::Warn));
+        let detail = check.detail.unwrap();
+        assert!(
+            detail.contains("claude-something-6"),
+            "naming the model is the whole point; without it the user cannot act"
+        );
+        assert!(check.fix.is_some());
+    }
+
+    #[test]
+    fn every_model_known_is_a_plain_pass() {
+        let check = unknown_model_check(&[]);
+        assert!(matches!(check.status, Status::Ok));
+        assert!(check.fix.is_none(), "nothing to fix, so nothing to type");
+    }
 }

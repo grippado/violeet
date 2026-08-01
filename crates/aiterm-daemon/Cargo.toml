@@ -18,6 +18,11 @@ path = "src/main.rs"
 
 [dependencies]
 aiterm-proto = { path = "../aiterm-proto" }
+
+# The transcript reader. A one-way dependency on purpose: that crate knows
+# nothing about the socket, the registry or this runtime, so it stays testable
+# on its own and the daemon does the wiring.
+aiterm-transcript = { path = "../aiterm-transcript" }
 serde.workspace = true
 serde_json.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
