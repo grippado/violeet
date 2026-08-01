@@ -28,6 +28,15 @@
 	<string>0.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>0</string>
+	<!--
+	  The Dock icon, and the reason it is a file name without an extension:
+	  `CFBundleIconFile` is resolved against `Contents/Resources` and appends
+	  `.icns` itself. A placeholder, drawn by hand and dropped in the repo root
+	  — a bundle with no icon at all gets the generic white page, which reads
+	  as a broken app rather than as an unfinished one.
+	-->
+	<key>CFBundleIconFile</key>
+	<string>aiterm</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>

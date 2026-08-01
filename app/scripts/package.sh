@@ -103,6 +103,14 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BINARY" "$APP/Contents/MacOS/$EXECUTABLE"
 cp Sources/AITerm/Info.plist "$APP/Contents/Info.plist"
+# The icon, when there is one. Not fatal if missing: a bundle without an icon
+# still runs, and a build that stopped because of artwork would be a build
+# stopped for the least important reason there is.
+if [[ -f Resources/aiterm.icns ]]; then
+  cp Resources/aiterm.icns "$APP/Contents/Resources/aiterm.icns"
+else
+  echo "==> no Resources/aiterm.icns; the bundle will use the generic icon"
+fi
 
 # `APPL????` is what a bundle's PkgInfo has said since before any of this
 # mattered. Some tooling still looks for the file; none of it looks inside.
