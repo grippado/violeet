@@ -49,7 +49,7 @@ struct InspectorView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.ultraThinMaterial)
+        .background(Color(nsColor: preferences.chrome.surfaceResolved.nsColor))
     }
 
     private var header: some View {

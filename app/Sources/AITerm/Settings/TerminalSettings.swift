@@ -198,11 +198,67 @@ struct RGB: Equatable, Hashable {
         )
     }
 
+    /// This colour mixed `amount` of the way toward white.
+    ///
+    /// How every surface of the window chrome is derived from the terminal's
+    /// background, so the sidebar and the settings panel belong to whatever
+    /// theme is active instead of being a fixed grey beside it.
+    func lightened(by amount: Double) -> RGB {
+        func mix(_ channel: UInt8) -> UInt8 {
+            let value = Double(channel) + (255 - Double(channel)) * amount
+            return UInt8(min(max(value.rounded(), 0), 255))
+        }
+        return RGB(mix(r), mix(g), mix(b))
+    }
+
+    /// And toward black, for the recess behind everything.
+    func darkened(by amount: Double) -> RGB {
+        func mix(_ channel: UInt8) -> UInt8 {
+            UInt8(min(max((Double(channel) * (1 - amount)).rounded(), 0), 255))
+        }
+        return RGB(mix(r), mix(g), mix(b))
+    }
+
     /// Perceived brightness, for deciding whether a swatch needs a light or
     /// dark check mark drawn on it.
     var isLight: Bool {
         (0.299 * Double(r) + 0.587 * Double(g) + 0.114 * Double(b)) / 255 > 0.55
     }
+}
+
+/// The window's own surfaces, derived from the terminal's background.
+///
+/// Not a second palette to keep in sync. The sidebar used a system material,
+/// which is a fixed grey: beside a violet terminal it reads as a different
+/// application sharing a window. Deriving instead means every theme — including
+/// one the user mixes by hand — gets a window that belongs to it, and there is
+/// no theme that can be chosen and then look wrong.
+///
+/// The steps are small on purpose. Chrome that contrasts with the terminal
+/// competes with it, and the terminal is what the window is for.
+struct WindowChrome {
+    let base: RGB
+
+    init(background: RGB) {
+        self.base = background
+    }
+
+    /// Behind the sidebars.
+    var surface: RGB { base.lightened(by: 0.06) }
+    /// Cards, and anything that sits on the surface.
+    var raised: RGB { base.lightened(by: 0.12) }
+    /// Hairlines.
+    var border: RGB { base.lightened(by: 0.22) }
+    /// The recess behind everything, for gaps that must not glow.
+    var recess: RGB { base.darkened(by: 0.25) }
+
+    /// A light theme has to go the other way: lightening an almost-white
+    /// background produces surfaces nobody can tell apart.
+    var isLight: Bool { base.isLight }
+
+    var surfaceResolved: RGB { isLight ? base.darkened(by: 0.04) : surface }
+    var raisedResolved: RGB { isLight ? base.darkened(by: 0.08) : raised }
+    var borderResolved: RGB { isLight ? base.darkened(by: 0.18) : border }
 }
 
 // MARK: - Themes
@@ -220,6 +276,36 @@ struct TerminalTheme: Equatable {
     /// Dark first, and dark by default. This is a terminal for watching agents
     /// work, which people do for hours.
     static let builtins: [TerminalTheme] = [
+        // The house palette, built from one base colour.
+        //
+        // The base asked for was `#222240`, and it is `R=34 G=34 B=64`: with red
+        // and green equal, the eye reads cold blue-violet rather than purple.
+        // `#24203F` puts red a step above green at the same luminance, which is
+        // what makes it read as purple without making it louder.
+        //
+        // Two things follow from a violet background and neither is optional.
+        // **Blue has to move**: the default terminal blue sits a few degrees
+        // from this background and the two stop separating, so it is lifted and
+        // pulled toward cyan. **Neutral grey text reads yellow** against a cold
+        // ground, so the foreground carries a trace of the same hue.
+        TerminalTheme(
+            name: "aiterm violet",
+            background: RGB(0x24, 0x20, 0x3F),
+            foreground: RGB(0xD9, 0xD6, 0xEC),
+            cursor: RGB(0xC7, 0x8B, 0xF7),
+            ansi: [
+                // Normal. "Black" is a step *above* the background, not below:
+                // a terminal that prints black on black is a terminal with
+                // invisible text, and plenty of tools use colour 0.
+                RGB(0x3A, 0x35, 0x5E), RGB(0xFF, 0x6B, 0x81), RGB(0x6F, 0xE3, 0x9B),
+                RGB(0xF2, 0xC9, 0x7B), RGB(0x7F, 0xAE, 0xFF), RGB(0xC7, 0x8B, 0xF7),
+                RGB(0x6F, 0xE0, 0xE0), RGB(0xD9, 0xD6, 0xEC),
+                // Bright.
+                RGB(0x55, 0x4F, 0x7E), RGB(0xFF, 0x93, 0xA4), RGB(0x96, 0xF0, 0xB8),
+                RGB(0xF7, 0xDA, 0x9E), RGB(0xA6, 0xC7, 0xFF), RGB(0xDC, 0xA9, 0xFF),
+                RGB(0x96, 0xEF, 0xEF), RGB(0xF3, 0xF1, 0xFF),
+            ]
+        ),
         TerminalTheme(
             name: "aiterm dark",
             background: RGB(0x11, 0x13, 0x16),

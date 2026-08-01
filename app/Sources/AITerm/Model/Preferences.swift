@@ -158,6 +158,12 @@ final class Preferences: ObservableObject {
     /// Falls back rather than failing: a font name that was valid when it was
     /// written can stop resolving, and a terminal with no font is not a state
     /// worth supporting.
+    /// The window's surfaces, derived from the terminal's background so the
+    /// chrome belongs to whatever theme is active.
+    var chrome: WindowChrome {
+        WindowChrome(background: terminal.appearance.background)
+    }
+
     var terminalFont: NSFont {
         MonospacedFonts.font(named: terminal.font.name, size: terminal.font.size)
     }

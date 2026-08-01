@@ -45,7 +45,8 @@ struct SidebarView: View {
                             card: card,
                             title: state.displayTitle(for: card),
                             isSelected: card.tabID != nil && card.tabID == state.selectedTabID,
-                            compactionThreshold: preferences.compactionThreshold
+                            compactionThreshold: preferences.compactionThreshold,
+                            chrome: preferences.chrome
                         )
                         .contentShape(Rectangle())
                         .onTapGesture { reveal(card) }
@@ -85,7 +86,7 @@ struct SidebarView: View {
             DaemonStatusLine(status: state.daemon.status, sessionCount: state.sessions.count)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.ultraThinMaterial)
+        .background(Color(nsColor: preferences.chrome.surfaceResolved.nsColor))
     }
 
     /// Sessions running outside aiterm, pinned to the foot of the sidebar.
@@ -123,7 +124,8 @@ struct SidebarView: View {
                                     card: card,
                                     title: state.displayTitle(for: card),
                                     isSelected: false,
-                                    compactionThreshold: preferences.compactionThreshold
+                                    compactionThreshold: preferences.compactionThreshold,
+                                    chrome: preferences.chrome
                                 )
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                             }

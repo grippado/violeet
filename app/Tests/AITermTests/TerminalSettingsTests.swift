@@ -175,6 +175,68 @@ struct ThemeTests {
     }
 }
 
+@Suite("Window chrome")
+struct WindowChromeTests {
+    /// The chrome is derived so that every theme — including one mixed by hand
+    /// — gets a window that belongs to it. A fixed grey beside a violet
+    /// terminal reads as two applications sharing a window.
+    @Test func surfaces_step_away_from_the_background_in_order() {
+        let chrome = WindowChrome(background: RGB(0x24, 0x20, 0x3F))
+        let steps = [chrome.surfaceResolved, chrome.raisedResolved, chrome.borderResolved]
+        let luminance = steps.map { Double($0.r) + Double($0.g) + Double($0.b) }
+        #expect(luminance == luminance.sorted(), "each step must be lighter than the last")
+        #expect(chrome.surfaceResolved != chrome.base, "the surface must be distinguishable")
+    }
+
+    /// Lightening an almost-white background produces surfaces nobody can tell
+    /// apart, so a light theme has to step the other way.
+    @Test func a_light_theme_steps_darker_rather_than_lighter() {
+        let chrome = WindowChrome(background: RGB(0xFA, 0xFA, 0xFA))
+        #expect(chrome.isLight)
+        let surface = chrome.surfaceResolved
+        #expect(Int(surface.r) < 0xFA, "a light theme's surface must be darker than its background")
+    }
+
+    /// Mixing must saturate rather than wrap. A channel at 0xFF lightened
+    /// further has to stay 0xFF, not roll over to black.
+    @Test func mixing_saturates_at_both_ends() {
+        #expect(RGB(0xFF, 0xFF, 0xFF).lightened(by: 0.5) == RGB(0xFF, 0xFF, 0xFF))
+        #expect(RGB(0x00, 0x00, 0x00).darkened(by: 0.5) == RGB(0x00, 0x00, 0x00))
+    }
+}
+
+@Suite("The house palette")
+struct HousePaletteTests {
+    /// The base is purple, not blue: red must sit above green. `#222240` has
+    /// them equal, which the eye reads as cold blue-violet.
+    @Test func the_default_background_reads_as_purple() {
+        let theme = TerminalTheme.builtins[0]
+        #expect(theme.name == "aiterm violet")
+        #expect(theme.background.r > theme.background.g, "red above green is what makes it purple")
+        #expect(theme.background.b > theme.background.r)
+    }
+
+    /// Colour 0 is used as a foreground by plenty of tools. On a dark theme it
+    /// has to be a step *above* the background, or that text is invisible.
+    @Test func ansi_black_is_visible_against_the_background() {
+        let theme = TerminalTheme.builtins[0]
+        let sum = { (c: RGB) in Int(c.r) + Int(c.g) + Int(c.b) }
+        #expect(sum(theme.ansi[0]) > sum(theme.background))
+    }
+
+    /// A violet background sits close to the usual terminal blue. If they do
+    /// not separate, blue output disappears into the page.
+    @Test func blue_separates_from_a_violet_background() {
+        let theme = TerminalTheme.builtins[0]
+        for blue in [theme.ansi[4], theme.ansi[12]] {
+            let distance = abs(Int(blue.r) - Int(theme.background.r))
+                + abs(Int(blue.g) - Int(theme.background.g))
+                + abs(Int(blue.b) - Int(theme.background.b))
+            #expect(distance > 300, "blue \(blue.hex) is too close to \(theme.background.hex)")
+        }
+    }
+}
+
 @Suite("Cursor")
 struct CursorTests {
     /// SwiftTerm carries shape and blink in one enum, so every combination has

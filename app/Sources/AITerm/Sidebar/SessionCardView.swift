@@ -47,6 +47,9 @@ struct SessionCardView: View {
     /// Fraction of the window at which compaction is near. From preferences so
     /// the card does not decide policy.
     let compactionThreshold: Double
+    /// The window's surfaces for the active theme, so a card belongs to the
+    /// palette rather than to a fixed near-black.
+    let chrome: WindowChrome
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulsing = false
@@ -449,7 +452,7 @@ struct SessionCardView: View {
 
     private var background: some View {
         RoundedRectangle(cornerRadius: 6)
-            .fill(isSelected ? CardTheme.surfaceRaised : CardTheme.surface)
+            .fill(Color(nsColor: (isSelected ? chrome.raisedResolved : chrome.surfaceResolved).nsColor))
     }
 
     private var borderColor: Color {
