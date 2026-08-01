@@ -20,6 +20,7 @@ final class Preferences: ObservableObject {
         static let fontName = "terminal.font.name"
         static let fontSize = "terminal.font.size"
         static let compactionThreshold = "context.compaction.threshold"
+        static let elsewhereExpanded = "sidebar.elsewhere.expanded"
     }
 
     /// Bounds for the drag handle. The lower one is where the cwd column stops
@@ -59,6 +60,14 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(compactionThreshold, forKey: Key.compactionThreshold) }
     }
 
+    /// Whether the "elsewhere" section — sessions running outside aiterm — is
+    /// open. Collapsed by default: they are real and worth showing, but they
+    /// are not what this window is for, and they should not push the sessions
+    /// you opened here off the screen.
+    @Published var elsewhereExpanded: Bool {
+        didSet { defaults.set(elsewhereExpanded, forKey: Key.elsewhereExpanded) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -76,6 +85,8 @@ final class Preferences: ObservableObject {
 
         let storedThreshold = defaults.object(forKey: Key.compactionThreshold) as? Double
         compactionThreshold = min(max(storedThreshold ?? 0.85, 0.1), 1.0)
+
+        elsewhereExpanded = defaults.object(forKey: Key.elsewhereExpanded) as? Bool ?? false
     }
 
     /// The font every terminal view uses.

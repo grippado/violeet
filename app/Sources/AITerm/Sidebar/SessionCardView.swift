@@ -118,6 +118,18 @@ struct SessionCardView: View {
 
     private var titleRow: some View {
         HStack(spacing: 5) {
+            // A session with no tab is one aiterm did not launch — an agent
+            // running in iTerm, or in another window. ADR-003 makes that a
+            // supported state rather than an error, so it is shown; but it
+            // cannot be revealed in a tab, and clicking it does nothing. The
+            // badge is what stops that from being a card that silently ignores
+            // you.
+            if card.tabID == nil {
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .help("Running outside aiterm — there is no tab to switch to.")
+            }
             Text(card.displayTitle)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)

@@ -35,6 +35,32 @@ final class AppState: ObservableObject {
     /// Sorted here rather than in the view so the ordering is one decision with
     /// one place to change it — and so a card cannot jump because two views
     /// disagreed about the rank.
+    /// Sessions running in a tab of this window.
+    var localSessions: [SessionCard] {
+        orderedSessions.filter { $0.tabID != nil }
+    }
+
+    /// Sessions aiterm did not launch — an agent in iTerm, or another window.
+    ///
+    /// Real sessions, and shown (ADR-003), but separated: they cannot be
+    /// revealed in a tab, and mixing them in means the ones you opened here
+    /// compete for space with ones you cannot act on from here.
+    ///
+    /// A waiting-for-you card is the exception and is promoted out of this
+    /// list by `hasWaitingElsewhere` — a blocked agent is worth interrupting
+    /// for wherever it lives.
+    var elsewhereSessions: [SessionCard] {
+        orderedSessions.filter { $0.tabID == nil }
+    }
+
+    /// True when something outside aiterm is blocked on the user.
+    ///
+    /// Drives the section header's own attention state, so a collapsed section
+    /// cannot hide the one thing this product exists to surface.
+    var hasWaitingElsewhere: Bool {
+        elsewhereSessions.contains { $0.lifecycle == .waitingForYou }
+    }
+
     var orderedSessions: [SessionCard] {
         sessions.values.sorted { a, b in
             if a.sortRank != b.sortRank { return a.sortRank < b.sortRank }

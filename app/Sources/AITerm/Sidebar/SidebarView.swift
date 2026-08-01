@@ -36,7 +36,7 @@ struct SidebarView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 5) {
-                    ForEach(state.orderedSessions) { card in
+                    ForEach(state.localSessions) { card in
                         SessionCardView(
                             card: card,
                             isSelected: card.tabID != nil && card.tabID == state.selectedTabID,
@@ -44,10 +44,35 @@ struct SidebarView: View {
                         )
                         .contentShape(Rectangle())
                         .onTapGesture { reveal(card) }
+                        .help(card.tabID == nil
+                            ? "Running outside aiterm. Shown because it is a real session, but there is no tab to reveal."
+                            : "Click to switch to this session's tab.")
                         // Cards can reorder — a session that starts waiting
                         // jumps to the top. Animated, so the jump reads as
                         // movement rather than as the list redrawing.
                         .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    if !state.elsewhereSessions.isEmpty {
+                        ElsewhereHeader(
+                            count: state.elsewhereSessions.count,
+                            waiting: state.hasWaitingElsewhere,
+                            expanded: preferences.elsewhereExpanded
+                        ) {
+                            preferences.elsewhereExpanded.toggle()
+                        }
+
+                        if preferences.elsewhereExpanded {
+                            ForEach(state.elsewhereSessions) { card in
+                                SessionCardView(
+                                    card: card,
+                                    isSelected: false,
+                                    compactionThreshold: preferences.compactionThreshold
+                                )
+                                .help("Running outside aiterm. Shown because it is a real session, but there is no tab here to reveal.")
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                            }
+                        }
                     }
 
                     if !unclaimedTabs.isEmpty {
@@ -59,13 +84,16 @@ struct SidebarView: View {
                         }
                     }
 
-                    if state.sessions.isEmpty && unclaimedTabs.isEmpty {
+                    if state.localSessions.isEmpty
+                        && state.elsewhereSessions.isEmpty
+                        && unclaimedTabs.isEmpty {
                         emptyHint
                     }
                 }
                 .padding(.horizontal, 7)
                 .padding(.vertical, 6)
                 .animation(.easeInOut(duration: 0.22), value: state.orderedSessions.map(\.id))
+                .animation(.easeInOut(duration: 0.18), value: preferences.elsewhereExpanded)
             }
 
             Spacer(minLength: 0)
@@ -121,6 +149,57 @@ struct SidebarView: View {
         }
         .padding(.horizontal, 2)
         .padding(.top, 8)
+    }
+}
+
+/// The clickable bar that opens and closes the elsewhere section.
+///
+/// It carries the count when collapsed, so the section is never a silent
+/// omission — "3 elsewhere" says there is something there without spending the
+/// rows to show it.
+///
+/// And it turns amber when one of the hidden sessions is waiting on the user.
+/// A collapsed section that could hide a blocked agent would defeat the one
+/// thing this product exists to do, so the header itself carries the signal
+/// upward.
+private struct ElsewhereHeader: View {
+    let count: Int
+    let waiting: Bool
+    let expanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                Text("ELSEWHERE")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("\(count)")
+                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .padding(.horizontal, 4)
+                    .background(
+                        Capsule().fill(waiting
+                            ? CardTheme.attention.opacity(0.25)
+                            : Color.secondary.opacity(0.18))
+                    )
+                if waiting {
+                    Text("waiting for you")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(CardTheme.attention)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(waiting ? CardTheme.attention : Color.secondary.opacity(0.75))
+            .padding(.horizontal, 2)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(expanded
+            ? "Hide sessions running outside aiterm"
+            : "\(count) session(s) running outside aiterm — click to show")
     }
 }
 
