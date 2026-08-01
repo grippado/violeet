@@ -112,21 +112,22 @@ struct SessionCard: Identifiable, Equatable {
 // MARK: - Presentation
 
 extension SessionCard {
-    /// The headline, before the window makes it unique.
+    /// The headline from what the daemon knows, before the window makes it
+    /// unique and before the tab's own facts are folded in.
     ///
     /// The daemon names a session from its first prompt within a second of it
     /// starting, and upgrades that to Claude Code's own `ai-title` one exchange
-    /// later. The working directory's last component is what is left when
-    /// neither has arrived — for a session that has not been prompted yet, or
-    /// one whose transcript we cannot read.
+    /// later. The working directory is what is left when neither has arrived.
     ///
-    /// Use `AppState.displayTitle(for:)` to render: two sessions can carry the
-    /// same name, and telling them apart is the window's job, not the card's.
+    /// This is levels 1, 3, 4 and 5 of the chain — everything a card can be
+    /// named by without a PTY, which is exactly the situation of a session
+    /// running outside aiterm. `AppState.name(for:)` adds level 2 for a card
+    /// that has a tab. Both go through `SessionName.resolve`: there is one
+    /// precedence rule in this app and this is not a second one.
     var baseTitle: String {
-        if let title, !title.isEmpty { return title }
-        guard let cwd, !cwd.isEmpty else { return "unknown" }
-        let name = (cwd as NSString).lastPathComponent
-        return name.isEmpty ? cwd : name
+        SessionName.resolve(
+            NameInputs(agentTitle: title, agentTitleSource: titleSource, cwd: cwd)
+        ).text
     }
 
     /// The titles to render for `cards`, made unique among themselves.
@@ -146,10 +147,19 @@ extension SessionCard {
     /// A free function over the cards rather than a method on `AppState`
     /// because it depends on nothing else — which is also what makes it
     /// testable without standing up a main-actor view model.
-    static func uniqueTitles(for cards: some Collection<SessionCard>) -> [String: String] {
+    /// `named` supplies each card's resolved name. It defaults to what the
+    /// card alone can say, and `AppState` passes the fuller answer — the one
+    /// that knows what is running in the tab. Collisions have to be computed
+    /// over the names actually on screen, or two tabs both showing `btop`
+    /// would go unqualified while their agent titles, which nobody can see,
+    /// differed.
+    static func uniqueTitles(
+        for cards: some Collection<SessionCard>,
+        named: (SessionCard) -> String = { $0.baseTitle }
+    ) -> [String: String] {
         var byTitle: [String: [SessionCard]] = [:]
         for card in cards {
-            byTitle[card.baseTitle, default: []].append(card)
+            byTitle[named(card), default: []].append(card)
         }
 
         var titles: [String: String] = [:]

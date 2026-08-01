@@ -19,7 +19,27 @@ import Foundation
 @MainActor
 final class AppState: ObservableObject {
     @Published private(set) var tabs: [TabModel] = []
-    @Published var selectedTabID: String?
+    @Published var selectedTabID: String? {
+        didSet {
+            guard selectedTabID != oldValue else { return }
+            // The tab you are looking at is the one whose name being a second
+            // stale is worth a syscall to avoid.
+            selectedTab?.session.pollNow()
+        }
+    }
+
+    /// The selected tab's name, for the window's own title bar.
+    ///
+    /// This window has no tab bar — the sidebar is the tab list — so the title
+    /// bar is where a tab's name is stated at full size. It follows the same
+    /// chain as everything else, which is the point: one rule, every surface.
+    var windowTitle: String {
+        guard let tab = selectedTab else { return "aiterm" }
+        if let card = session(ofTab: tab.tabID) {
+            return displayTitle(for: card)
+        }
+        return name(for: tab).text
+    }
 
     /// Sessions the daemon knows about, keyed by `session_id`.
     ///
@@ -98,7 +118,162 @@ final class AppState: ObservableObject {
     /// The rule lives in `SessionCard.uniqueTitles(for:)`; this only supplies
     /// the window's set of cards.
     func displayTitle(for card: SessionCard) -> String {
-        SessionCard.uniqueTitles(for: Array(sessions.values))[card.sessionID] ?? card.baseTitle
+        let unique = SessionCard.uniqueTitles(for: Array(sessions.values)) { self.name(for: $0).text }
+        return unique[card.sessionID] ?? name(for: card).text
+    }
+
+    // MARK: - Naming
+
+    /// The resolved name of a session's card, with every level of the chain
+    /// filled in.
+    ///
+    /// This is where the two halves meet: levels 3 and 1 come off the socket,
+    /// levels 2 and 4 come from the tab — and only for a card that *has* a tab.
+    /// A session running in iTerm has no PTY we can read, so it is named from
+    /// what the daemon knows and nothing else, which is the honest answer.
+    func name(for card: SessionCard) -> ResolvedName {
+        guard let tabID = card.tabID, let tab = tabsByID[tabID] else {
+            return SessionName.resolve(
+                NameInputs(
+                    agentTitle: card.title,
+                    agentTitleSource: card.titleSource,
+                    cwd: card.cwd
+                )
+            )
+        }
+        var inputs = tab.nameInputs(agent: card)
+        // The daemon's working directory wins over the tab's when it has one:
+        // the agent's own cwd is what the card is about, and an agent can be
+        // running in a directory the shell has since left.
+        inputs.cwd = card.cwd ?? inputs.cwd
+        return SessionName.resolve(inputs)
+    }
+
+    /// The resolved name of a tab, whether or not a session owns it.
+    func name(for tab: TabModel) -> ResolvedName {
+        SessionName.resolve(tab.nameInputs(agent: session(ofTab: tab.tabID)))
+    }
+
+    /// The card running in a tab, if one is.
+    func session(ofTab tabID: String) -> SessionCard? {
+        sessions.values.first { $0.tabID == tabID }
+    }
+
+    private var tabsByID: [String: TabModel] {
+        Dictionary(tabs.map { ($0.tabID, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Rename a tab, and mean it: nothing automatic overwrites this until the
+    /// user asks for automatic naming back.
+    ///
+    /// Where the name is *kept* depends on what the tab is. A tab with an agent
+    /// session hands the name to the daemon, which persists it and is the only
+    /// copy — a second copy here is how the two come to disagree. A tab with no
+    /// session keeps it locally, because the daemon has nowhere to put a name
+    /// for something it does not know exists.
+    func rename(tab: TabModel, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if let card = session(ofTab: tab.tabID) {
+            tab.setManualName(nil)
+            rename(session: card.sessionID, to: trimmed)
+        } else {
+            tab.setManualName(trimmed)
+        }
+        focusTerminal()
+    }
+
+    func rename(session sessionID: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // Optimistic, and only optimistic: the card is repainted from the
+        // daemon's echo like every other field. Writing it here too is what
+        // keeps the field from flickering back to the old name for the length
+        // of a round trip.
+        if var card = sessions[sessionID] {
+            card.title = trimmed
+            card.titleSource = "user"
+            sessions[sessionID] = card
+        }
+        // Held until the daemon confirms. A rename typed while the daemon is
+        // down would otherwise be dropped on the floor: `DaemonClient` discards
+        // what it cannot deliver, which is right for telemetry and wrong for
+        // something the user typed.
+        pendingNaming[sessionID] = .rename(trimmed)
+        daemon.send(.renameSession(sessionID: sessionID, title: trimmed))
+        focusTerminal()
+    }
+
+    /// Give a tab back to automatic naming.
+    ///
+    /// The counterpart to renaming, and not optional: without it the user is
+    /// stuck with whatever they typed once, and the only way out is closing the
+    /// tab.
+    func releaseName(tab: TabModel) {
+        tab.setManualName(nil)
+        if let card = session(ofTab: tab.tabID) {
+            releaseName(session: card.sessionID)
+        }
+        focusTerminal()
+    }
+
+    func releaseName(session sessionID: String) {
+        if var card = sessions[sessionID] {
+            // Cleared rather than guessed: what the session falls back to is
+            // the daemon's to decide, and it is one message away from saying
+            // so. Guessing here would put a name on screen the daemon never
+            // sent, which is the one thing this app does not do.
+            card.title = nil
+            card.titleSource = nil
+            sessions[sessionID] = card
+        }
+        pendingNaming[sessionID] = .release
+        daemon.send(.releaseSessionTitle(sessionID: sessionID))
+        focusTerminal()
+    }
+
+    /// A rename the daemon has not confirmed yet, per session.
+    ///
+    /// Cleared when the echo arrives, replayed on reconnect. It is the only
+    /// place the app holds a name the daemon does not, and it holds it for
+    /// seconds.
+    enum PendingNaming: Equatable {
+        case rename(String)
+        case release
+    }
+
+    private var pendingNaming: [String: PendingNaming] = [:]
+
+    /// Re-send what the daemon may not have heard.
+    ///
+    /// Called after a snapshot request, which is the point at which the app and
+    /// the daemon are otherwise in agreement — so anything still pending here
+    /// is something the daemon genuinely missed.
+    private func replayPendingNaming() {
+        for (sessionID, pending) in pendingNaming {
+            switch pending {
+            case .rename(let title):
+                daemon.send(.renameSession(sessionID: sessionID, title: title))
+            case .release:
+                daemon.send(.releaseSessionTitle(sessionID: sessionID))
+            }
+        }
+    }
+
+    /// A tab renamed before an agent started in it hands its name over.
+    ///
+    /// Without this the rename would be silently demoted the moment the session
+    /// appeared: the card is named from the daemon, and the daemon was never
+    /// told.
+    private func promoteTabName(to card: SessionCard) {
+        guard let tabID = card.tabID,
+              let tab = tabs.first(where: { $0.tabID == tabID }),
+              let manual = tab.manualName
+        else { return }
+        tab.setManualName(nil)
+        rename(session: card.sessionID, to: manual)
     }
 
     /// The distinct terminal applications the hidden sessions are running in,
@@ -141,6 +316,9 @@ final class AppState: ObservableObject {
         daemon.onMessage = { [weak self] message in
             MainActor.assumeIsolated { self?.apply(message) }
         }
+        daemon.onReconcile = { [weak self] in
+            MainActor.assumeIsolated { self?.replayPendingNaming() }
+        }
         daemon.liveTabs = { [weak self] in
             MainActor.assumeIsolated {
                 self?.tabs.map { (tabID: $0.tabID, cwd: $0.currentDirectory) } ?? []
@@ -163,6 +341,41 @@ final class AppState: ObservableObject {
                 MainActor.assumeIsolated { self?.applyTerminalSettings() }
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - Keyboard
+
+    /// The local key monitor for Shift+Return. Held so it can be removed.
+    private var keyMonitor: Any?
+
+    /// Start translating Shift+Return into the sequence agents understand.
+    ///
+    /// A monitor rather than a view subclass, for the reason recorded in
+    /// `TerminalKeys`. Two guards, and both matter:
+    ///
+    ///  - the event has to *be* the combination, or every keystroke in the app
+    ///    would take this path
+    ///  - the terminal has to be first responder, or Shift+Return typed into
+    ///    the rename field or the hex field would be swallowed and written to
+    ///    a PTY the user was not looking at
+    private func installKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self,
+                      let bytes = TerminalKeys.bytes(for: event),
+                      let tab = self.selectedTab,
+                      let window = tab.session.view.window,
+                      window.isKeyWindow,
+                      window.firstResponder === tab.session.view
+                else { return event }
+
+                tab.session.send(bytes)
+                // Swallowed: returning the event as well would send the
+                // sequence and then let SwiftTerm send a plain `\r` after it,
+                // which submits — the bug, with an extra newline in front.
+                return nil
+            }
+        }
     }
 
     var selectedTab: TabModel? {
@@ -305,6 +518,9 @@ final class AppState: ObservableObject {
             } else {
                 sessions[session.sessionID] = SessionCard(registered: session)
             }
+            if let card = sessions[session.sessionID] {
+                promoteTabName(to: card)
+            }
 
         case .sessionUpdated(let patch):
             guard var card = sessions[patch.sessionID] else {
@@ -316,6 +532,16 @@ final class AppState: ObservableObject {
             }
             card.apply(patch)
             sessions[patch.sessionID] = card
+            // The daemon has spoken about this session's name, so whatever we
+            // were holding for it has either landed or been superseded. Kept
+            // narrow on purpose: a patch that carries no title says nothing
+            // about a rename still in flight.
+            if patch.titleSource != .unchanged || patch.title != .unchanged {
+                pendingNaming.removeValue(forKey: patch.sessionID)
+            }
+            // A session can be bound to its tab after it registered, and the
+            // rename typed before that has to follow it across.
+            promoteTabName(to: card)
 
         case .hitlPending(let request):
             pendingHitl[request.hitlID] = request
@@ -365,6 +591,10 @@ final class AppState: ObservableObject {
         }
         tabs.removeAll()
         selectedTabID = nil
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
         // Give the writes a moment to reach the socket before the process goes
         // away. They are a few hundred bytes on a local socket; this is a
         // flush, not a wait.

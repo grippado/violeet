@@ -43,7 +43,14 @@ struct SessionCardView: View {
     /// The name as the window decided to show it — qualified when another
     /// session carries the same one. See `AppState.displayTitle(for:)`.
     let title: String
+    /// The same name with its provenance, which the row needs in order to say
+    /// whether automatic naming is switched off.
+    let name: ResolvedName
     let isSelected: Bool
+    let onRename: (String) -> Void
+    let onRelease: () -> Void
+    /// Editing ended, one way or another. Hands the keyboard back.
+    let onFinish: () -> Void
     /// Fraction of the window at which compaction is near. From preferences so
     /// the card does not decide policy.
     let compactionThreshold: Double
@@ -181,10 +188,15 @@ struct SessionCardView: View {
                     .foregroundStyle(.tertiary)
                     .help("Running outside aiterm — there is no tab to switch to.")
             }
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
+            EditableName(
+                name: name,
+                display: title,
+                font: .system(size: 13, weight: .semibold),
+                colour: .primary,
+                onRename: onRename,
+                onRelease: onRelease,
+                onFinish: onFinish
+            )
 
             if let branch = card.gitBranch, !branch.isEmpty {
                 Label(branch, systemImage: "arrow.triangle.branch")

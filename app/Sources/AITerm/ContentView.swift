@@ -72,7 +72,7 @@ struct ContentView: View {
         // Configured from here, not from the `App` body: this view observes
         // `preferences`, so it re-renders when translucency changes. The scene
         // body does not, and the backdrop would only appear on relaunch.
-        .background(WindowConfigurator(settings: preferences.terminal))
+        .background(WindowConfigurator(settings: preferences.terminal, title: state.windowTitle))
     }
 
     /// The terminal's background, carrying the window's alpha when translucent.
@@ -227,12 +227,16 @@ private struct WindowConfigurator: NSViewRepresentable {
     /// time.
     let settings: TerminalSettings
 
+    /// The selected tab's name. The window has no tab bar, so the title bar is
+    /// where a tab says what it is at full size — and it follows the same
+    /// precedence chain as the sidebar rather than a second rule of its own.
+    let title: String
+
     func makeNSView(context: Context) -> NSView {
         let probe = NSView(frame: .zero)
         DispatchQueue.main.async {
             guard let window = probe.window else { return }
             window.setFrameAutosaveName("aiterm.main")
-            window.title = "aiterm"
             window.tabbingMode = .disallowed
             apply(to: window)
         }
@@ -252,6 +256,9 @@ private struct WindowConfigurator: NSViewRepresentable {
     /// itself is `WindowBackdrop`, which lives inside the SwiftUI hierarchy —
     /// see the note there for why it is not a subview of `contentView`.
     private func apply(to window: NSWindow) {
+        if window.title != title {
+            window.title = title
+        }
         let translucent = settings.window.isTranslucent
         window.isOpaque = !translucent
         // The terminal's own background, not `.windowBackgroundColor`.

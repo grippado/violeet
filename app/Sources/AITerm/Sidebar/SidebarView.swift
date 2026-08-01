@@ -44,7 +44,11 @@ struct SidebarView: View {
                         SessionCardView(
                             card: card,
                             title: state.displayTitle(for: card),
+                            name: state.name(for: card),
                             isSelected: card.tabID != nil && card.tabID == state.selectedTabID,
+                            onRename: { state.rename(session: card.sessionID, to: $0) },
+                            onRelease: { state.releaseName(session: card.sessionID) },
+                            onFinish: { state.focusTerminal() },
                             compactionThreshold: preferences.compactionThreshold,
                             chrome: preferences.chrome
                         )
@@ -62,9 +66,16 @@ struct SidebarView: View {
                     if !unclaimedTabs.isEmpty {
                         sectionLabel("tabs")
                         ForEach(unclaimedTabs) { tab in
-                            TabRow(tab: tab, isSelected: tab.tabID == state.selectedTabID)
-                                .contentShape(Rectangle())
-                                .onTapGesture { state.selectedTabID = tab.tabID }
+                            TabRow(
+                                tab: tab,
+                                isSelected: tab.tabID == state.selectedTabID,
+                                name: state.name(for: tab),
+                                onRename: { state.rename(tab: tab, to: $0) },
+                                onRelease: { state.releaseName(tab: tab) },
+                                onFinish: { state.focusTerminal() }
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture { state.selectedTabID = tab.tabID }
                         }
                     }
 
@@ -123,7 +134,11 @@ struct SidebarView: View {
                                 SessionCardView(
                                     card: card,
                                     title: state.displayTitle(for: card),
+                                    name: state.name(for: card),
                                     isSelected: false,
+                                    onRename: { state.rename(session: card.sessionID, to: $0) },
+                                    onRelease: { state.releaseName(session: card.sessionID) },
+                                    onFinish: { state.focusTerminal() },
                                     compactionThreshold: preferences.compactionThreshold,
                                     chrome: preferences.chrome
                                 )
@@ -271,18 +286,32 @@ private struct ElsewhereHeader: View {
 }
 
 /// A tab with no session behind it yet.
+///
+/// Renameable like any card. A tab with no agent in it is still a tab the user
+/// may be keeping for a reason, and "you can name this one but not that one"
+/// is a rule nobody would guess.
 private struct TabRow: View {
     @ObservedObject var tab: TabModel
     let isSelected: Bool
+    let name: ResolvedName
+    let onRename: (String) -> Void
+    let onRelease: () -> Void
+    let onFinish: () -> Void
 
     var body: some View {
         HStack(spacing: 7) {
             Circle()
                 .fill(tab.hasExited ? Color.secondary.opacity(0.4) : Color.secondary)
                 .frame(width: 5, height: 5)
-            Text(tab.shortName)
-                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
+            EditableName(
+                name: name,
+                display: name.text,
+                font: .system(size: 11, weight: isSelected ? .semibold : .regular),
+                colour: .primary,
+                onRename: onRename,
+                onRelease: onRelease,
+                onFinish: onFinish
+            )
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)

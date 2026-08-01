@@ -54,6 +54,14 @@ final class DaemonClient: ObservableObject {
     /// must be re-announced. See the reconciliation note above.
     var liveTabs: (() -> [(tabID: String, cwd: String?)])?
 
+    /// Called on the main queue after each reconnect has re-announced the tabs
+    /// and asked for a snapshot.
+    ///
+    /// It exists for one thing: a rename typed while the daemon was down. The
+    /// client drops what it cannot deliver, which is right for a stream of
+    /// telemetry and wrong for something a person typed and watched appear.
+    var onReconcile: (() -> Void)?
+
     private let queue = DispatchQueue(label: "digital.opengateway.aiterm.daemon")
     private var fd: Int32 = -1
     private var readerThread: Thread?
@@ -145,6 +153,9 @@ final class DaemonClient: ObservableObject {
                 send(.registerTab(tabID: tab.tabID, cwd: tab.cwd))
             }
             send(.requestSnapshot)
+            // After the snapshot request, so anything the app replays here is
+            // sent into a connection the daemon is already reconciling.
+            onReconcile?()
         }
     }
 

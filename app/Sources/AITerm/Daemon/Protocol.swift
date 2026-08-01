@@ -407,6 +407,10 @@ enum AppMessage {
     case closeTab(tabID: String)
     case requestSnapshot
     case renameSession(sessionID: String, title: String)
+    /// Back to automatic naming. Separate from a rename with an empty title,
+    /// which the daemon refuses on purpose — an empty name is a mistake, and
+    /// unlocking is a decision.
+    case releaseSessionTitle(sessionID: String)
     case resolveHitl(hitlID: String, decision: HitlDecision)
 
     struct HitlDecision {
@@ -441,6 +445,10 @@ enum AppMessage {
             object["type"] = "rename_session"
             object["session_id"] = sessionID
             object["title"] = title
+
+        case .releaseSessionTitle(let sessionID):
+            object["type"] = "release_session_title"
+            object["session_id"] = sessionID
 
         case .resolveHitl(let hitlID, let decision):
             object["type"] = "resolve_hitl"

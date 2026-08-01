@@ -20,7 +20,26 @@ final class TabModel: ObservableObject, Identifiable {
     @Published private(set) var currentDirectory: String
 
     /// The title the terminal asked for, via OSC 0/2. `nil` until it does.
+    ///
+    /// Never a name on its own. It is offered to `SessionName` alongside the
+    /// process it was set under, and expires when that process goes — see
+    /// `ForegroundProcess` for the three ways OSC breaks when trusted.
     @Published private(set) var terminalTitle: String?
+
+    /// The foreground process at the moment the OSC title arrived.
+    @Published private(set) var terminalTitleProcess: String?
+
+    /// The program in the foreground of this tab's PTY. `nil` between the tab
+    /// opening and the first poll, and whenever the kernel declines.
+    @Published private(set) var foregroundProcess: String?
+
+    /// A name the user typed for **this tab**, when no agent session owns it.
+    ///
+    /// A session-backed tab keeps its manual name in the daemon instead, which
+    /// is the only copy: two copies of one name is how they come to disagree.
+    /// `AppState` promotes this one and clears it the moment a session claims
+    /// the tab.
+    @Published private(set) var manualName: String?
 
     /// The shell exited but the tab is still on screen. The user closes it; the
     /// app does not close it for them, because the scrollback is often the
@@ -38,10 +57,21 @@ final class TabModel: ObservableObject, Identifiable {
             self?.currentDirectory = path
         }
         session.onTitleChange = { [weak self] title in
-            self?.terminalTitle = title.isEmpty ? nil : title
+            guard let self else { return }
+            self.terminalTitle = title.isEmpty ? nil : title
+            // Stamped with the process that set it, here rather than in the
+            // resolver: this is the only moment we know which program was
+            // speaking.
+            self.terminalTitleProcess = title.isEmpty ? nil : self.foregroundProcess
+        }
+        session.onForegroundChange = { [weak self] name in
+            self?.foregroundProcess = name
         }
         session.onExit = { [weak self] _ in
             self?.hasExited = true
+            // A dead shell has no foreground program. Leaving the last one
+            // would leave the tab named after something that is not running.
+            self?.foregroundProcess = nil
         }
     }
 
@@ -54,16 +84,46 @@ final class TabModel: ObservableObject, Identifiable {
         session.terminate()
     }
 
-    /// What the sidebar shows. The directory, not the title: with several agents
-    /// running, *where* they are is the thing that tells them apart, and an
-    /// agent's OSC title is usually the name of the tool it is running.
-    var displayName: String {
-        ProcessDirectory.abbreviated(currentDirectory)
+    // MARK: - Naming
+
+    /// Everything that could name this tab, for `SessionName.resolve`.
+    ///
+    /// `agent` is the card the daemon holds for this tab, when there is one.
+    /// Passed in rather than looked up, because a tab does not know about the
+    /// session table and should not start to.
+    func nameInputs(agent: SessionCard?) -> NameInputs {
+        NameInputs(
+            manualName: manualName,
+            agentTitle: agent?.title,
+            agentTitleSource: agent?.titleSource,
+            foregroundProcess: foregroundProcess,
+            oscTitle: terminalTitle,
+            oscProcess: terminalTitleProcess,
+            cwd: currentDirectory
+        )
     }
 
-    /// The trailing path component, for the compact row.
-    var shortName: String {
-        let name = (currentDirectory as NSString).lastPathComponent
-        return name.isEmpty ? currentDirectory : name
+    /// This tab's name when no session owns it. A tab with a session is named
+    /// through its card — see `AppState.name(for:)`.
+    var resolvedName: ResolvedName {
+        SessionName.resolve(nameInputs(agent: nil))
+    }
+
+    /// Take the name over. Empty or blank clears it instead, which is the same
+    /// as never having set one.
+    func setManualName(_ name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        manualName = (trimmed?.isEmpty ?? true) ? nil : trimmed
+    }
+
+    // MARK: - Presentation
+
+    /// What the sidebar shows for a tab with no session.
+    var displayName: String { resolvedName.text }
+
+    /// The working directory, with `$HOME` abbreviated. Shown under the name,
+    /// never as the name.
+    var pathLabel: String {
+        ProcessDirectory.abbreviated(currentDirectory)
     }
 }

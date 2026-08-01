@@ -7,18 +7,44 @@
 //  1. **The environment injection.** `AITERM_TAB_ID` is the whole tab/session
 //     binding mechanism (ADR-003), and it has to be in the child's environment
 //     from `exec` — there is no retrofitting it into a running shell.
-//  2. **The working directory.** Polled from the kernel, because no stock macOS
-//     shell reports it. See `ProcessDirectory`.
-//  3. **Lifecycle callbacks** the tab model needs: title, cwd, and exit.
+//  2. **The working directory and the foreground program.** Both polled from
+//     the kernel, because no stock macOS shell reports either. See
+//     `ProcessDirectory` and `ForegroundProcess`.
+//  3. **Lifecycle callbacks** the tab model needs: title, cwd, foreground,
+//     and exit.
 
 import AppKit
 import Foundation
 import SwiftTerm
 
 final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
-    /// How often to ask the kernel where the shell is. Slow enough to be free,
-    /// fast enough that the sidebar is not visibly stale after a `cd`.
-    private static let cwdPollInterval: TimeInterval = 2
+    /// How often to ask the kernel where the shell is and what it is running.
+    ///
+    /// One timer for both, because they answer the same question — what is
+    /// this tab? — and two timers would be two schedules to reason about for
+    /// no gain.
+    ///
+    /// **One second**, and the number is a judgement backed by a measurement,
+    /// not a default. The poll is three syscalls per tab — `proc_pidinfo` for
+    /// the directory, `tcgetpgrp` + `proc_name` for the foreground — each a
+    /// read of a struct the kernel already holds: no allocation, no fork, no
+    /// filesystem.
+    ///
+    /// Timed on this machine over 100k iterations each: `proc_pidinfo` 0.79µs,
+    /// `proc_name` 0.26µs, `tcgetpgrp` 0.21µs — **1.26µs per tab per poll**.
+    /// Eight tabs at 1Hz is ten microseconds of CPU per second, or one part in
+    /// a hundred thousand of one core. The cost is not the reason to choose a
+    /// slower interval, so it did not.
+    ///
+    /// It was 2s for the directory alone, and 2s is wrong for a name: you
+    /// launch `btop` and watch the tab sit on its old name for what reads as a
+    /// hang. At 1s the rename lands within the time it takes to look up. Below
+    /// that there is nothing to win — a human cannot tell 250ms from 1s here —
+    /// and the cost multiplies by four.
+    ///
+    /// Selecting a tab polls it immediately as well, so switching tabs never
+    /// shows a name up to a second old.
+    private static let pollInterval: TimeInterval = 1
 
     let view: LocalProcessTerminalView
 
@@ -27,14 +53,20 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     let tabID: String
 
     private(set) var currentDirectory: String?
+    /// The program in the foreground of the PTY, as the kernel reports it.
+    /// `nil` before the first poll and whenever it cannot be read.
+    private(set) var foregroundProcess: String?
     private(set) var hasExited = false
 
-    /// All three fire on the main queue.
+    /// All four fire on the main queue.
     var onDirectoryChange: ((String) -> Void)?
     var onTitleChange: ((String) -> Void)?
+    /// The foreground process changed. Carries the new one, `nil` when the
+    /// kernel stopped answering.
+    var onForegroundChange: ((String?) -> Void)?
     var onExit: ((Int32?) -> Void)?
 
-    private var cwdPoller: DispatchSourceTimer?
+    private var poller: DispatchSourceTimer?
 
     init(tabID: String, font: NSFont) {
         self.tabID = tabID
@@ -70,7 +102,7 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
             execName: "-\(name)",
             currentDirectory: directory
         )
-        startPollingDirectory()
+        startPolling()
     }
 
     /// The environment the child is born with.
@@ -301,26 +333,58 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         )
     }
 
-    // MARK: - Working directory
-
-    private func startPollingDirectory() {
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + Self.cwdPollInterval, repeating: Self.cwdPollInterval)
-        timer.setEventHandler { [weak self] in self?.pollDirectory() }
-        timer.resume()
-        cwdPoller = timer
+    /// Write bytes to the PTY as though they had been typed.
+    ///
+    /// Input, not output: this goes to the program, and must never be fed to
+    /// the emulator — feeding it would print the escape sequence into the grid
+    /// instead of sending it. See `TerminalKeys`.
+    func send(_ bytes: [UInt8]) {
+        guard !hasExited, view.process.running else { return }
+        view.process.send(data: bytes[...])
     }
 
-    private func pollDirectory() {
+    // MARK: - Working directory and foreground process
+
+    private func startPolling() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + Self.pollInterval, repeating: Self.pollInterval)
+        timer.setEventHandler { [weak self] in self?.poll() }
+        timer.resume()
+        poller = timer
+    }
+
+    /// Read both facts now, off-schedule.
+    ///
+    /// Called when a tab becomes the selected one: the tab you are looking at
+    /// is the one whose name being a second stale is worth a syscall to avoid.
+    func pollNow() {
+        poll()
+    }
+
+    private func poll() {
         guard !hasExited, view.process.running else { return }
-        guard let path = ProcessDirectory.current(of: view.process.shellPid) else { return }
-        setDirectory(path)
+        if let path = ProcessDirectory.current(of: view.process.shellPid) {
+            setDirectory(path)
+        }
+        setForeground(ForegroundProcess.name(ofPTY: view.process.childfd))
     }
 
     private func setDirectory(_ path: String) {
         guard path != currentDirectory else { return }
         currentDirectory = path
         onDirectoryChange?(path)
+    }
+
+    /// An unreadable foreground is published as `nil` rather than dropped.
+    ///
+    /// The difference matters at exactly one moment: a program that ends while
+    /// the PTY is being torn down. Keeping the last value there would leave a
+    /// tab called `btop` after btop is gone, which is the stale-name failure
+    /// this source was chosen to avoid.
+    private func setForeground(_ name: String?) {
+        guard name != foregroundProcess else { return }
+        foregroundProcess = name
+        onForegroundChange?(name)
     }
 
     // MARK: - Ending
@@ -337,8 +401,8 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     /// and it is the one a shell honours. `SIGKILL` after a grace period is the
     /// backstop for a child that has blocked even that.
     func terminate() {
-        cwdPoller?.cancel()
-        cwdPoller = nil
+        poller?.cancel()
+        poller = nil
         guard !hasExited else { return }
 
         let pid = view.process.shellPid
@@ -384,8 +448,8 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         hasExited = true
-        cwdPoller?.cancel()
-        cwdPoller = nil
+        poller?.cancel()
+        poller = nil
         onExit?(exitCode)
     }
 }
