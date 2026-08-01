@@ -237,11 +237,16 @@ it to the status line command on stdin (documented in the binary, extracted
 }
 ```
 
-Reading it means installing a status line command, which means wrapping whatever
-the user already has — the same absorb-or-replace problem `install-hooks` solves
-for `PermissionRequest`. Not done; it is the obvious next piece of work, and it
-would also deliver the 5-hour and weekly usage limits, which are likewise
-absent from the transcript.
+**This is now implemented.** `aiterm install-statusline` writes a wrapper that
+forwards the payload to the daemon and then runs the user's original status line
+with the same stdin, printing its output verbatim — nothing about their prompt
+changes on screen. The daemon exposes `POST /statusline` for it. Verified
+end to end against the real `ccstatusline`: the bar rendered identically and the
+daemon published `context_window_size_tokens: 1000000` for a `claude-opus-5`
+session that a lookup table had claimed was 200k.
+
+It delivers the 5-hour and weekly usage limits at the same time, which are
+likewise absent from the transcript and available nowhere else.
 
 ### There is no pending-permission signal
 

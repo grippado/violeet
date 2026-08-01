@@ -21,6 +21,7 @@ mod doctor;
 mod hooks;
 mod probe;
 mod settings;
+mod statusline;
 mod ui;
 
 use std::path::PathBuf;
@@ -79,6 +80,8 @@ fn main() -> ExitCode {
         Some("doctor") => run_doctor(&style),
         Some("install-hooks") => run_install(&options, &style),
         Some("uninstall-hooks") => run_uninstall(&options, &style),
+        Some("install-statusline") => run_install_statusline(&options, &style),
+        Some("uninstall-statusline") => run_uninstall_statusline(&options, &style),
         Some(other) => {
             eprintln!("aiterm: unknown command {other}");
             print_help();
@@ -99,9 +102,13 @@ USAGE:
     aiterm <COMMAND> [--yes]
 
 COMMANDS:
-    doctor             Check the daemon, the hooks, and this directory
-    install-hooks      Add aiterm's hooks to ~/.claude/settings.json
-    uninstall-hooks    Remove them again, leaving other hooks intact
+    doctor                Check the daemon, the hooks, and this directory
+    install-hooks         Add aiterm's hooks to ~/.claude/settings.json
+    uninstall-hooks       Remove them again, leaving other hooks intact
+    install-statusline    Wrap your status line so aiterm can read the context
+                          window size and your usage limits. Your status line
+                          keeps rendering exactly as it does now.
+    uninstall-statusline  Put your original status line back
 
 OPTIONS:
     -y, --yes          Skip the confirmation prompt
@@ -501,5 +508,254 @@ fn run_uninstall(options: &Options, style: &Style) -> ExitCode {
     }
 
     println!("{} removed {removed} aiterm hook entr(ies)", style.green("✓"));
+    ExitCode::SUCCESS
+}
+
+// ---------------------------------------------------------------------------
+// status line
+// ---------------------------------------------------------------------------
+
+/// Install the wrapper around the user's existing status line.
+///
+/// Nothing about their prompt changes on screen: the wrapper forwards a copy of
+/// the payload to the daemon and then runs the original, printing its output
+/// verbatim. See `statusline.rs` for why this is a wrapper rather than a
+/// replacement.
+fn run_install_statusline(options: &Options, style: &Style) -> ExitCode {
+    let Some(path) = settings::default_path() else {
+        eprintln!("aiterm: HOME is not set, so there is no settings file to edit");
+        return ExitCode::FAILURE;
+    };
+    let (Some(wrapper), Some(parked)) = (statusline::wrapper_path(), statusline::parked_path())
+    else {
+        eprintln!("aiterm: HOME is not set");
+        return ExitCode::FAILURE;
+    };
+
+    let mut settings = match Settings::load(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("aiterm: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let port = match probe::read_discovery() {
+        Some(info) => info.hook_port,
+        None => {
+            eprintln!(
+                "aiterm: ~/.aiterm/daemon.json is missing, so I cannot tell which port \
+                 the daemon is on. Start the daemon and run this again."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // What to wrap. If we are already installed, the thing to wrap is whatever
+    // was parked the first time — not our own wrapper, which would nest.
+    let existing = statusline::current(&settings);
+    let already_ours = statusline::is_ours(&settings);
+
+    let original: Option<Value> = if already_ours {
+        std::fs::read_to_string(&parked)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+    } else {
+        existing.clone()
+    };
+    let original_command = original.as_ref().and_then(statusline::command_of);
+
+    match &original_command {
+        Some(command) => println!(
+            "\n{} {}",
+            style.dim("wrapping your status line:"),
+            style.bold(command)
+        ),
+        None => println!(
+            "\n{}",
+            style.dim("no status line configured; the wrapper will print nothing")
+        ),
+    }
+    println!(
+        "{}",
+        style.dim(
+            "  It keeps rendering exactly as it does now — the wrapper forwards a copy of\n  \
+             the payload to the daemon and then runs your command unchanged."
+        )
+    );
+
+    let before = settings.original.clone().unwrap_or_default();
+    settings.value.as_object_mut().expect("checked on load").insert(
+        "statusLine".into(),
+        statusline::wrapper_entry(&wrapper.to_string_lossy()),
+    );
+
+    let script = statusline::wrapper_script(port, original_command.as_deref());
+    let script_exists_and_matches = std::fs::read_to_string(&wrapper)
+        .map(|current| current == script)
+        .unwrap_or(false);
+
+    if settings.is_unchanged() && script_exists_and_matches {
+        println!("{} the status line wrapper is already installed. Nothing to do.", style.green("✓"));
+        return ExitCode::SUCCESS;
+    }
+
+    println!("\n{}", style.bold(&path.display().to_string()));
+    print!("{}", ui::diff(&before, &settings.rendered(), style));
+    println!("\n{} {}", style.dim("script:"), wrapper.display());
+
+    if !options.yes {
+        match ui::confirm("\nWrite these changes?") {
+            Ok(true) => {}
+            Ok(false) => {
+                println!("Aborted. Nothing was written.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("aiterm: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    // Park the original before touching anything, so a failure halfway leaves
+    // the user able to restore by hand.
+    if let Some(original) = &original {
+        if let Err(e) = write_parked(&parked, original) {
+            eprintln!("aiterm: could not record your existing status line ({e}); not proceeding");
+            return ExitCode::FAILURE;
+        }
+    } else {
+        let _ = std::fs::remove_file(&parked);
+    }
+
+    if let Err(e) = write_wrapper(&wrapper, &script) {
+        eprintln!("aiterm: could not write {}: {e}", wrapper.display());
+        return ExitCode::FAILURE;
+    }
+
+    match settings.back_up() {
+        Ok(Some(backup)) => println!("{} backup: {}", style.dim("·"), backup.display()),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("aiterm: could not write a backup, so I will not write the file: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    if let Err(e) = settings.write() {
+        eprintln!("aiterm: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    println!("{} status line wrapped against port {port}", style.green("✓"));
+    println!(
+        "  {}",
+        style.dim("restart your agent for it to pick up the new command")
+    );
+    ExitCode::SUCCESS
+}
+
+fn write_parked(path: &std::path::Path, original: &Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(original)? + "\n")
+}
+
+fn write_wrapper(path: &std::path::Path, script: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, script)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Executable by the owner only, like everything else in ~/.aiterm.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Put the user's original status line back.
+fn run_uninstall_statusline(options: &Options, style: &Style) -> ExitCode {
+    let Some(path) = settings::default_path() else {
+        eprintln!("aiterm: HOME is not set");
+        return ExitCode::FAILURE;
+    };
+    let (Some(wrapper), Some(parked)) = (statusline::wrapper_path(), statusline::parked_path())
+    else {
+        eprintln!("aiterm: HOME is not set");
+        return ExitCode::FAILURE;
+    };
+
+    let mut settings = match Settings::load(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("aiterm: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if !statusline::is_ours(&settings) {
+        println!(
+            "{} the configured status line is not aiterm's. Leaving it alone.",
+            style.green("✓")
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let before = settings.original.clone().unwrap_or_default();
+    let original: Option<Value> = std::fs::read_to_string(&parked)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok());
+
+    {
+        let root = settings.value.as_object_mut().expect("checked on load");
+        match &original {
+            Some(entry) => {
+                root.insert("statusLine".into(), entry.clone());
+            }
+            // Nothing was parked, so there was nothing before us. Remove the
+            // key rather than leaving an empty one behind.
+            None => {
+                root.remove("statusLine");
+            }
+        }
+    }
+
+    println!("\n{}", style.bold(&path.display().to_string()));
+    print!("{}", ui::diff(&before, &settings.rendered(), style));
+
+    if !options.yes {
+        match ui::confirm("\nWrite these changes?") {
+            Ok(true) => {}
+            Ok(false) => {
+                println!("Aborted. Nothing was written.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("aiterm: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    match settings.back_up() {
+        Ok(Some(backup)) => println!("{} backup: {}", style.dim("·"), backup.display()),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("aiterm: could not write a backup: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    if let Err(e) = settings.write() {
+        eprintln!("aiterm: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    let _ = std::fs::remove_file(&wrapper);
+    let _ = std::fs::remove_file(&parked);
+
+    println!("{} your status line is back as it was", style.green("✓"));
     ExitCode::SUCCESS
 }

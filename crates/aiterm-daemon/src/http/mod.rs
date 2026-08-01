@@ -62,6 +62,7 @@ use crate::wire::{EndReason, HitlOrigin};
 
 pub use aiterm_proto::DEFAULT_HOOK_PORT;
 use payload::{HookEvent, HookPayload, PermissionResponse};
+pub use payload::StatusLinePayload;
 
 /// The header the installed hook command uses to pass `AITERM_TAB_ID`.
 ///
@@ -110,6 +111,7 @@ fn router(hub: Hub) -> Router {
     Router::new()
         .route("/hook/event", post(hook_event))
         .route("/hook/permission-request", post(permission_request))
+        .route("/statusline", post(statusline))
         .route("/health", get(health))
         // Layer 1 of the never-silent invariant: a panicking handler answers
         // 500 instead of dropping the connection, which for a permission
@@ -240,6 +242,30 @@ async fn hook_event(
         hub.publish_session_ended(&session_id, tab_id, EndReason::SessionEndHook, now);
     }
 
+    StatusCode::NO_CONTENT
+}
+
+/// The status line channel.
+///
+/// Answers `204` immediately and never blocks. The status line renders on every
+/// frame of the agent's UI, so anything slow here is felt directly by the user
+/// as a laggy prompt — and the wrapper `aiterm install-statusline` writes fires
+/// this in the background for the same reason.
+///
+/// It exists for what the transcript cannot provide: the context window size
+/// for this account, and the subscription's usage limits.
+async fn statusline(State(hub): State<Hub>, body: Option<Json<StatusLinePayload>>) -> StatusCode {
+    // Unparseable, or no session to attach it to. Dropped silently: there is
+    // nothing useful to tell a status line, and a non-2xx would surface in the
+    // user's prompt as an aiterm error for something aiterm merely observes.
+    let Some(Json(payload)) = body else {
+        return StatusCode::NO_CONTENT;
+    };
+    let Some(session_id) = payload.session_id.clone().filter(|s| !s.is_empty()) else {
+        return StatusCode::NO_CONTENT;
+    };
+
+    hub.observe_statusline(&session_id, &payload, Utc::now());
     StatusCode::NO_CONTENT
 }
 

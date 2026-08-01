@@ -395,3 +395,62 @@ mod tests {
         assert!(d.get("updatedPermissions").is_none());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Status line payload
+// ---------------------------------------------------------------------------
+
+/// What Claude Code passes to the status line command on stdin.
+///
+/// A **different channel from the hooks**, and it carries two things the
+/// transcript does not have at all:
+///
+///  - `context_window.context_window_size` — the real window for this model
+///    *and this account*. Measured 2026-08-01: the same `claude-opus-5` runs at
+///    1M for one account and 200k for another, so it cannot be looked up from
+///    the model name, and a table that tried produced 24% where the truth was
+///    5%.
+///  - `rate_limits` — the subscriber's 5-hour and weekly usage. Nothing else
+///    aiterm can see reports these.
+///
+/// Only the fields we use are modelled; the payload has a dozen more. Parsed as
+/// defensively as the hook payload and for the same reason — it is written by
+/// another tool with no published schema, and a shape change must cost
+/// telemetry rather than the daemon.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StatusLinePayload {
+    pub session_id: Option<String>,
+    pub transcript_path: Option<String>,
+    pub cwd: Option<String>,
+    pub model: Option<StatusLineModel>,
+    pub context_window: Option<StatusLineContextWindow>,
+    pub rate_limits: Option<StatusLineRateLimits>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StatusLineModel {
+    pub id: Option<String>,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StatusLineContextWindow {
+    /// The authoritative window size. This is the whole reason the route exists.
+    pub context_window_size: Option<u64>,
+    pub total_input_tokens: Option<u64>,
+    pub total_output_tokens: Option<u64>,
+    pub used_percentage: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StatusLineRateLimits {
+    pub five_hour: Option<StatusLineWindow>,
+    pub seven_day: Option<StatusLineWindow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct StatusLineWindow {
+    pub used_percentage: Option<f64>,
+    /// Unix epoch seconds.
+    pub resets_at: Option<i64>,
+}

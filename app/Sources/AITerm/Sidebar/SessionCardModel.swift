@@ -39,6 +39,14 @@ struct SessionCard: Identifiable, Equatable {
     /// See `SessionUpdated.cumulativeTokensPartial`.
     var cumulativeTokensPartial: Bool?
 
+    /// Subscription limits. `nil` until the status line reports them, which it
+    /// only does for Claude.ai subscribers after the first API response — so
+    /// `nil` is the normal state early on and for API-key users.
+    var fiveHourLimitUsedPercent: Double?
+    var fiveHourLimitResetsAt: String?
+    var sevenDayLimitUsedPercent: Double?
+    var sevenDayLimitResetsAt: String?
+
     /// Set by `AppState` from the pending-HITL table, not by the daemon's
     /// `state` field. Both say the session is blocked; this one is the reason
     /// the card can also show *what* it is blocked on.
@@ -75,6 +83,10 @@ struct SessionCard: Identifiable, Equatable {
         cumulativeInputTokens = patch.cumulativeInputTokens.applied(to: cumulativeInputTokens)
         cumulativeOutputTokens = patch.cumulativeOutputTokens.applied(to: cumulativeOutputTokens)
         cumulativeTokensPartial = patch.cumulativeTokensPartial.applied(to: cumulativeTokensPartial)
+        fiveHourLimitUsedPercent = patch.fiveHourLimitUsedPercent.applied(to: fiveHourLimitUsedPercent)
+        fiveHourLimitResetsAt = patch.fiveHourLimitResetsAt.applied(to: fiveHourLimitResetsAt)
+        sevenDayLimitUsedPercent = patch.sevenDayLimitUsedPercent.applied(to: sevenDayLimitUsedPercent)
+        sevenDayLimitResetsAt = patch.sevenDayLimitResetsAt.applied(to: sevenDayLimitResetsAt)
     }
 }
 
@@ -189,6 +201,20 @@ enum Fmt {
         default:
             return prefix + String(format: "%.1fM", Double(value) / 1_000_000)
         }
+    }
+
+    /// `3h41m`, from an RFC 3339 instant. `nil` when it has passed or is
+    /// unreadable — a countdown that has run out is not a countdown.
+    static func countdown(to iso: String?, from now: Date = Date()) -> String? {
+        guard let iso else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        guard let date = formatter.date(from: iso) else { return nil }
+        let seconds = Int(date.timeIntervalSince(now))
+        guard seconds > 0 else { return nil }
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        return hours > 0 ? "\(hours)h\(minutes)m" : "\(minutes)m"
     }
 
     static func percent(_ fraction: Double?) -> String {

@@ -110,6 +110,14 @@ struct SessionUpdated: Equatable {
     /// card renders `~8k` when this is set, and that tilde is the only thing
     /// standing between the user and a total they would otherwise trust.
     let cumulativeTokensPartial: Patch<Bool>
+    /// The account's subscription limits, from Claude Code's status line
+    /// payload — a channel the transcript does not have. Flat rather than
+    /// nested so a sparse patch can move one of them without resending the
+    /// rest.
+    let fiveHourLimitUsedPercent: Patch<Double>
+    let fiveHourLimitResetsAt: Patch<String>
+    let sevenDayLimitUsedPercent: Patch<Double>
+    let sevenDayLimitResetsAt: Patch<String>
     let gitBranch: Patch<String>
     let lastAction: Patch<String>
     let lastEventAt: Patch<String>
@@ -245,6 +253,10 @@ enum DaemonMessageDecoder {
                 cumulativeInputTokens: Patch.decode(from: container, key: DynamicKey("cumulative_input_tokens")),
                 cumulativeOutputTokens: Patch.decode(from: container, key: DynamicKey("cumulative_output_tokens")),
                 cumulativeTokensPartial: Patch.decode(from: container, key: DynamicKey("cumulative_tokens_partial")),
+                fiveHourLimitUsedPercent: Patch.decode(from: container, key: DynamicKey("five_hour_limit_used_percent")),
+                fiveHourLimitResetsAt: Patch.decode(from: container, key: DynamicKey("five_hour_limit_resets_at")),
+                sevenDayLimitUsedPercent: Patch.decode(from: container, key: DynamicKey("seven_day_limit_used_percent")),
+                sevenDayLimitResetsAt: Patch.decode(from: container, key: DynamicKey("seven_day_limit_resets_at")),
                 gitBranch: Patch.decode(from: container, key: DynamicKey("git_branch")),
                 lastAction: Patch.decode(from: container, key: DynamicKey("last_action")),
                 lastEventAt: Patch.decode(from: container, key: DynamicKey("last_event_at")),

@@ -165,8 +165,7 @@ impl Hub {
             // render as an empty path rather than as unknown.
             cwd: session.cwd.clone(),
             title: session.title.clone(),
-            // TODO(track-C): model comes from the transcript crate in Wave 2.
-            model: None,
+            model: session.model.clone(),
             started_at: wire::timestamp(session.created_at),
         })
     }
@@ -218,6 +217,101 @@ impl Hub {
         outcome
     }
 
+    /// Fold a status line payload into a session and publish what changed.
+    ///
+    /// The status line fires on every frame of the agent's UI, so this is on a
+    /// hot path and does almost nothing: it compares each field against what
+    /// the app was last told and broadcasts only differences. A payload that
+    /// changed nothing — the overwhelmingly common case — produces no message.
+    pub fn observe_statusline(
+        &self,
+        session_id: &str,
+        payload: &crate::http::StatusLinePayload,
+        now: chrono::DateTime<Utc>,
+    ) -> bool {
+        let patch = {
+            let mut registry = self.lock();
+            // Only sessions we already know. The status line is not a
+            // registration channel: a session aiterm has not seen through a
+            // hook has no tab binding and no lifecycle, and inventing one here
+            // would put a card on screen that the hooks never announced.
+            let Some(session) = registry.session_mut(session_id) else {
+                return false;
+            };
+
+            let mut patch = SessionUpdated::new(session_id, now);
+            let mut anything = false;
+
+            if let Some(window) = &payload.context_window {
+                // The authoritative window size, which is the reason this
+                // channel exists at all.
+                if let Some(size) = window.context_window_size {
+                    if session.tokens.context_window_size_tokens != Some(size) {
+                        session.tokens.context_window_size_tokens = Some(size);
+                        patch.context_window_size_tokens = Some(Some(size));
+                        anything = true;
+                    }
+                }
+            }
+
+            if let Some(model) = payload.model.as_ref().and_then(|m| m.id.as_deref()) {
+                if !model.is_empty() && session.model.as_deref() != Some(model) {
+                    session.model = Some(model.to_string());
+                    patch.model = Some(Some(model.to_string()));
+                    anything = true;
+                }
+            }
+
+            if let Some(limits) = &payload.rate_limits {
+                macro_rules! copy_limit {
+                    ($src:ident, $pct:ident, $at:ident, $patch_pct:ident, $patch_at:ident) => {
+                        if let Some(window) = &limits.$src {
+                            if let Some(pct) = window.used_percentage {
+                                if session.limits.$pct != Some(pct) {
+                                    session.limits.$pct = Some(pct);
+                                    patch.$patch_pct = Some(Some(pct));
+                                    anything = true;
+                                }
+                            }
+                            if let Some(at) = window.resets_at {
+                                if session.limits.$at != Some(at) {
+                                    session.limits.$at = Some(at);
+                                    patch.$patch_at = Some(Some(wire::timestamp(
+                                        chrono::DateTime::from_timestamp(at, 0)
+                                            .unwrap_or_else(Utc::now),
+                                    )));
+                                    anything = true;
+                                }
+                            }
+                        }
+                    };
+                }
+                copy_limit!(
+                    five_hour,
+                    five_hour_used_percent,
+                    five_hour_resets_at,
+                    five_hour_limit_used_percent,
+                    five_hour_limit_resets_at
+                );
+                copy_limit!(
+                    seven_day,
+                    seven_day_used_percent,
+                    seven_day_resets_at,
+                    seven_day_limit_used_percent,
+                    seven_day_limit_resets_at
+                );
+            }
+
+            if !anything {
+                return false;
+            }
+            patch
+        };
+
+        self.broadcast(&DaemonToApp::SessionUpdated(patch));
+        true
+    }
+
     /// The `hitl_pending` message for a request as it stands.
     fn hitl_pending(request: &HitlRequest) -> DaemonToApp {
         DaemonToApp::HitlPending(HitlPending {
@@ -244,12 +338,78 @@ impl Hub {
     /// Sessions come first on purpose: a `hitl_pending` names a `session_id`,
     /// and a client that builds cards in arrival order should never meet a
     /// permission request for a session it has not been told about.
+    /// Everything known about one session that `session_registered` cannot say.
+    ///
+    /// `session_registered` carries identity, not telemetry — the token
+    /// numbers, the limits and the last action have no field there. Without
+    /// this, a client that reconnects gets its cards back **blank** and stays
+    /// blank until each session happens to move, which for an idle session is
+    /// never. Replaying an ordinary `session_updated` is exactly what the
+    /// protocol's "the snapshot is just ordinary messages" rule is for.
+    fn session_telemetry(session: &Session, now: chrono::DateTime<Utc>) -> Option<DaemonToApp> {
+        let mut patch = SessionUpdated::new(&session.session_id, now);
+
+        patch.state = session.state().wire_state().map(str::to_string);
+        if session.tokens.cumulative_input_tokens.is_some() {
+            patch.cumulative_input_tokens = Some(session.tokens.cumulative_input_tokens);
+        }
+        if session.tokens.cumulative_output_tokens.is_some() {
+            patch.cumulative_output_tokens = Some(session.tokens.cumulative_output_tokens);
+        }
+        if session.tokens.context_window_used_tokens.is_some() {
+            patch.context_window_used_tokens = Some(session.tokens.context_window_used_tokens);
+        }
+        if session.tokens.context_window_size_tokens.is_some() {
+            patch.context_window_size_tokens = Some(session.tokens.context_window_size_tokens);
+        }
+        if session.tokens.cumulative_tokens_partial.is_some() {
+            patch.cumulative_tokens_partial = Some(session.tokens.cumulative_tokens_partial);
+        }
+        if session.limits.five_hour_used_percent.is_some() {
+            patch.five_hour_limit_used_percent = Some(session.limits.five_hour_used_percent);
+        }
+        if session.limits.seven_day_used_percent.is_some() {
+            patch.seven_day_limit_used_percent = Some(session.limits.seven_day_used_percent);
+        }
+        if let Some(at) = session.limits.five_hour_resets_at {
+            patch.five_hour_limit_resets_at = Some(Some(wire::timestamp(
+                chrono::DateTime::from_timestamp(at, 0).unwrap_or(now),
+            )));
+        }
+        if let Some(at) = session.limits.seven_day_resets_at {
+            patch.seven_day_limit_resets_at = Some(Some(wire::timestamp(
+                chrono::DateTime::from_timestamp(at, 0).unwrap_or(now),
+            )));
+        }
+        if session.last_action.is_some() {
+            patch.last_action = Some(session.last_action.clone());
+        }
+        if session.git_branch.is_some() {
+            patch.git_branch = Some(session.git_branch.clone());
+        }
+        patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
+
+        (!patch.is_empty()).then_some(DaemonToApp::SessionUpdated(patch))
+    }
+
     fn snapshot(&self) -> Vec<DaemonToApp> {
-        let mut out: Vec<DaemonToApp> = self
-            .lock()
-            .live_sessions()
-            .map(Self::session_registered)
-            .collect();
+        let now = Utc::now();
+
+        // Each session is announced, then filled in. `session_registered`
+        // carries identity only — the telemetry has no field there — so a
+        // client reconnecting would otherwise get blank cards that stay blank
+        // until each session next moves, which for an idle one is never.
+        let mut out: Vec<DaemonToApp> = Vec::new();
+        {
+            let registry = self.lock();
+            for session in registry.live_sessions() {
+                out.push(Self::session_registered(session));
+                if let Some(telemetry) = Self::session_telemetry(session, now) {
+                    out.push(telemetry);
+                }
+            }
+        }
+
         out.extend(self.lock_hitl().pending().map(Self::hitl_pending));
         out
     }

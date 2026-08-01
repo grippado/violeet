@@ -33,7 +33,8 @@ pub type Patch<T> = Option<Option<T>>;
 // ---------------------------------------------------------------------------
 
 /// Everything the daemon can say to a client.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+// `PartialEq` without `Eq`, because `SessionUpdated` carries `f64` percentages.
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DaemonToApp {
     SessionRegistered(SessionRegistered),
@@ -78,7 +79,10 @@ pub struct SessionRegistered {
     pub started_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+// No `Eq`: the rate-limit percentages are `f64`, which has no total equality.
+// `PartialEq` is all this type ever needed — it is compared in tests, never used
+// as a map key.
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
 pub struct SessionUpdated {
     pub v: u32,
     pub ts: String,
@@ -117,6 +121,20 @@ pub struct SessionUpdated {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cumulative_tokens_partial: Patch<bool>,
 
+    // The account's subscription limits, from the status line payload. Four
+    // flat fields rather than a nested object because this is a sparse patch:
+    // "the 5-hour percentage changed" and "the whole rate-limit block became
+    // unknown" are different messages, and a nested object cannot express the
+    // first without resending the second.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub five_hour_limit_used_percent: Patch<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub five_hour_limit_resets_at: Patch<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seven_day_limit_used_percent: Patch<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seven_day_limit_resets_at: Patch<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_branch: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,6 +170,10 @@ impl SessionUpdated {
             && self.cumulative_input_tokens.is_none()
             && self.cumulative_output_tokens.is_none()
             && self.cumulative_tokens_partial.is_none()
+            && self.five_hour_limit_used_percent.is_none()
+            && self.five_hour_limit_resets_at.is_none()
+            && self.seven_day_limit_used_percent.is_none()
+            && self.seven_day_limit_resets_at.is_none()
             && self.git_branch.is_none()
             && self.last_action.is_none()
             && self.last_event_at.is_none()

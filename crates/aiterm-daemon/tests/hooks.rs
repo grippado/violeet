@@ -797,13 +797,32 @@ async fn a_late_client_sees_pending_requests_in_its_snapshot() {
     app.send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
         .await;
 
-    let first = app.next().await;
-    assert_eq!(
-        first["type"], "session_registered",
+    // Drain until the pending request arrives, remembering what came before it.
+    //
+    // Asserted by ordering rather than by index: the snapshot also replays a
+    // `session_updated` per session to restore telemetry that
+    // `session_registered` has no fields for, and a positional assertion would
+    // break every time the snapshot gains a message. What the protocol
+    // actually promises is that a client never meets a `hitl_pending` for a
+    // session it has not been told about.
+    let mut seen_registration = false;
+    let mut hitl = None;
+    for _ in 0..8 {
+        let message = app.next().await;
+        match message["type"].as_str() {
+            Some("session_registered") => seen_registration = true,
+            Some("hitl_pending") => {
+                hitl = Some(message);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let hitl = hitl.expect("the pending request must be replayed");
+    assert!(
+        seen_registration,
         "sessions replay before the requests that reference them"
     );
-
-    let second = app.next().await;
-    assert_eq!(second["type"], "hitl_pending");
-    assert_eq!(second["session_id"], "s1");
+    assert_eq!(hitl["session_id"], "s1");
 }

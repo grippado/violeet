@@ -141,6 +141,33 @@ impl Default for TokenTelemetry {
     }
 }
 
+/// The account's usage limits, as reported by Claude Code.
+///
+/// Not in the transcript and not derivable from it: these arrive in the status
+/// line payload's `rate_limits`, which is a different channel entirely. Every
+/// field stays `None` until one is seen, and `None` means unknown — a limit at
+/// 0% and a limit we have not been told about are different facts.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RateLimits {
+    /// 0–100.
+    pub five_hour_used_percent: Option<f64>,
+    /// Unix epoch seconds when the 5-hour window resets.
+    pub five_hour_resets_at: Option<i64>,
+    pub seven_day_used_percent: Option<f64>,
+    pub seven_day_resets_at: Option<i64>,
+}
+
+impl RateLimits {
+    pub const fn unknown() -> Self {
+        Self {
+            five_hour_used_percent: None,
+            five_hour_resets_at: None,
+            seven_day_used_percent: None,
+            seven_day_resets_at: None,
+        }
+    }
+}
+
 /// Where a session's title came from. A user-set title is never overwritten by
 /// a derived one (`docs/PROTOCOL.md`, `rename_session`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +201,10 @@ pub struct Session {
     /// The last tool the agent invoked, with a short summary of its input.
     /// Also from the transcript.
     pub last_action: Option<String>,
+    /// Subscription limits, from the status line payload. `None` until one
+    /// arrives — and it only arrives for Claude.ai subscribers, after the
+    /// session's first API response, so `None` is the normal early state.
+    pub limits: RateLimits,
     pub created_at: DateTime<Utc>,
     pub last_event_at: DateTime<Utc>,
     /// Filled by `aiterm-transcript` via `crate::transcript`. Every field stays
@@ -201,6 +232,7 @@ impl Session {
             title_source: TitleSource::None,
             model: None,
             last_action: None,
+            limits: RateLimits::unknown(),
             created_at: now,
             last_event_at: now,
             tokens: TokenTelemetry::unknown(),

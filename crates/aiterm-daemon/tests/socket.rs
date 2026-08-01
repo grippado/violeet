@@ -191,8 +191,17 @@ async fn a_snapshot_omits_sessions_that_already_ended() {
         .send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
         .await;
 
-    let msg = client.next().await;
-    assert_eq!(msg["session_id"], "alive");
+    // The live session replays twice — a registration, then a telemetry patch
+    // restoring state, which `session_registered` has no field for. The dead
+    // one replays not at all, which is what this test is about.
+    let registered = client.next().await;
+    assert_eq!(registered["type"], "session_registered");
+    assert_eq!(registered["session_id"], "alive");
+
+    let telemetry = client.next().await;
+    assert_eq!(telemetry["type"], "session_updated");
+    assert_eq!(telemetry["session_id"], "alive");
+
     client.expect_silence().await;
 }
 
@@ -369,11 +378,14 @@ async fn many_clients_and_many_sessions_stay_coherent() {
             .send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
             .await;
 
+        // Each session replays as a registration followed by a telemetry
+        // patch, so the registrations are collected rather than counted.
         let mut seen = Vec::new();
-        for _ in 0..12 {
+        while seen.len() < 12 {
             let msg = client.next().await;
-            assert_eq!(msg["type"], "session_registered");
-            seen.push(msg["session_id"].as_str().unwrap().to_string());
+            if msg["type"] == "session_registered" {
+                seen.push(msg["session_id"].as_str().unwrap().to_string());
+            }
         }
         seen.sort();
         let expected: Vec<String> = (0..12).map(|i| format!("s{i:02}")).collect();

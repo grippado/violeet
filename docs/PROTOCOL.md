@@ -165,6 +165,10 @@ An explicit `null` means *became unknown*.
 | `cumulative_input_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
 | `cumulative_output_tokens` | integer \| null | Monotonic, for cost. Never decreases. |
 | `cumulative_tokens_partial` | boolean \| null | `true` when the cumulative pair counts only part of the session. See below. |
+| `five_hour_limit_used_percent` | number \| null | 0–100. The Claude.ai subscription's 5-hour window. |
+| `five_hour_limit_resets_at` | string \| null | RFC 3339, when that window resets. |
+| `seven_day_limit_used_percent` | number \| null | 0–100. The weekly window. |
+| `seven_day_limit_resets_at` | string \| null | RFC 3339. |
 | `git_branch` | string \| null | Display data for the sidebar. |
 | `last_action` | string \| null | |
 | `last_event_at` | string \| null | When the *session* last did something, as distinct from the envelope's `ts`, which is when the daemon emitted this message. |
@@ -191,6 +195,22 @@ missing, and more dangerous than one that is obviously absent.
 Added in document revision 3. It is an addition, so the wire `v` stays `1`:
 a client that does not know the field ignores it, which is exactly what the
 "receivers must ignore unknown fields" rule is for.
+
+**The rate-limit fields come from a different channel entirely.** They are not
+in the transcript and not in any hook: Claude Code reports them, along with the
+real `context_window_size`, only to the **status line** command. `aiterm
+install-statusline` wraps whatever status line the user already has, forwards a
+copy of that payload to the daemon, and runs the original unchanged — so the
+user's prompt looks identical and the daemon gains two numbers it otherwise
+cannot see.
+
+They are four flat fields rather than one nested object because this is a sparse
+patch: "the 5-hour percentage moved" and "the whole rate-limit block became
+unknown" are different messages, and a nested object cannot express the first
+without resending the second. Absent for anyone not on a Claude.ai
+subscription, and absent until the session's first API response.
+
+Added in document revision 3. Wire `v` stays `1`.
 
 **The four token fields are four numbers, not two pairs of synonyms.** The first
 pair describes how full the window is right now; the second describes what the

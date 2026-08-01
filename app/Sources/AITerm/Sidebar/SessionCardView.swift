@@ -95,6 +95,11 @@ struct SessionCardView: View {
             titleRow
             pillRow
             contextRow
+            // Only when the account actually reports limits. An API-key user
+            // has none, and an empty row would read as "0% used".
+            if card.fiveHourLimitUsedPercent != nil || card.sevenDayLimitUsedPercent != nil {
+                limitsRow
+            }
             tokenRow
             if let action = card.lastAction, !action.isEmpty {
                 // The path is the informative end, so the middle is what goes.
@@ -236,6 +241,43 @@ struct SessionCardView: View {
 
         This is not your plan's usage limit; aiterm does not have that number.
         """
+    }
+
+    // MARK: Subscription limits
+
+    /// The 5-hour and weekly usage, when the account has them.
+    ///
+    /// A different quantity from the context gauge above, and the reason both
+    /// are labelled: shipped unlabelled, the context bar was read as this one.
+    /// These come from the status line payload, which is the only place Claude
+    /// Code reports them.
+    private var limitsRow: some View {
+        HStack(spacing: 10) {
+            limitStat("5h", card.fiveHourLimitUsedPercent, card.fiveHourLimitResetsAt)
+            limitStat("7d", card.sevenDayLimitUsedPercent, card.sevenDayLimitResetsAt)
+            Spacer(minLength: 0)
+        }
+        .help("Your Claude subscription's usage limits, and when each window resets.")
+    }
+
+    private func limitStat(_ label: String, _ percent: Double?, _ resetsAt: String?) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(percent.map { String(format: "%.0f%%", $0) } ?? Fmt.unknown)
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                // Uses the same ramp as the context gauge, because "how full is
+                // this thing" is the same question with the same answer colours.
+                .foregroundStyle(percent.map {
+                    CardTheme.gaugeColor(fraction: $0 / 100, threshold: compactionThreshold)
+                } ?? .secondary)
+            if let countdown = Fmt.countdown(to: resetsAt) {
+                Text(countdown)
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
     }
 
     // MARK: Tokens
