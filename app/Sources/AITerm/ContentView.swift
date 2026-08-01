@@ -78,21 +78,35 @@ struct ContentView: View {
         .background(WindowConfigurator(settings: preferences.terminal))
     }
 
+    /// The terminal's background, carrying the window's alpha when translucent.
+    private var terminalBackground: NSColor {
+        let base = preferences.terminal.appearance.background.nsColor
+        guard preferences.terminal.window.isTranslucent else { return base }
+        return base.withAlphaComponent(preferences.terminal.window.opacity)
+    }
+
     private var terminals: some View {
         ZStack {
-            // The window's own background, so the gap below the last row of
-            // cells is the terminal's colour and not the sidebar material.
+            // A background, **always**, carrying the same alpha the terminal
+            // itself uses.
             //
-            // Not painted when the window is translucent: a filled rectangle
-            // behind the terminal is exactly what would make the translucency
-            // invisible, and this is the layer people forget.
-            if preferences.terminal.window.isTranslucent {
-                if preferences.terminal.window.blur {
-                    WindowBackdrop(material: .hudWindow)
-                }
-            } else {
-                Color(nsColor: preferences.terminal.appearance.background.nsColor)
+            // It was skipped when translucent, on the theory that a filled
+            // rectangle behind the terminal would hide what was behind the
+            // window. That was wrong twice over. The colour is translucent too,
+            // so it hides nothing — and removing it took away the only child of
+            // this `ZStack` that expands, which left the terminal at its
+            // intrinsic size inside a stack stretched to fill. The gap that
+            // opened beside it was reported as a seam, and the clue that solved
+            // it was that it existed at 99% opacity and vanished at 100%.
+            //
+            // It also matters for the honest reason it was added: a character
+            // grid is a whole number of cells, so the last row and column never
+            // land exactly on the edge, and those few points have to be the
+            // terminal's colour rather than whatever is behind.
+            if preferences.terminal.window.isTranslucent, preferences.terminal.window.blur {
+                WindowBackdrop(material: .hudWindow)
             }
+            Color(nsColor: terminalBackground)
 
             ForEach(state.tabs) { tab in
                 let isSelected = tab.tabID == state.selectedTabID
