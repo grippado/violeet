@@ -188,9 +188,23 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         // assignment. Setting only the property leaves an opaque layer filling
         // the view behind everything drawn on it — the terminal composites
         // correctly onto a backdrop nobody can see.
+        // When translucent, the terminal paints **no** background of its own
+        // and `ContentView` paints the only one.
+        //
+        // Both painting it composites the same colour twice, and two layers at
+        // 85% come out at 97.75% while the padding and the seam beside the
+        // panel — which have one layer — stay at 85%. That difference is
+        // invisible at 99% and obvious below 95%, which is exactly how it was
+        // reported.
+        //
+        // The alpha is set to zero rather than using `NSColor.clear`, because
+        // SwiftTerm forwards this colour to the emulator as *the* background
+        // colour and uses it to reason about contrast. `.clear` would tell it
+        // the background is black, which is wrong for a light theme; a
+        // zero-alpha theme colour keeps the right answer to "what colour is
+        // behind this text" while painting nothing.
         let background = settings.window.isTranslucent
-            ? settings.appearance.background.nsColor
-                .withAlphaComponent(settings.window.opacity)
+            ? settings.appearance.background.nsColor.withAlphaComponent(0)
             : settings.appearance.background.nsColor
 
         view.nativeBackgroundColor = background
