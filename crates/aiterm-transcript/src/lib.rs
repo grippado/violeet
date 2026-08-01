@@ -35,7 +35,9 @@ pub mod watch;
 
 pub use claude_code::ClaudeCodeReader;
 pub use tail::{Cursor, TailError};
-pub use watch::{watch, watch_shared, TranscriptSession, Update, WatchError, WatchHandle};
+pub use watch::{
+    watch, watch_shared, SharedWatch, TranscriptSession, Update, WatchError, WatchHandle,
+};
 
 // ---------------------------------------------------------------------------
 // Events
@@ -246,10 +248,14 @@ impl Telemetry {
                 if let Some(prompt) = turn.usage.prompt_tokens() {
                     self.context_window_used_tokens = Some(prompt);
                 }
-                self.context_window_size_tokens = self
-                    .model
-                    .as_deref()
-                    .and_then(window_size_for_model);
+                // Only ever *fills in* a size, never clears one. The
+                // authoritative value arrives from outside this crate (the
+                // status line payload), and a turn that says nothing about the
+                // window must not erase what something better already told us.
+                if self.context_window_size_tokens.is_none() {
+                    self.context_window_size_tokens =
+                        self.model.as_deref().and_then(window_size_for_model);
+                }
 
                 // Cost: a sum, and the one place double counting is possible.
                 // Every line of a multi-block reply repeats the same usage, so
@@ -355,29 +361,32 @@ fn add_into(slot: &mut Option<u64>, delta: Option<u64>) {
 
 /// Context window size for a model name.
 ///
-/// **This table is not measured and it will age.** No transcript field carries
-/// the window size — every file under `~/.claude/projects` was searched for one
-/// and there is none. So this is external knowledge encoded in a lookup, which
-/// is the kind of thing that is quietly wrong six months from now.
+/// **Always `None`, deliberately.** This function is kept as the one place the
+/// question is asked, and its answer is that it cannot be answered here.
 ///
-/// It is a function rather than a constant map so a caller can ignore it and
-/// supply their own. Unknown models return `None`, and `None` is honest: a
-/// wrong window size produces a wrong percentage, and a wrong percentage is
-/// worse than a missing one because it looks like an answer.
+/// It used to be a lookup table: `opus`/`sonnet` → 200k, a `[1m]` suffix → 1M.
+/// That was wrong the day it shipped. A real session was measured running
+/// `claude-opus-5` — no suffix — against a **one-million** token window, while
+/// the table said 200k. The card read 24% where the agent's own status line
+/// read 5%.
 ///
-/// The `[1m]` suffix on a model id denotes the one-million-token variant. A
-/// real session was measured holding 662536 tokens of occupancy, which is by
-/// itself proof that assuming 200000 everywhere is wrong.
-pub fn window_size_for_model(model: &str) -> Option<u64> {
-    const K: u64 = 1000;
-    let m = model.to_ascii_lowercase();
-
-    if m.contains("[1m]") || m.contains("-1m") {
-        return Some(1000 * K);
-    }
-    if m.contains("opus") || m.contains("sonnet") || m.contains("haiku") || m.contains("fable") {
-        return Some(200 * K);
-    }
+/// The reason is structural, not a missing entry: **the window is a property of
+/// the account and the model together, not of the model name.** The same
+/// `claude-opus-5` is 200k for one user and 1M for another depending on what
+/// their plan enables. No table keyed on the name can be right for everyone,
+/// and a table that is right for the author is the most dangerous kind, because
+/// it looks correct in every test they run.
+///
+/// The authoritative source exists: Claude Code passes `context_window_size` to
+/// the status line command on stdin, alongside `used_percentage` and the
+/// account's rate limits. Wiring that up is a separate piece of work —
+/// installing a status line means wrapping whatever the user already has.
+/// Until then the size is genuinely unknown, the gauge renders indeterminate,
+/// and `aiterm doctor` says which models are affected.
+///
+/// Returning `None` costs the gauge. Returning a plausible wrong number costs
+/// the user's trust in every number on the card, which is worth more.
+pub fn window_size_for_model(_model: &str) -> Option<u64> {
     None
 }
 
@@ -571,11 +580,23 @@ mod tests {
         );
     }
 
+    /// The threshold logic, given a window size from somewhere.
+    ///
+    /// Set by hand, because `window_size_for_model` no longer invents one — the
+    /// size has to arrive from the status line payload, and until it does the
+    /// signal is `None` rather than a guess. The arithmetic still has to be
+    /// right for when it does arrive.
     #[test]
-    fn the_imminent_signal_fires_at_the_threshold() {
+    fn the_imminent_signal_fires_at_the_threshold_once_a_size_is_known() {
         let mut t = Telemetry::new();
         t.apply(&turn("m1", 170_000, 0, 10));
-        assert_eq!(t.context_window_size_tokens, Some(200_000));
+        assert_eq!(
+            t.context_window_size_tokens, None,
+            "nothing has told us the window size yet"
+        );
+        assert_eq!(t.compaction_imminent(0.85), None);
+
+        t.context_window_size_tokens = Some(200_000);
         // 170000 / 200000 is exactly the default threshold, and the comparison
         // is `>=`, so the boundary itself fires.
         assert_eq!(t.compaction_imminent(0.85), Some(true));
@@ -607,10 +628,21 @@ mod tests {
         );
     }
 
+    /// The window size is not derivable from the model name, and this asserts
+    /// that we no longer pretend otherwise.
+    ///
+    /// Guards a regression that already happened once: a table said
+    /// `claude-opus-5` was 200k, a real session ran it at 1M, and the card
+    /// reported 24% where the truth was 5%. The same name means different
+    /// windows for different accounts.
     #[test]
-    fn the_one_million_variant_is_recognized() {
-        assert_eq!(window_size_for_model("claude-opus-5[1m]"), Some(1_000_000));
-        assert_eq!(window_size_for_model("claude-sonnet-5"), Some(200_000));
-        assert_eq!(window_size_for_model("gpt-something"), None);
+    fn the_window_size_is_never_guessed_from_the_model_name() {
+        for model in ["claude-opus-5", "claude-opus-5[1m]", "claude-sonnet-5", "anything"] {
+            assert_eq!(
+                window_size_for_model(model),
+                None,
+                "{model}: a guessed window produces a plausible, wrong percentage"
+            );
+        }
     }
 }

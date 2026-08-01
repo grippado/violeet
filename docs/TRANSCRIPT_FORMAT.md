@@ -193,22 +193,55 @@ degrades rather than breaking.
 
 Gaps. Named rather than guessed at.
 
-### Context window size is not in the file
+### Context window size is not in the file — and not in the model name either
 
 **There is no field carrying it.** Every file under `~/.claude/projects` was
 searched for a window, limit or max-tokens key and there is none — the only
 matches for "window" were an unrelated browser tool named `resize_window`.
 
-So `context_window_size_tokens` cannot be measured from a transcript. The
-implementation fills it from a lookup table keyed on model name
-(`window_size_for_model`), which is **external knowledge that will age**.
-Unknown models return `None`, and `None` is deliberate: a wrong window size
-produces a wrong percentage, and a wrong percentage is worse than a missing one
-because it looks like an answer.
+The first implementation filled it from a lookup table keyed on model name, and
+**that was wrong the day it shipped.** Measured 2026-08-01: a live session on
+`claude-opus-5` — no suffix, nothing unusual about the id — ran against a
+**one-million** token window while the table said 200,000. The card showed 24%
+where Claude Code's own status line showed 5%. The occupancy reading was
+correct; only the divisor was invented.
 
-That a 1M-token variant exists is not speculation — an occupancy of 662,536 was
-measured, which is by itself proof that assuming 200,000 everywhere is wrong.
-But the exact size for any given model id is not established here.
+The failure is structural rather than a missing entry. **The window is a
+property of the account and the model together.** The same model id is 200k for
+one user and 1M for another depending on what their plan enables, so no table
+keyed on the name is right for everyone — and one that is right for its author
+is the most dangerous kind, because it passes every test they run.
+
+`window_size_for_model` therefore returns `None` unconditionally now, and is
+kept only as the place where the question is asked and answered. The gauge
+renders indeterminate, `aiterm doctor` names the affected sessions, and the
+percentage is absent rather than wrong.
+
+**The authoritative source exists, outside the transcript.** Claude Code passes
+it to the status line command on stdin (documented in the binary, extracted
+2026-08-01):
+
+```
+"context_window": {
+  "total_input_tokens": number,
+  "total_output_tokens": number,
+  "context_window_size": number,   // the real window for this model+account
+  "current_usage": { "input_tokens", "output_tokens",
+                     "cache_creation_input_tokens", "cache_read_input_tokens" } | null,
+  "used_percentage": number | null,
+  "remaining_percentage": number | null
+},
+"rate_limits": {                   // Claude.ai subscribers, after first response
+  "five_hour": { "used_percentage": number, "resets_at": number },
+  "seven_day": { "used_percentage": number, "resets_at": number }
+}
+```
+
+Reading it means installing a status line command, which means wrapping whatever
+the user already has — the same absorb-or-replace problem `install-hooks` solves
+for `PermissionRequest`. Not done; it is the obvious next piece of work, and it
+would also deliver the 5-hour and weekly usage limits, which are likewise
+absent from the transcript.
 
 ### There is no pending-permission signal
 

@@ -153,7 +153,11 @@ pub fn watch(
     watch_shared(path, reader, from_end).map(|(handle, rx, _)| (handle, rx))
 }
 
-/// Same, but also hands back the session so the caller can read it directly.
+/// What `watch_shared` returns: the handle, the update stream, and the session.
+pub type SharedWatch = (WatchHandle, Receiver<Update>, Arc<Mutex<TranscriptSession>>);
+
+/// Same as [`watch`], but also hands back the session so the caller can read it
+/// directly.
 ///
 /// The caller needs this to **flush before dropping the watch**. A session's
 /// last lines are written after its `SessionEnd` hook fires, so a daemon that
@@ -164,7 +168,7 @@ pub fn watch_shared(
     path: impl Into<PathBuf>,
     reader: Box<dyn TranscriptReader>,
     from_end: bool,
-) -> Result<(WatchHandle, Receiver<Update>, Arc<Mutex<TranscriptSession>>), WatchError> {
+) -> Result<SharedWatch, WatchError> {
     let path = path.into();
 
     let session = if from_end {

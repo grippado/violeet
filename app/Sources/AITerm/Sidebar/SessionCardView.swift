@@ -1,8 +1,15 @@
 // One session card.
 //
-// Dense on purpose: five rows in about 78pt, so six agents fit on a laptop
-// sidebar without scrolling. This is a board somebody glances at for hours
-// while working on something else, not a dashboard they open.
+// Dense, but labelled. Five rows in about 92pt, so six agents still fit on a
+// laptop sidebar without scrolling.
+//
+// The first version was denser and got the density wrong: 9pt type and bare
+// arrows, no word saying what any number measured. The first question it drew
+// was whether the context bar was the plan's 5-hour usage limit — a different
+// quantity, from a source aiterm does not have. Unlabelled numbers do not read
+// as terse, they read as someone else's dashboard. Every figure here now says
+// what it is; the three points of height that cost is the cheapest thing on
+// the card.
 //
 // # The one thing that has to work without being looked at
 //
@@ -84,17 +91,19 @@ struct SessionCardView: View {
     // MARK: Content
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             titleRow
             pillRow
             contextRow
             tokenRow
             if let action = card.lastAction, !action.isEmpty {
+                // The path is the informative end, so the middle is what goes.
                 Text(action)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .help(action)
             }
         }
         .padding(.horizontal, 8)
@@ -105,14 +114,14 @@ struct SessionCardView: View {
     private var titleRow: some View {
         HStack(spacing: 5) {
             Text(card.displayTitle)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
 
             if let branch = card.gitBranch, !branch.isEmpty {
                 Label(branch, systemImage: "arrow.triangle.branch")
                     .labelStyle(.titleAndIcon)
-                    .font(.system(size: 9))
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -123,7 +132,7 @@ struct SessionCardView: View {
 
     private var stateBadge: some View {
         Text(card.lifecycle.label)
-            .font(.system(size: 9, weight: waiting ? .bold : .regular))
+            .font(.system(size: 10, weight: waiting ? .bold : .medium))
             .foregroundStyle(waiting ? CardTheme.attention : .secondary)
             .lineLimit(1)
             .fixedSize()
@@ -142,9 +151,9 @@ struct SessionCardView: View {
 
     private func pill(_ text: String, border: Color) -> some View {
         Text(text)
-            .font(.system(size: 9, weight: .medium))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1.5)
             .overlay(
                 RoundedRectangle(cornerRadius: 3)
                     .strokeBorder(border, lineWidth: 1)
@@ -154,31 +163,82 @@ struct SessionCardView: View {
 
     // MARK: Context gauge
 
+    /// The context gauge, labelled.
+    ///
+    /// The label is not decoration. Shipped without one, the first question it
+    /// got was "is that my 5-hour session?" — which is a different quantity
+    /// entirely, from a source aiterm does not even have. A bar with a
+    /// percentage beside it does not say what it measures, and the reader fills
+    /// that in with whatever percentage they have been trained to look for.
+    ///
+    /// The absolute pair earns its place too: `28%` alone cannot distinguish a
+    /// small window nearly full from a large one barely touched, and those call
+    /// for opposite reactions.
     private var contextRow: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
+            Text("ctx")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, alignment: .leading)
+
             ContextGauge(
                 fraction: card.contextFraction,
                 threshold: compactionThreshold
             )
-            Text(Fmt.percent(card.contextFraction))
-                .font(.system(size: 9).monospacedDigit())
-                .foregroundStyle(card.contextFraction == nil ? .secondary : .primary)
-                .frame(width: 30, alignment: .trailing)
+
+            Text(contextReadout)
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(contextTint)
+                .lineLimit(1)
+                .fixedSize()
         }
+        .help(contextHelp)
+    }
+
+    /// `28% · 56k/200k`, or a dash when the window is unknown.
+    private var contextReadout: String {
+        guard let used = card.contextUsedTokens, let size = card.contextSizeTokens else {
+            return Fmt.unknown
+        }
+        return "\(Fmt.percent(card.contextFraction)) · \(Fmt.tokens(used))/\(Fmt.tokens(size))"
+    }
+
+    private var contextTint: Color {
+        guard let fraction = card.contextFraction else { return .secondary }
+        return fraction >= compactionThreshold ? CardTheme.gaugeColor(
+            fraction: fraction, threshold: compactionThreshold
+        ) : .primary
+    }
+
+    private var contextHelp: String {
+        guard card.contextFraction != nil else {
+            return "Context window size unknown for this model, so the fill cannot be computed."
+        }
+        return """
+        How full the model's context window is — the conversation it can still \
+        see. Falls when the context is compacted.
+
+        This is not your plan's usage limit; aiterm does not have that number.
+        """
     }
 
     // MARK: Tokens
 
+    /// Cumulative tokens, labelled `in` and `out`.
+    ///
+    /// Arrows alone were not enough: `↑ 12  ↓ 1.7k` reads as two anonymous
+    /// numbers, and the first thing asked about it was what it meant. The word
+    /// costs four points of width and removes the question.
     private var tokenRow: some View {
         let partial = card.cumulativeTokensPartial == true
-        return HStack(spacing: 8) {
+        return HStack(spacing: 10) {
             tokenStat(
-                "↑",
+                "in", "↑",
                 Fmt.tokens(card.cumulativeInputTokens, partial: partial),
                 CardTheme.tokenIn
             )
             tokenStat(
-                "↓",
+                "out", "↓",
                 Fmt.tokens(card.cumulativeOutputTokens, partial: partial),
                 CardTheme.tokenOut
             )
@@ -186,14 +246,17 @@ struct SessionCardView: View {
         }
         // The tilde is easy to miss and the tooltip is where "why" lives.
         .help(partial
-            ? "Counted from when aiterm started watching this session, not from its start."
-            : "Total for this session.")
+            ? "Tokens this session has spent, counted from when aiterm started watching it — not from its start, so the real total is higher."
+            : "Tokens this session has spent, in total.")
     }
 
-    private func tokenStat(_ arrow: String, _ value: String, _ color: Color) -> some View {
-        HStack(spacing: 2) {
-            Text(arrow).font(.system(size: 9, weight: .bold)).foregroundStyle(color)
-            Text(value).font(.system(size: 9).monospacedDigit()).foregroundStyle(.secondary)
+    private func tokenStat(_ label: String, _ arrow: String, _ value: String, _ color: Color) -> some View {
+        HStack(spacing: 3) {
+            Text(arrow).font(.system(size: 10, weight: .bold)).foregroundStyle(color)
+            Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(.primary)
         }
     }
 
@@ -259,7 +322,7 @@ private struct ContextGauge: View {
                 }
             }
         }
-        .frame(height: 5)
+        .frame(height: 6)
         .help(fraction == nil
             ? "Context window size unknown for this model, so the fill cannot be computed."
             : "Context window \(Fmt.percent(fraction)) full.")

@@ -313,28 +313,30 @@ fn describe_group(group: &serde_json::Value) -> String {
     format!("matcher {matcher}: {}", commands.join(" ; "))
 }
 
-/// A model whose context window size we do not know.
+/// A session whose context window size we do not know.
 ///
-/// The window size is not in the transcript — it comes from a lookup table on
-/// the model name (`docs/TRANSCRIPT_FORMAT.md` § 3). When Anthropic ships a
-/// model that table has never heard of, the size is `None`, so the fill
-/// percentage is `None`, so the compaction warning silently stops firing.
+/// The size is not in the transcript, and — measured — it is not derivable from
+/// the model name either: the same `claude-opus-5` runs against 200k for one
+/// account and 1M for another, depending on the plan. A lookup table produced
+/// 24% where the agent's own status line said 5%, so the table was removed
+/// rather than corrected.
 ///
-/// That is the worst shape a failure can take: a feature the user has learned
-/// to rely on turning itself off with no symptom. Naming the model is the whole
-/// fix — it turns "why did I get compacted without warning" into "add this
-/// model to the table".
+/// The authoritative value arrives in Claude Code's status line payload
+/// (`context_window.context_window_size`), which aiterm does not yet read.
+/// Until it does, the gauge renders indeterminate and this check says so — an
+/// unknown that is visible beats a percentage that is wrong.
 fn unknown_model_check(models: &[String]) -> Check {
     if models.is_empty() {
         return Check::ok("context window size is known for every live session");
     }
     Check::warn("context window size is known for every live session")
         .detail(format!(
-            "no window size for: {}. The compaction warning is off for those \
-             sessions — not because they are safe, but because we cannot tell.",
+            "no window size for: {}. The gauge shows indeterminate and the \
+             compaction warning is off for those sessions — not because they \
+             are safe, but because we cannot tell.",
             models.join(", ")
         ))
-        .fix("add the model to `window_size_for_model` in crates/aiterm-transcript")
+        .fix("expected until aiterm reads the status line payload, which is where the real window size lives")
 }
 
 /// Project settings in an untrusted directory are ignored without a word.

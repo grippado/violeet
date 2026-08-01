@@ -95,8 +95,11 @@ fn a_tool_in_flight_without_a_pending_hitl_reads_as_working() {
     assert_eq!(session.tokens.context_window_used_tokens, Some(51_000));
     assert_eq!(
         session.tokens.context_window_size_tokens,
-        Some(200_000),
-        "resolved from the model name, since no transcript field carries it"
+        None,
+        "the window size is not in the transcript and is not guessed from the \
+         model name — a real claude-opus-5 session was measured at 1M while a \
+         lookup table claimed 200k. It arrives from the status line payload or \
+         it stays unknown."
     );
     assert!(session
         .last_action
