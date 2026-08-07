@@ -50,7 +50,8 @@ struct SidebarView: View {
                             onRelease: { state.releaseName(session: card.sessionID) },
                             onFinish: { state.focusTerminal() },
                             compactionThreshold: preferences.compactionThreshold,
-                            chrome: preferences.chrome
+                            chrome: preferences.chrome,
+                            density: .forSidebar(width: preferences.sidebarWidth)
                         )
                         .contentShape(Rectangle())
                         // Two effects, one gesture: go to the tab, and point
@@ -148,7 +149,8 @@ struct SidebarView: View {
                                     onRelease: { state.releaseName(session: card.sessionID) },
                                     onFinish: { state.focusTerminal() },
                                     compactionThreshold: preferences.compactionThreshold,
-                                    chrome: preferences.chrome
+                                    chrome: preferences.chrome,
+                                    density: .forSidebar(width: preferences.sidebarWidth)
                                 )
                                 // These cards stay unrevealable — there is no
                                 // tab to switch to, and the disabled row in the
@@ -197,8 +199,14 @@ struct SidebarView: View {
                 .appFont(.body, weight: .semibold)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .fixedSize()
+            // Beside the title, not out at the trailing edge. This control
+            // moves the edge it would otherwise sit on: parked on the right, it
+            // jumps under the cursor the moment it is used, so choosing 33%
+            // then 66% means chasing it across the screen. Anchored to the
+            // title, its position does not depend on the width it sets.
+            spanMenu
             Spacer(minLength: 0)
-            spanButton
             Button { state.newTab() } label: { Image(systemName: "plus") }
                 .buttonStyle(.plain)
                 .pointingHand()
@@ -210,28 +218,45 @@ struct SidebarView: View {
         .padding(.bottom, 6)
     }
 
-    /// Cycles the sidebar through its three widths.
+    /// Picks the sidebar width from a menu of three.
     ///
-    /// Labelled with the width it is at, not the one it will go to. A button
-    /// that names its own effect reads as a state the moment you stop watching
-    /// it change — the sidebar is plainly at some width, and a control beside it
-    /// saying `66%` while it sits at 33% is a contradiction on screen.
-    private var spanButton: some View {
+    /// A menu rather than a button that cycles: cycling makes the two widths
+    /// you are not at unreachable except by passing through, and it cannot say
+    /// what the options are without being clicked. Here they are all listed,
+    /// with the current one ticked.
+    ///
+    /// Labelled with the width it is at, so the control and the sidebar beside
+    /// it never disagree.
+    private var spanMenu: some View {
         let span = Preferences.SidebarSpan.nearest(to: state.preferences.sidebarWidth)
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                state.preferences.setSidebarWidth(span.next.width)
+        return Menu {
+            ForEach(Preferences.SidebarSpan.allCases, id: \.self) { option in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        state.preferences.setSidebarWidth(option.width)
+                    }
+                } label: {
+                    // A tick rather than a disabled row: the current width stays
+                    // choosable, which is what makes the menu safe to open just
+                    // to read.
+                    if option == span {
+                        Label(option.menuLabel, systemImage: "checkmark")
+                    } else {
+                        Text(option.menuLabel)
+                    }
+                }
             }
         } label: {
             Text(span.label)
                 .appFont(.small, weight: .medium, monospacedDigit: true)
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .pointingHand()
-        .foregroundStyle(.secondary)
-        .help("Sidebar width — \(span.label). Click for \(span.next.label).")
+        .help("Sidebar width — \(span.label) of its widest. Click to choose another.")
         .accessibilityLabel("Sidebar width, \(span.label)")
-        .accessibilityHint("Changes the sidebar to \(span.next.label) of its widest.")
     }
 
     private func sectionLabel(_ text: String) -> some View {

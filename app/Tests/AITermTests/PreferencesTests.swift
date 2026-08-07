@@ -94,4 +94,22 @@ struct SidebarSpanTests {
         #expect(Span.twoThirds.label == "66%")
         #expect(Span.full.label == "100%")
     }
+
+    /// The pairing the narrow card depends on. If the narrow rung ever stopped
+    /// being compact, the card would go back to stacking eight rows into a
+    /// 160pt column — which fits, and is the thing that was unreadable.
+    @Test("only the narrow rung is compact")
+    func rungsPickTheirDensity() {
+        #expect(CardDensity.forSidebar(width: Span.third.width) == .compact)
+        #expect(CardDensity.forSidebar(width: Span.twoThirds.width) == .full)
+        #expect(CardDensity.forSidebar(width: Span.full.width) == .full)
+    }
+
+    /// The handle can stop anywhere, so density is a function of width and not
+    /// of which rung was last clicked.
+    @Test("a dragged width picks its own density")
+    func densityFollowsTheWidth() {
+        #expect(CardDensity.forSidebar(width: 219) == .compact)
+        #expect(CardDensity.forSidebar(width: 220) == .full)
+    }
 }

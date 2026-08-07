@@ -38,6 +38,24 @@
 
 import SwiftUI
 
+/// How much of a card there is room to say.
+///
+/// The narrow sidebar is not the wide one with smaller margins. At 160pt the
+/// full card fits — every row degrades until it does — but fitting is not the
+/// same as reading: eight stacked rows in a 160pt column is a wall, and the
+/// answer a glance wants there is *who, doing what, how full*. The rest is a
+/// tooltip away, and the Files panel is a click away.
+enum CardDensity {
+    case compact
+    case full
+
+    /// The threshold is where the token row stops fitting on one line, which is
+    /// the first thing that turns the card into a stack rather than a list.
+    static func forSidebar(width: CGFloat) -> CardDensity {
+        width < 220 ? .compact : .full
+    }
+}
+
 struct SessionCardView: View {
     let card: SessionCard
     /// The name as the window decided to show it — qualified when another
@@ -57,6 +75,9 @@ struct SessionCardView: View {
     /// The window's surfaces for the active theme, so a card belongs to the
     /// palette rather than to a fixed near-black.
     let chrome: WindowChrome
+    /// How much room there is to say it. From the sidebar, which is the only
+    /// thing that knows its own width.
+    var density: CardDensity = .full
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulsing = false
@@ -110,27 +131,46 @@ struct SessionCardView: View {
             // component, which is not an address: two checkouts of the same
             // repository, or a folder whose name matches an app's, are
             // indistinguishable without this line.
-            if let path = card.pathLabel {
+            if showsPath, let path = card.pathLabel {
                 pathRow(path)
             }
             // Only for a card with no tab, and only when the origin was
             // actually resolved. A session in a tab already answers "where" —
             // the tab is the answer.
-            if card.tabID == nil, let origin = card.originLabel {
+            //
+            // Dropped from the compact card: it is an address for a session you
+            // have gone looking for, and looking is what the wide card is for.
+            if density == .full, card.tabID == nil, let origin = card.originLabel {
                 originRow(origin)
             }
-            pillRow
+            // Which agent and which model. Stable for a session's whole life, so
+            // it is the row a repeated glance needs least — the first to go when
+            // rows are what is scarce.
+            if density == .full {
+                pillRow
+            }
+            // Never dropped. How full the context is changes on its own, decides
+            // when a session needs attention, and is the one number here that
+            // nothing else on screen reports.
             contextRow
-            usageRow
+            // Spend, not state. Worth a row when there is room and worth a
+            // tooltip when there is not.
+            if density == .full {
+                usageRow
+            }
             if let action = card.lastAction, !action.isEmpty {
                 // Wrapped over up to three lines rather than truncated to one.
                 // A single line of `Bash git commit -m "$(cat <<'EOF'…` says
                 // that a command ran and nothing about which one; three lines
                 // is where the tool call usually becomes readable.
+                //
+                // The compact card gets one line: three lines of wrapped tool
+                // call in a 160pt column is most of the card's height spent on
+                // its least durable fact.
                 Text(action)
                     .appFont(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                    .lineLimit(density == .compact ? 1 : 3)
                     .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(action)
@@ -139,12 +179,34 @@ struct SessionCardView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // What the compact card stopped showing has to remain askable, or
+        // narrowing the sidebar would delete facts rather than defer them.
+        .help(density == .compact ? compactSummary : "")
+    }
+
+    /// Everything the compact card leaves out, in one tooltip.
+    private var compactSummary: String {
+        let partial = card.cumulativeTokensPartial == true
+        var lines = ["\(CardTheme.toolLabel(for: card.agent)) · \(card.model ?? Fmt.unknown)"]
+        if card.tabID == nil, let origin = card.originLabel {
+            lines.append("Running in \(origin), outside aiterm.")
+        }
+        lines.append("")
+        lines.append("in \(Fmt.tokens(card.cumulativeInputTokens, partial: partial))")
+        lines.append("cache \(Fmt.tokens(card.cumulativeCacheReadTokens, partial: partial))")
+        lines.append("out \(Fmt.tokens(card.cumulativeOutputTokens, partial: partial))")
+        if hasLimits {
+            lines.append("")
+            lines.append(limitHelp)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// The working directory.
     ///
     /// Truncated at the **head**: the tail is the part that identifies the
     /// session, and a path that loses its end loses everything.
+    ///
     private func pathRow(_ path: String) -> some View {
         Label(path, systemImage: "folder")
             .labelStyle(.titleAndIcon)
@@ -153,6 +215,23 @@ struct SessionCardView: View {
             .lineLimit(1)
             .truncationMode(.head)
             .help(card.cwd ?? path)
+    }
+
+    /// Whether the compact card can afford this row.
+    ///
+    /// The wide card always shows it. The compact one shows it only when the
+    /// title came from the directory — because then the title is a single path
+    /// component, which is not an address: two checkouts of one repository
+    /// produce the same one. A title from the agent or from the user already
+    /// identifies the session, and at 160pt a second identifier costs more than
+    /// it settles.
+    private var showsPath: Bool {
+        guard let path = card.pathLabel, !path.isEmpty else { return false }
+        if density == .full { return true }
+        switch name.source {
+        case .agent, .manual: return false
+        case .directory, .process, .fallback: return true
+        }
     }
 
     /// Where this session lives, for one aiterm did not start.
@@ -199,7 +278,9 @@ struct SessionCardView: View {
                 onFinish: onFinish
             )
 
-            if let branch = card.gitBranch, !branch.isEmpty {
+            // The branch competes with the title for the same line, and on a
+            // compact card the title has already lost that argument once.
+            if density == .full, let branch = card.gitBranch, !branch.isEmpty {
                 Label(branch, systemImage: "arrow.triangle.branch")
                     .labelStyle(.titleAndIcon)
                     .appFont(.caption)
@@ -207,7 +288,12 @@ struct SessionCardView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            stateBadge
+            // The compact card moves this to the context row. Sharing the title
+            // row costs the title about 45pt, and at 160pt that is the
+            // difference between `Instalar app e va…` and `Ins…iles`.
+            if density == .full {
+                stateBadge
+            }
         }
     }
 
@@ -313,6 +399,16 @@ struct SessionCardView: View {
                     .foregroundStyle(contextTint)
                     .lineLimit(1)
                     .fixedSize()
+            }
+
+            // The compact card's home for the state. This row is the one that
+            // is always present — a card can lack a path, a model or a tool
+            // call, but never a context row — so the badge cannot fall off the
+            // card by landing here. The gauge is what yields the width, which
+            // is the right thing to yield: it is the only element here that
+            // still reads at half its size.
+            if density == .compact {
+                stateBadge
             }
         }
     }

@@ -62,9 +62,19 @@ final class Preferences: ObservableObject {
             Preferences.clampWidth(Preferences.maximumSidebarWidth * CGFloat(rawValue))
         }
 
-        /// `33%`, `66%`, `100%`. What the button says it will become.
+        /// `33%`, `66%`, `100%`. What the control shows it is at.
         var label: String {
             "\(Int((rawValue * 100).rounded()))%"
+        }
+
+        /// The menu has room to say what each rung is for, and a percentage on
+        /// its own does not.
+        var menuLabel: String {
+            switch self {
+            case .third: return "\(label) — narrow"
+            case .twoThirds: return "\(label) — medium"
+            case .full: return "\(label) — wide"
+            }
         }
 
         var next: SidebarSpan {
