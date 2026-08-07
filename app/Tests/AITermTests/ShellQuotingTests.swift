@@ -15,6 +15,27 @@ import Testing
 
 @testable import AITerm
 
+@Suite("Editor tabs")
+struct EditorTabTests {
+    /// The row under a session card is named by the file, not by the path: the
+    /// tree above it already said where the file lives.
+    @Test("an editor tab is named by its file")
+    func namedByFile() {
+        #expect(EditorTab(path: "/a/b/notes.md", sessionID: "s1").name == "notes.md")
+        #expect(EditorTab(path: "notes.md", sessionID: nil).name == "notes.md")
+    }
+
+    /// Identity is the path. Two rows for one file in one session would be two
+    /// editors on one buffer, which is how the older copy wins.
+    @Test("tabs for the same file are the same tab")
+    func pathIsIdentity() {
+        let first = EditorTab(path: "/a/b.md", sessionID: "s1")
+        let again = EditorTab(path: "/a/b.md", sessionID: "s1")
+        #expect(first == again)
+        #expect(first != EditorTab(path: "/a/c.md", sessionID: "s1"))
+    }
+}
+
 @Suite("Shell quoting")
 struct ShellQuotingTests {
     private func quoted(_ path: String) -> String {

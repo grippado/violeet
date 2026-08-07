@@ -443,12 +443,37 @@ final class AppState: ObservableObject {
     ///
     /// The tab closes when the editor exits, which is the same rule tabs
     /// already follow for a shell that exits.
-    func openInEditor(path: String) {
+    /// Clicking a row a second time goes back to the tab rather than opening a
+    /// rival one. Two editors on one file is how a buffer gets overwritten by an
+    /// older copy of itself, and a panel that answers every click with a new tab
+    /// buries the terminal under editors within a morning — which is what
+    /// happened before this check existed.
+    func openInEditor(path: String, session sessionID: String?) {
+        if let open = tabs.first(where: { $0.editing?.path == path }) {
+            selectedTabID = open.tabID
+            return
+        }
         let directory = (path as NSString).deletingLastPathComponent
-        newTab(
+        let tab = newTab(
             directory: directory.isEmpty ? nil : directory,
             command: Self.editorCommand(forFileAt: path)
         )
+        tab.editing = EditorTab(path: path, sessionID: sessionID)
+        // `editing` is not `@Published` — it is set once, here, before anything
+        // has drawn this tab. The sidebar reads it through `tabs`, which did
+        // change, so the grouping lands on the same pass that adds the row.
+        objectWillChange.send()
+    }
+
+    /// The editor tabs a session owns, in the order they were opened.
+    func editorTabs(forSession sessionID: String) -> [TabModel] {
+        tabs.filter { $0.editing?.sessionID == sessionID }
+    }
+
+    /// Whether a path is already open in some tab. Drives the mark in the Files
+    /// panel, which is the other half of "this row opened that tab".
+    func isOpenInEditor(path: String) -> Bool {
+        tabs.contains { $0.editing?.path == path }
     }
 
     /// The shell command that opens one file for editing.

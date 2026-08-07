@@ -28,10 +28,23 @@ struct SidebarView: View {
     private static let elsewhereMaxHeight: CGFloat = 320
     @State private var elsewhereContentHeight: CGFloat = 0
 
-    /// Tabs that no session has claimed.
+    /// Tabs that no session has claimed, and that are not editors.
+    ///
+    /// An editor tab is claimed too, just not by running an agent: it was opened
+    /// from a session's file tree and is drawn under that session's card. Left
+    /// in this list it would appear twice, and in the place that means "nothing
+    /// knows why this tab exists" — which is the opposite of what is known
+    /// about it.
     private var unclaimedTabs: [TabModel] {
         let claimed = Set(state.sessions.values.compactMap(\.tabID))
-        return state.tabs.filter { !claimed.contains($0.tabID) }
+        return state.tabs.filter { tab in
+            guard !claimed.contains(tab.tabID) else { return false }
+            // An editor whose session has since gone falls back here rather
+            // than disappearing: the tab is still open and still needs a way
+            // back to it.
+            guard let editing = tab.editing, let owner = editing.sessionID else { return true }
+            return state.sessions[owner] == nil
+        }
     }
 
     var body: some View {
@@ -69,6 +82,8 @@ struct SidebarView: View {
                         // jumps to the top. Animated, so the jump reads as
                         // movement rather than as the list redrawing.
                         .transition(.opacity.combined(with: .move(edge: .top)))
+
+                        editorTabs(under: card)
                     }
 
                     if !unclaimedTabs.isEmpty {
@@ -161,6 +176,12 @@ struct SidebarView: View {
                                 .onTapGesture { state.inspect(session: card.sessionID) }
                                 .pointingHand()
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
+
+                                // An outside session cannot be revealed, but the
+                                // editors *this* app opened for it can. They are
+                                // the one part of an elsewhere card that is
+                                // local, and clicking them works.
+                                editorTabs(under: card)
                             }
                         }
                         .padding(.horizontal, 7)
@@ -257,6 +278,32 @@ struct SidebarView: View {
         .pointingHand()
         .help("Sidebar width — \(span.label) of its widest. Click to choose another.")
         .accessibilityLabel("Sidebar width, \(span.label)")
+    }
+
+    /// The editor tabs a card owns, drawn under it.
+    ///
+    /// Indented and quiet: these are not peers of the card, they are things the
+    /// card's file tree opened. A session that wrote thirty files can have three
+    /// editors under it without the sidebar reading as six sessions.
+    @ViewBuilder
+    private func editorTabs(under card: SessionCard) -> some View {
+        let tabs = state.editorTabs(forSession: card.sessionID)
+        if !tabs.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(tabs) { tab in
+                    EditorTabRow(
+                        tab: tab,
+                        isSelected: tab.tabID == state.selectedTabID
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture { state.selectedTabID = tab.tabID }
+                    .pointingHand()
+                }
+            }
+            .padding(.leading, 10)
+            .padding(.top, 1)
+            .transition(.opacity)
+        }
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -391,6 +438,45 @@ private struct TabRow: View {
                 .fill(isSelected ? Color.accentColor.opacity(0.16) : .clear)
         )
         .help(tab.currentDirectory)
+    }
+}
+
+/// A tab the Files panel opened, drawn under the session it belongs to.
+///
+/// Deliberately not a `TabRow`. That row is for a tab nothing has claimed, and
+/// its affordances follow from that: it is renameable, because a tab with no
+/// session has no other name than the one you give it. This one is named by the
+/// file it opened, and renaming it would be naming the file — so it does not
+/// offer to.
+///
+/// The filename, not the path: the row sits under the card whose tree the file
+/// came from, and that tree already showed where it lives. The full path is in
+/// the tooltip.
+private struct EditorTabRow: View {
+    @ObservedObject var tab: TabModel
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // The same glyph the Files panel puts on an open row, so the pair
+            // reads as one relationship seen from two ends.
+            Image(systemName: "macwindow")
+                .appFont(.micro)
+                .foregroundStyle(tab.hasExited ? .tertiary : .secondary)
+            Text(tab.editing?.name ?? tab.currentDirectory)
+                .appFont(.caption, weight: isSelected ? .semibold : .regular)
+                .foregroundStyle(tab.hasExited ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isSelected ? Color.accentColor.opacity(0.16) : .clear)
+        )
+        .help(tab.editing.map { "Editing \($0.path)" } ?? tab.currentDirectory)
     }
 }
 

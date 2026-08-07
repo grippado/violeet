@@ -133,7 +133,7 @@ struct FilesPanel: View {
                         caveat(for: list)
                     }
                     ForEach(list.grouped()) { root in
-                        RootSection(root: root)
+                        RootSection(root: root, sessionID: session?.sessionID)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -180,6 +180,8 @@ struct FilesPanel: View {
 /// omission, and one that folds away carrying its numbers is a summary.
 private struct RootSection: View {
     let root: FileRoot
+    /// Passed through to the rows, which hand it to the tab they open.
+    let sessionID: String?
     @State private var expanded = true
 
     var body: some View {
@@ -204,7 +206,7 @@ private struct RootSection: View {
 
             if expanded {
                 ForEach(root.entries) { entry in
-                    FileRow(entry: entry)
+                    FileRow(entry: entry, sessionID: sessionID)
                 }
             }
         }
@@ -221,10 +223,17 @@ private struct RootSection: View {
 private struct FileRow: View {
     @EnvironmentObject private var state: AppState
     let entry: FileRoot.Entry
+    /// Whose tree this row is in. Travels to the tab so the sidebar can put the
+    /// two together.
+    let sessionID: String?
     @State private var hovering = false
 
+    private var isOpen: Bool { state.isOpenInEditor(path: entry.change.path) }
+
     var body: some View {
-        QuietButton(action: { state.openInEditor(path: entry.change.path) }) {
+        QuietButton(action: {
+            state.openInEditor(path: entry.change.path, session: sessionID)
+        }) {
             HStack(spacing: 6) {
                 if entry.change.created {
                     // A letter and not only a colour: the same two-channel rule
@@ -250,6 +259,16 @@ private struct FileRow: View {
                 }
                 .appFont(.caption)
 
+                // Open in a tab. A glyph and not only the tint, because a row
+                // that says "open" in colour alone says nothing to a reader who
+                // cannot see the difference — the same two-channel rule the `A`
+                // above follows.
+                if isOpen {
+                    Image(systemName: "macwindow")
+                        .appFont(.micro)
+                        .foregroundStyle(.secondary)
+                }
+
                 Spacer(minLength: 6)
                 DiffStat(added: entry.change.added, removed: entry.change.removed, approximate: false)
                     .appFont(.micro)
@@ -257,20 +276,31 @@ private struct FileRow: View {
             .padding(.vertical, 1)
             .padding(.leading, 4)
             .padding(.trailing, 4)
-            // The row is a click target, so it says so before it is clicked.
-            // Without this the only affordance is the cursor, which arrives
-            // after the user has already decided the panel is a list to read.
+            // Two different facts on one surface. Hover says "this is a click
+            // target", which the panel needs because a list of filenames does
+            // not otherwise look like one. The open tint persists after the
+            // pointer leaves and is what pairs this row with the tab beside its
+            // session in the sidebar.
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(hovering ? Color.primary.opacity(0.08) : .clear)
+                    .fill(
+                        hovering
+                            ? Color.primary.opacity(0.08)
+                            : (isOpen ? Color.primary.opacity(0.045) : .clear)
+                    )
             )
             .contentShape(Rectangle())
         }
         .onHover { hovering = $0 }
         .pointingHand()
-        .help("\(entry.change.path)\n\nClick to open in a new tab.")
+        .help(isOpen
+            ? "\(entry.change.path)\n\nOpen in a tab. Click to go to it."
+            : "\(entry.change.path)\n\nClick to open in a new tab.")
         .accessibilityLabel(entry.name)
-        .accessibilityHint("Opens \(entry.change.path) in a new tab.")
+        .accessibilityValue(isOpen ? "open in a tab" : "")
+        .accessibilityHint(isOpen
+            ? "Goes to the tab editing \(entry.change.path)."
+            : "Opens \(entry.change.path) in a new tab.")
     }
 }
 
