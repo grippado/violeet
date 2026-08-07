@@ -180,6 +180,67 @@ An explicit `null` means *became unknown*.
 | `last_action` | string \| null | |
 | `last_event_at` | string \| null | When the *session* last did something, as distinct from the envelope's `ts`, which is when the daemon emitted this message. |
 | `tab_id` | string \| null | Late binding: a session that registered unbound can acquire a tab later. |
+| `files` | array \| null | Every file the session has written. Whole list, never a delta. See below. |
+| `files_partial` | boolean \| null | `true` when that list covers only part of the session. |
+| `files_truncated` | boolean \| null | `true` when the list was cut to fit the line. |
+
+### `files`: what the session wrote
+
+Each entry is one file, with the diffstat this session is responsible for:
+
+```json
+{"path": "/Users/you/www/app/src/main.rs", "added": 42, "removed": 7, "created": false}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `path` | string | Absolute, as the transcript writes it. Relativising is a display decision and needs to know what the path is relative *to*. |
+| `added` | integer | Lines added by this session, summed over every edit of the file. |
+| `removed` | integer | Lines removed. |
+| `created` | boolean | This session created the file rather than editing one that existed. Sticky: created once stays created, however many edits follow. |
+
+**The whole list, not a delta.** Every other message here is an idempotent
+upsert keyed by `session_id`, which is what lets snapshot replay reuse the
+ordinary path instead of needing a second one. A delta would be the single field
+that breaks that property. The list is sent only when it changes, and it is
+ordered by path so an unchanged set is byte-identical and publishes nothing.
+
+**The numbers are measured, not estimated.** Claude Code writes the diff into
+the transcript itself: an `Edit` result carries `structuredPatch`, whose hunk
+lines are prefixed `+`, `-` or space, and counting those prefixes gives what
+`git diff --numstat` would give. A `Write` that creates a file has no diff to
+read — every one of the 387 creates measured on the reference machine carried an
+empty patch — so its `added` is the line count of the content written.
+
+`git diff` is deliberately **not** the source. It measures the checkout, not the
+session: two agents working in one repo would each be shown the other's work,
+which is precisely the case this product exists for. It also disagrees with
+itself over time, since anything that commits — including the user, between two
+reads — resets the numbers under a session that did the work.
+
+**`files_partial` is not optional decoration.** It carries the same warning as
+`cumulative_tokens_partial`, for the same reason and one more:
+
+1. The daemon reads a transcript from its end, so a session already running when
+   the daemon started contributes nothing before that moment.
+2. A file written by `Bash` — `sed -i`, `mv`, a heredoc, `git checkout` — leaves
+   no tool result naming a path and **cannot appear here at all**.
+
+So this list is "files edited by tool", not "files that changed", and a tree
+showing three files for a session that touched forty is the same class of lie as
+`8k` for a session that burned `400k`. Clients must mark a partial list rather
+than presenting it as the whole truth.
+
+**`files_truncated` guards a silent failure.** A client reads whole lines and
+*drops* one over its size limit rather than buffering it, so an unbounded list
+would not arrive cut — it would not arrive, and the panel would stop updating
+with nothing on screen to explain why. The daemon cuts at 500 entries, keeping
+the first by path, and says that it did.
+
+**Compatibility.** These three fields were added without bumping `v`. They are
+optional fields of a sparse patch: a client that does not know them ignores
+them, exactly as it ignores any absent field, and no existing field changed
+shape or meaning. The next *breaking* change still bumps `v`.
 
 **`cumulative_tokens_partial` exists because a partial total is not a small
 total.** The daemon starts reading a transcript from its *end*, so a session

@@ -618,6 +618,19 @@ impl Hub {
         if session.origin_tty.is_some() {
             patch.origin_tty = Some(session.origin_tty.clone());
         }
+        // What the session wrote, replayed like everything else. Without this a
+        // client that connects after the edits happened — which is every
+        // reconnect, and every launch of the app while a session is running —
+        // gets a card with a working tree it cannot see.
+        if !session.files.files.is_empty() {
+            patch.files = Some(Some(session.files.files.clone()));
+        }
+        if session.files.partial.is_some() {
+            patch.files_partial = Some(session.files.partial);
+        }
+        if session.files.truncated.is_some() {
+            patch.files_truncated = Some(session.files.truncated);
+        }
         patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
 
         (!patch.is_empty()).then_some(DaemonToApp::SessionUpdated(patch))

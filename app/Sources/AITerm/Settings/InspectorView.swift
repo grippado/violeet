@@ -20,18 +20,21 @@ import SwiftUI
 /// symbol and a view, with nothing else to touch.
 enum InspectorPanel: String, CaseIterable, Identifiable {
     case settings
+    case files
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .settings: return "Settings"
+        case .files: return "Files"
         }
     }
 
     var symbol: String {
         switch self {
         case .settings: return "slider.horizontal.3"
+        case .files: return "doc.on.doc"
         }
     }
 }
@@ -40,7 +43,14 @@ struct InspectorView: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject var preferences: Preferences
 
-    @State private var panel: InspectorPanel = .settings
+    /// Which panel is showing. Held in `Preferences` and not in `@State`,
+    /// because `ContentView` removes this view from the hierarchy when the
+    /// inspector is hidden — local state would die with it and the panel would
+    /// silently snap back to Settings every time the inspector was reopened.
+    private var panel: InspectorPanel {
+        get { preferences.inspectorPanel }
+        nonmutating set { preferences.inspectorPanel = newValue }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -95,6 +105,8 @@ struct InspectorView: View {
         switch panel {
         case .settings:
             SettingsPanel(preferences: preferences)
+        case .files:
+            FilesPanel()
         }
     }
 }

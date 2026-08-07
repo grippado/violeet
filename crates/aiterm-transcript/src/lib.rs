@@ -61,7 +61,14 @@ pub enum TranscriptEvent {
     /// A tool was invoked.
     ToolUse(ToolUse),
     /// A tool call came back. Correlates with [`ToolUse::id`].
-    ToolResult { tool_use_id: String, at: Option<String> },
+    ///
+    /// `file` is present when the call wrote to a file and said so. See
+    /// [`FileChange`] for what "said so" means and what it cannot cover.
+    ToolResult {
+        tool_use_id: String,
+        at: Option<String>,
+        file: Option<FileChange>,
+    },
     /// The context window was compacted. Carries the daemon's best evidence
     /// that occupancy fell, straight from the file rather than inferred.
     Compaction(Compaction),
@@ -136,6 +143,50 @@ impl Usage {
         }
         Some(parts.iter().flatten().sum())
     }
+}
+
+/// A file a tool wrote, and by how much.
+///
+/// # Measured, not inferred
+///
+/// Claude Code writes the diff itself. The `toolUseResult` of an `Edit` carries
+/// `structuredPatch`: unified-diff hunks whose `lines` are prefixed `+`, `-` or
+/// space. Counting those prefixes gives the same numbers `git diff --numstat`
+/// would, with no I/O and no guessing. Measured across every transcript under
+/// `~/.claude/projects`: 1256 `Edit` results and 452 `Write` results in that
+/// shape.
+///
+/// A `Write` that creates a file is the one case with no patch to read — all
+/// 387 measured creates carried an **empty** `structuredPatch` — so its `added`
+/// is the line count of the content it wrote, and `created` says which case
+/// this was.
+///
+/// # What this cannot see
+///
+/// Files written by `Bash` — `sed -i`, `mv`, a heredoc, a `git checkout`. They
+/// leave no tool result naming a path, so they are absent, and a list built
+/// from this is "files edited by tool" rather than "files that changed". That
+/// limit is why the wire carries a partial flag: an incomplete list that looks
+/// complete is the failure this crate already refuses for token counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChange {
+    /// Absolute, as the transcript writes it. Relativising is a display
+    /// decision and belongs to whoever knows what the paths are relative *to*.
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+    /// The tool created this file rather than editing one that existed.
+    pub created: bool,
+}
+
+/// What one session did to one file, summed over every edit of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FileStat {
+    pub added: u64,
+    pub removed: u64,
+    /// True when this session created the file. Sticky: a file created and then
+    /// edited five times was still created here.
+    pub created: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,6 +297,13 @@ pub struct Telemetry {
     /// one yet. See [`TranscriptEvent::AiTitle`].
     pub ai_title: Option<String>,
 
+    /// Every file this session wrote, keyed by absolute path.
+    ///
+    /// A `BTreeMap` so the order is the same on every read: this ends up on a
+    /// wire and in a tree, and a set that reorders itself would make every
+    /// publish look like a change.
+    pub files: std::collections::BTreeMap<String, FileStat>,
+
     pub turn_count: u64,
     pub last_event_at: Option<String>,
     /// How many compactions this session has been through.
@@ -254,6 +312,14 @@ pub struct Telemetry {
     /// `message.id`s already counted, so a replayed or re-read line cannot
     /// double the cost.
     seen_messages: std::collections::HashSet<String>,
+    /// `tool_use_id`s whose file change is already in `files`.
+    ///
+    /// Keyed on the tool call and not on the path, deliberately: the same file
+    /// edited twice is two calls and must count twice, while the same call seen
+    /// twice — a re-read after a truncated tail, a resumed session — is one
+    /// edit. Getting this backwards is how the token counters once inflated
+    /// 2.8x, and a diffstat is no less re-readable than a usage block.
+    seen_tool_results: std::collections::HashSet<String>,
     /// Tool calls awaiting a result, in order.
     open_tools: Vec<(String, String)>,
 }
@@ -335,9 +401,23 @@ impl Telemetry {
                 self.refresh_in_flight();
             }
 
-            TranscriptEvent::ToolResult { tool_use_id, .. } => {
+            TranscriptEvent::ToolResult {
+                tool_use_id, file, ..
+            } => {
                 self.open_tools.retain(|(id, _)| id != tool_use_id);
                 self.refresh_in_flight();
+
+                if let Some(change) = file {
+                    // The same guard the usage block gets, for the same reason.
+                    if self.seen_tool_results.insert(tool_use_id.clone()) {
+                        let stat = self.files.entry(change.path.clone()).or_default();
+                        stat.added = stat.added.saturating_add(change.added);
+                        stat.removed = stat.removed.saturating_add(change.removed);
+                        // Sticky: created once is created, however many edits
+                        // followed.
+                        stat.created |= change.created;
+                    }
+                }
             }
 
             TranscriptEvent::Compaction(compaction) => {
@@ -664,6 +744,7 @@ mod tests {
         t.apply(&TranscriptEvent::ToolResult {
             tool_use_id: "toolu_1".into(),
             at: None,
+            file: None,
         });
         assert_eq!(t.in_flight_tool, None, "returned, so no longer in flight");
         assert_eq!(
@@ -689,5 +770,80 @@ mod tests {
                 "{model}: a guessed window produces a plausible, wrong percentage"
             );
         }
+    }
+
+    // ---- accumulating file changes --------------------------------------
+
+    fn wrote(tool_use_id: &str, path: &str, added: u64, removed: u64) -> TranscriptEvent {
+        TranscriptEvent::ToolResult {
+            tool_use_id: tool_use_id.into(),
+            at: Some("2026-07-31T22:00:00Z".into()),
+            file: Some(FileChange {
+                path: path.into(),
+                added,
+                removed,
+                created: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn editing_one_file_twice_sums_both_edits() {
+        let mut t = Telemetry::new();
+        t.apply(&wrote("t1", "/repo/a.rs", 10, 2));
+        t.apply(&wrote("t2", "/repo/a.rs", 5, 1));
+
+        assert_eq!(t.files.len(), 1);
+        let stat = t.files["/repo/a.rs"];
+        assert_eq!((stat.added, stat.removed), (15, 3));
+    }
+
+    /// The guard that matters. A tail that re-reads, a resumed session, a
+    /// truncated file: the same call arrives twice and must count once. This is
+    /// the diffstat's version of the 2.8x cost inflation.
+    #[test]
+    fn the_same_tool_call_seen_twice_counts_once() {
+        let mut t = Telemetry::new();
+        let event = wrote("t1", "/repo/a.rs", 10, 2);
+        t.apply(&event);
+        t.apply(&event);
+
+        let stat = t.files["/repo/a.rs"];
+        assert_eq!(
+            (stat.added, stat.removed),
+            (10, 2),
+            "dedup keys on the tool call, not the path"
+        );
+    }
+
+    #[test]
+    fn creating_a_file_and_then_editing_it_leaves_it_created() {
+        let mut t = Telemetry::new();
+        t.apply(&TranscriptEvent::ToolResult {
+            tool_use_id: "t1".into(),
+            at: None,
+            file: Some(FileChange {
+                path: "/repo/new.md".into(),
+                added: 40,
+                removed: 0,
+                created: true,
+            }),
+        });
+        t.apply(&wrote("t2", "/repo/new.md", 3, 1));
+
+        let stat = t.files["/repo/new.md"];
+        assert!(stat.created, "created once is created, however many edits follow");
+        assert_eq!((stat.added, stat.removed), (43, 1));
+    }
+
+    #[test]
+    fn a_tool_result_with_no_file_leaves_the_list_alone() {
+        let mut t = Telemetry::new();
+        t.apply(&TranscriptEvent::ToolResult {
+            tool_use_id: "t1".into(),
+            at: None,
+            file: None,
+        });
+        assert!(t.files.is_empty());
     }
 }

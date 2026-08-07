@@ -23,6 +23,7 @@ final class Preferences: ObservableObject {
         static let elsewhereExpanded = "sidebar.elsewhere.expanded"
         static let inspectorWidth = "inspector.width"
         static let inspectorVisible = "inspector.visible"
+        static let inspectorPanel = "inspector.panel"
         static let terminalSettings = "terminal.settings"
     }
 
@@ -82,6 +83,15 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(inspectorVisible, forKey: Key.inspectorVisible) }
     }
 
+    /// Which inspector panel is showing.
+    ///
+    /// Persisted rather than held in the view, because the inspector's view is
+    /// destroyed when it is hidden: local state would reset the choice on every
+    /// close, which with one panel was invisible and with two is a bug.
+    @Published var inspectorPanel: InspectorPanel {
+        didSet { defaults.set(inspectorPanel.rawValue, forKey: Key.inspectorPanel) }
+    }
+
     /// How the terminal looks and behaves. Global for every tab in v0 — see
     /// `TerminalSettings` for why, and for what keeps that cheap to revisit.
     ///
@@ -126,6 +136,8 @@ final class Preferences: ObservableObject {
         // Hidden until asked for. The left sidebar is what the window is about;
         // this one is a tool you open, use and close.
         inspectorVisible = defaults.object(forKey: Key.inspectorVisible) as? Bool ?? false
+        inspectorPanel = (defaults.string(forKey: Key.inspectorPanel))
+            .flatMap(InspectorPanel.init(rawValue:)) ?? .settings
 
         let storedSettings = defaults.dictionary(forKey: Key.terminalSettings) ?? [:]
         unknownTerminalKeys = storedSettings

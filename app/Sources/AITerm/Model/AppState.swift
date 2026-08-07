@@ -504,6 +504,80 @@ final class AppState: ObservableObject {
         focusTerminal()
     }
 
+    /// Show a specific panel, or hide the inspector if it is already showing it.
+    ///
+    /// A plain toggle was fine with one panel and is a bug with two: ⌘, means
+    /// "Settings", and with the Files panel open a toggle would close the
+    /// inspector instead of switching to what the user asked for.
+    func toggleInspector(showing panel: InspectorPanel) {
+        if preferences.inspectorVisible && preferences.inspectorPanel == panel {
+            preferences.inspectorVisible = false
+        } else {
+            preferences.inspectorPanel = panel
+            preferences.inspectorVisible = true
+        }
+        focusTerminal()
+    }
+
+    /// Point the Files panel at a session.
+    ///
+    /// Harmless while the panel is closed, which is what lets the sidebar's tap
+    /// gesture do this unconditionally instead of asking what is on screen.
+    func inspect(session id: String) {
+        inspectedSessionID = id
+    }
+
+    // MARK: - What sessions wrote
+
+    /// The files each session has written, keyed by session id.
+    ///
+    /// Held beside `sessions` rather than inside the card on purpose. The card
+    /// is `Equatable` and compared in bulk on every patch — `attachPendingHitl`
+    /// and `uniqueTitles` both walk the whole table — and a session that
+    /// rewrote a monorepo would make each of those comparisons walk hundreds of
+    /// paths for a list no card ever renders.
+    @Published private(set) var sessionFiles: [String: SessionFileList] = [:]
+
+    /// Which session the Files panel is showing.
+    ///
+    /// A UI selection and not a fact about the world, which is why it lives
+    /// here and not on a card: the daemon has no opinion about what you are
+    /// looking at.
+    @Published var inspectedSessionID: String?
+
+    /// The session the Files panel should show: the one clicked, or the
+    /// selected tab's, or the first in the list. Falling back rather than
+    /// showing nothing means opening the panel is never a dead end.
+    var inspectedSession: SessionCard? {
+        if let id = inspectedSessionID, let card = sessions[id] { return card }
+        if let tabID = selectedTabID,
+           let card = orderedSessions.first(where: { $0.tabID == tabID }) {
+            return card
+        }
+        return orderedSessions.first
+    }
+
+    /// Fold a patch's file fields into the list we hold for that session.
+    ///
+    /// Each field moves on its own, because the patch is sparse: the daemon
+    /// re-sends the list only when it changes, while the two flags can change
+    /// without it — a session becomes non-partial the moment a read catches up,
+    /// with the same files in hand.
+    private func applyFiles(_ patch: SessionUpdated) {
+        guard patch.files != .unchanged
+            || patch.filesPartial != .unchanged
+            || patch.filesTruncated != .unchanged
+        else { return }
+
+        var list = sessionFiles[patch.sessionID] ?? SessionFileList()
+        // `.set(nil)` means the daemon explicitly knows nothing, which is an
+        // empty list rather than a stale one left on screen.
+        list.files = patch.files.applied(to: list.files) ?? []
+        list.isPartial = patch.filesPartial.applied(to: list.isPartial)
+        list.isTruncated = patch.filesTruncated.applied(to: list.isTruncated)
+        sessionFiles[patch.sessionID] = list
+    }
+
     // MARK: - Daemon messages
 
     /// Every daemon message is an idempotent upsert.
@@ -545,6 +619,7 @@ final class AppState: ObservableObject {
             }
             card.apply(patch)
             sessions[patch.sessionID] = card
+            applyFiles(patch)
             // The daemon has spoken about this session's name, so whatever we
             // were holding for it has either landed or been superseded. Kept
             // narrow on purpose: a patch that carries no title says nothing
@@ -568,6 +643,10 @@ final class AppState: ObservableObject {
 
         case .sessionEnded(let ended):
             sessions.removeValue(forKey: ended.sessionID)
+            // The tree goes with the card. Leaving it would keep a dead
+            // session's files addressable by an id nothing else knows about.
+            sessionFiles.removeValue(forKey: ended.sessionID)
+            if inspectedSessionID == ended.sessionID { inspectedSessionID = nil }
             pendingHitl = pendingHitl.filter { $0.value.sessionID != ended.sessionID }
             attachPendingHitl()
         }

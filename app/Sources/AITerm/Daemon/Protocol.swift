@@ -77,6 +77,27 @@ struct DynamicKey: CodingKey {
 
 // MARK: - daemon -> app
 
+/// One file a session wrote, and by how much.
+///
+/// `Decodable` and not hand-parsed because, unlike the sparse patch around it,
+/// this has no tri-state to model: an entry is present in the list or it is not.
+///
+/// The counts are the daemon's, measured from the diff Claude Code writes into
+/// the transcript. The app does not compute them and must not try — a second
+/// place deriving the same number is a second place for it to be different, the
+/// same reason `context_pct` is absent from the wire.
+struct FileChange: Equatable, Decodable, Identifiable {
+    /// Absolute. Making it readable is this side's job; knowing what it is
+    /// relative to is not something the daemon can decide for a tree that shows
+    /// several roots at once.
+    let path: String
+    let added: Int
+    let removed: Int
+    let created: Bool
+
+    var id: String { path }
+}
+
 struct SessionRegistered: Equatable {
     let sessionID: String
     /// `null` when the session could not be bound to a tab — an agent started
@@ -122,6 +143,16 @@ struct SessionUpdated: Equatable {
     /// card renders `~8k` when this is set, and that tilde is the only thing
     /// standing between the user and a total they would otherwise trust.
     let cumulativeTokensPartial: Patch<Bool>
+    /// Every file this session has written, with the diffstat it is responsible
+    /// for. The whole list, never a delta — see `docs/PROTOCOL.md`.
+    let files: Patch<[FileChange]>
+    /// The list covers only part of the session: the daemon met the session
+    /// already running, and anything written by `Bash` never appears at all.
+    /// The panel says so rather than presenting a partial list as the truth.
+    let filesPartial: Patch<Bool>
+    /// The list was cut to fit the line. Without this, a session that touched
+    /// more files than fit would look like one that touched exactly the cut.
+    let filesTruncated: Patch<Bool>
     /// The account's subscription limits, from Claude Code's status line
     /// payload — a channel the transcript does not have. Flat rather than
     /// nested so a sparse patch can move one of them without resending the
@@ -162,6 +193,9 @@ struct SessionUpdated: Equatable {
         cumulativeCacheReadTokens: Patch<Int> = .unchanged,
         cumulativeCacheCreationTokens: Patch<Int> = .unchanged,
         cumulativeTokensPartial: Patch<Bool> = .unchanged,
+        files: Patch<[FileChange]> = .unchanged,
+        filesPartial: Patch<Bool> = .unchanged,
+        filesTruncated: Patch<Bool> = .unchanged,
         fiveHourLimitUsedPercent: Patch<Double> = .unchanged,
         fiveHourLimitResetsAt: Patch<String> = .unchanged,
         sevenDayLimitUsedPercent: Patch<Double> = .unchanged,
@@ -186,6 +220,9 @@ struct SessionUpdated: Equatable {
         self.cumulativeCacheReadTokens = cumulativeCacheReadTokens
         self.cumulativeCacheCreationTokens = cumulativeCacheCreationTokens
         self.cumulativeTokensPartial = cumulativeTokensPartial
+        self.files = files
+        self.filesPartial = filesPartial
+        self.filesTruncated = filesTruncated
         self.fiveHourLimitUsedPercent = fiveHourLimitUsedPercent
         self.fiveHourLimitResetsAt = fiveHourLimitResetsAt
         self.sevenDayLimitUsedPercent = sevenDayLimitUsedPercent
@@ -331,6 +368,9 @@ enum DaemonMessageDecoder {
                 cumulativeCacheReadTokens: Patch.decode(from: container, key: DynamicKey("cumulative_cache_read_tokens")),
                 cumulativeCacheCreationTokens: Patch.decode(from: container, key: DynamicKey("cumulative_cache_creation_tokens")),
                 cumulativeTokensPartial: Patch.decode(from: container, key: DynamicKey("cumulative_tokens_partial")),
+                files: Patch.decode(from: container, key: DynamicKey("files")),
+                filesPartial: Patch.decode(from: container, key: DynamicKey("files_partial")),
+                filesTruncated: Patch.decode(from: container, key: DynamicKey("files_truncated")),
                 fiveHourLimitUsedPercent: Patch.decode(from: container, key: DynamicKey("five_hour_limit_used_percent")),
                 fiveHourLimitResetsAt: Patch.decode(from: container, key: DynamicKey("five_hour_limit_resets_at")),
                 sevenDayLimitUsedPercent: Patch.decode(from: container, key: DynamicKey("seven_day_limit_used_percent")),

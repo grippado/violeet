@@ -19,7 +19,9 @@
 
 use serde_json::Value;
 
-use crate::{AssistantTurn, Compaction, ToolUse, TranscriptEvent, TranscriptReader, Usage};
+use crate::{
+    AssistantTurn, Compaction, FileChange, ToolUse, TranscriptEvent, TranscriptReader, Usage,
+};
 
 /// How long a tool-input summary may get before it is truncated.
 ///
@@ -77,13 +79,21 @@ impl TranscriptReader for ClaudeCodeReader {
                 // A tool result arrives as a user line. Two spellings observed:
                 // a `tool_result` content block, and a `sourceToolUseID` on the
                 // line itself. Both are handled; neither is assumed.
+                // The written file, when there is one, rides on the line rather
+                // than inside the content block — same line, different key.
+                let file = file_change(object.get("toolUseResult"));
                 if let Some(id) = tool_result_id(object.get("message")) {
-                    return vec![TranscriptEvent::ToolResult { tool_use_id: id, at }];
+                    return vec![TranscriptEvent::ToolResult {
+                        tool_use_id: id,
+                        at,
+                        file,
+                    }];
                 }
                 if let Some(id) = object.get("sourceToolUseID").and_then(Value::as_str) {
                     return vec![TranscriptEvent::ToolResult {
                         tool_use_id: id.to_string(),
                         at,
+                        file,
                     }];
                 }
                 vec![TranscriptEvent::UserTurn { at }]
@@ -219,6 +229,90 @@ fn tool_result_id(message: Option<&Value>) -> Option<String> {
         }
     }
     None
+}
+
+/// The file a tool wrote, read out of `toolUseResult`.
+///
+/// Two shapes, both measured on this machine across every transcript under
+/// `~/.claude/projects`:
+///
+/// - **edit** — `{filePath, oldString, newString, originalFile, replaceAll,
+///   structuredPatch, userModified}`, 1256 of them. The counts come from the
+///   patch.
+/// - **create** — `{type: "create", filePath, content, originalFile,
+///   structuredPatch, userModified}`, 452 of them, of which 387 were genuine
+///   creates. Every single one carried an **empty** `structuredPatch`, so the
+///   count comes from `content` instead.
+///
+/// Anything else returns `None`. `structuredPatch` is an undocumented field of
+/// a format that changes without notice, so every step here is a question and
+/// not an assumption — nothing in this file may panic on bad input, and a shape
+/// this function does not recognise is simply a call that wrote no file.
+fn file_change(result: Option<&Value>) -> Option<FileChange> {
+    let o = result?.as_object()?;
+    let path = o.get("filePath").and_then(Value::as_str)?.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    let created = o.get("type").and_then(Value::as_str) == Some("create");
+    let (added, removed) = match o.get("structuredPatch").and_then(Value::as_array) {
+        Some(hunks) if !hunks.is_empty() => count_patch(hunks),
+        // A create has no patch to read: the file had no previous version to
+        // diff against. Its whole content is what was added.
+        _ if created => (line_count(o.get("content")), 0),
+        // A recognised path with neither a patch nor content is a call that
+        // touched a file without changing it — a read, or an edit that matched
+        // nothing. Reporting `0/0` would put a row in a tree for a file this
+        // session did not write.
+        _ => return None,
+    };
+
+    Some(FileChange {
+        path: path.to_string(),
+        added,
+        removed,
+        created,
+    })
+}
+
+/// Sum the `+` and `-` lines of unified-diff hunks.
+///
+/// A hunk's `lines` are the diff body verbatim: `+` added, `-` removed, a
+/// leading space for context. Anything else — an empty line, a `\` marker for a
+/// missing trailing newline — is neither, and counting it would inflate both
+/// sides of a file that merely lacks a final newline.
+fn count_patch(hunks: &[Value]) -> (u64, u64) {
+    let mut added = 0;
+    let mut removed = 0;
+    for hunk in hunks {
+        let Some(lines) = hunk.get("lines").and_then(Value::as_array) else {
+            continue;
+        };
+        for line in lines.iter().filter_map(Value::as_str) {
+            match line.as_bytes().first() {
+                Some(b'+') => added += 1,
+                Some(b'-') => removed += 1,
+                _ => {}
+            }
+        }
+    }
+    (added, removed)
+}
+
+/// How many lines a written file has.
+///
+/// A file that does not end in a newline still has a last line, and a file that
+/// does must not be counted as having an empty one after it — which is exactly
+/// what `split('\n').count()` would do.
+fn line_count(content: Option<&Value>) -> u64 {
+    let Some(text) = content.and_then(Value::as_str) else {
+        return 0;
+    };
+    if text.is_empty() {
+        return 0;
+    }
+    text.lines().count() as u64
 }
 
 /// A short, human-readable rendering of a tool's input.
@@ -526,5 +620,73 @@ mod tests {
         };
         assert_eq!(turn.message_id, None);
         assert_eq!(turn.model, None);
+    }
+
+    // ---- file changes ---------------------------------------------------
+
+    fn file_of(line: &str) -> Option<FileChange> {
+        match reader().parse_line(line).into_iter().next() {
+            Some(TranscriptEvent::ToolResult { file, .. }) => file,
+            other => panic!("expected a tool result, got {other:?}"),
+        }
+    }
+
+    /// The `Edit` shape, verbatim from a measured result: hunk lines prefixed
+    /// `+`, `-` and space.
+    #[test]
+    fn an_edit_counts_the_lines_of_its_patch() {
+        let line = r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"filePath":"/repo/src/main.rs","oldString":"a","newString":"b","replaceAll":false,"userModified":false,"structuredPatch":[{"oldStart":1,"oldLines":3,"newStart":1,"newLines":4,"lines":[" ctx","-gone","+new","+also new"]}]}}"#;
+
+        let file = file_of(line).expect("an edit writes a file");
+        assert_eq!(file.path, "/repo/src/main.rs");
+        assert_eq!(file.added, 2);
+        assert_eq!(file.removed, 1);
+        assert!(!file.created, "editing is not creating");
+    }
+
+    /// Every one of the 387 measured creates carried an empty patch, so the
+    /// count has to come from the content or it comes from nowhere.
+    #[test]
+    fn a_created_file_is_counted_from_its_content_because_the_patch_is_empty() {
+        let line = r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"type":"create","filePath":"/repo/notes/new.md","content":"one\ntwo\nthree\n","structuredPatch":[],"userModified":false}}"#;
+
+        let file = file_of(line).expect("a create writes a file");
+        assert_eq!(file.path, "/repo/notes/new.md");
+        assert_eq!(file.added, 3, "a trailing newline does not add a fourth line");
+        assert_eq!(file.removed, 0);
+        assert!(file.created);
+    }
+
+    /// The failure this guards is a tree with a row per shell command.
+    #[test]
+    fn a_bash_result_writes_no_file() {
+        let line = r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"stdout":"ok","stderr":"","interrupted":false,"isImage":false}}"#;
+        assert_eq!(file_of(line), None);
+    }
+
+    /// An unknown shape is a call that wrote nothing, never a panic and never a
+    /// `0/0` row — `structuredPatch` is undocumented and may change.
+    #[test]
+    fn an_unrecognised_result_shape_is_not_a_file_and_not_a_panic() {
+        for line in [
+            // A path with neither patch nor content: a read, or an edit that
+            // matched nothing.
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"filePath":"/repo/a.rs"}}"#,
+            // The patch is not the shape we expect.
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"filePath":"/repo/a.rs","structuredPatch":"nope"}}"#,
+            // An empty path names no file.
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"filePath":"   ","structuredPatch":[{"lines":["+x"]}]}}"#,
+        ] {
+            assert_eq!(file_of(line), None, "line: {line}");
+        }
+    }
+
+    /// Neither a context line nor the `\ No newline` marker is a change.
+    #[test]
+    fn only_plus_and_minus_lines_count() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"filePath":"/repo/a.rs","structuredPatch":[{"lines":[" ctx","","\\ No newline at end of file","+one"]}]}}"#;
+
+        let file = file_of(line).expect("there is a plus line");
+        assert_eq!((file.added, file.removed), (1, 0));
     }
 }

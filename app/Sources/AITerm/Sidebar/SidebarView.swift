@@ -53,7 +53,13 @@ struct SidebarView: View {
                             chrome: preferences.chrome
                         )
                         .contentShape(Rectangle())
-                        .onTapGesture { reveal(card) }
+                        // Two effects, one gesture: go to the tab, and point
+                        // the Files panel at this session. The second is
+                        // harmless while that panel is closed.
+                        .onTapGesture {
+                            state.inspect(session: card.sessionID)
+                            reveal(card)
+                        }
                         .pointingHand(card.tabID != nil)
                         .help(card.tabID == nil
                             ? "Running outside aiterm. Shown because it is a real session, but there is no tab to reveal."
@@ -144,6 +150,14 @@ struct SidebarView: View {
                                     compactionThreshold: preferences.compactionThreshold,
                                     chrome: preferences.chrome
                                 )
+                                // These cards stay unrevealable — there is no
+                                // tab to switch to, and the disabled row in the
+                                // status menu says why. But their files are
+                                // just as inspectable as anyone's, and this is
+                                // the first thing a click here has ever done.
+                                .contentShape(Rectangle())
+                                .onTapGesture { state.inspect(session: card.sessionID) }
+                                .pointingHand()
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                             }
                         }
