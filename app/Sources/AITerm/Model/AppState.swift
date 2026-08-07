@@ -494,20 +494,45 @@ final class AppState: ObservableObject {
     /// `exec` so the editor replaces the shell: no shell survives it, so
     /// quitting the editor exits the tab's process and the tab closes, which is
     /// the rule tabs already follow.
-    /// # Landing on the change
+    /// # Showing the diff, not just marking it
     ///
-    /// A vim-family editor is opened on the first uncommitted hunk rather than
-    /// on line 1. The panel's whole promise is "this session wrote here", and
-    /// answering a click with the top of a 900-line file makes the reader do the
-    /// search the panel just claimed to have done.
+    /// A vim-family editor opens on the first uncommitted hunk, with three
+    /// gitsigns displays switched on. All of it is gitsigns' — there is nothing
+    /// here that draws.
     ///
-    /// The marks themselves are gitsigns' — there is nothing to draw. What is
-    /// worth being precise about is that this is the **git** diff, not the
-    /// session's: it shows what has not been committed, so it is exactly right
-    /// while reviewing an agent's work and empty once that work is committed.
-    /// The session's own line ranges exist in `structuredPatch` but the daemon
-    /// sums them away, and carrying them would mean rebasing every earlier
-    /// hunk's position past every later edit.
+    /// The sign column alone marks *that* a line changed and never what it
+    /// replaced, so a rewritten line and a brand new one look identical and a
+    /// deleted block leaves no trace at all. The three fill exactly those gaps:
+    ///
+    ///  · `toggle_deleted` puts the removed lines back, as virtual text. This is
+    ///    the one that matters — without it a deletion is invisible, and the
+    ///    file reads as if nothing was ever there.
+    ///  · `toggle_word_diff` narrows a changed line to the words that changed,
+    ///    which is the difference between "this line is different" and "this
+    ///    identifier was renamed".
+    ///  · `toggle_linehl` tints the changed lines themselves, so the shape of
+    ///    the change survives scrolling past the sign column.
+    ///
+    /// Set with an explicit `true` rather than toggled. A toggle assumes it
+    /// knows the current value, and would switch these *off* for a user whose
+    /// config already turns them on.
+    ///
+    /// Only when there are hunks, so a clean file opens as a plain file rather
+    /// than one dressed for a review that has nothing to show.
+    ///
+    /// **The jump goes first.** Switching a display on makes gitsigns recompute,
+    /// and during that recompute the hunk list is empty — so a `nav_hunk` issued
+    /// after the toggles finds nothing and says `No hunks`, on a file with six
+    /// of them. Measured both orders on the same file: toggles first leaves the
+    /// cursor on line 1, jump first reports `Hunk 1 of 6`.
+    ///
+    /// # Which diff this is
+    ///
+    /// The **git** diff, not the session's: it shows what has not been
+    /// committed, so it is exactly right while reviewing an agent's work and
+    /// empty once that work is committed. The session's own line ranges exist
+    /// in `structuredPatch` but the daemon sums them away, and carrying them
+    /// would mean rebasing every earlier hunk's position past every later edit.
     ///
     /// # Waiting for the hunks, and giving up on purpose
     ///
@@ -531,11 +556,16 @@ final class AppState: ObservableObject {
     /// Only for `nvim` and `vim`. `-c` is theirs; handing it to an `$EDITOR` of
     /// `code` or `emacs` would be passing a flag that means something else.
     nonisolated static func editorCommand(forFileAt path: String) -> String {
-        let jumpToFirstHunk = """
+        let showTheDiff = """
             lua local t=0 local function go() t=t+1 \
             local ok,gs=pcall(require,"gitsigns") \
             if ok then local h=gs.get_hunks() \
-            if h and #h>0 then gs.nav_hunk("first") return end end \
+            if h and #h>0 then \
+            gs.nav_hunk("first") \
+            pcall(gs.toggle_deleted,true) \
+            pcall(gs.toggle_word_diff,true) \
+            pcall(gs.toggle_linehl,true) \
+            return end end \
             if t<20 then vim.defer_fn(go,100) end end vim.defer_fn(go,100)
             """
 
@@ -551,7 +581,7 @@ final class AppState: ObservableObject {
         fi
         case "${editor##*/}" in
           nvim|nvim\\ *|vim|vim\\ *)
-            exec $editor -c \(shellQuoted(jumpToFirstHunk)) \(shellQuoted(path))
+            exec $editor -c \(shellQuoted(showTheDiff)) \(shellQuoted(path))
             ;;
           *)
             exec $editor \(shellQuoted(path))

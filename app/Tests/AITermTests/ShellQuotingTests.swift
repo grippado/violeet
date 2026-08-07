@@ -109,6 +109,49 @@ struct ShellQuotingTests {
         #expect(command.contains("pcall(require,\"gitsigns\")"), "a missing gitsigns must not raise")
     }
 
+    /// The sign column marks *that* a line changed and never what it replaced.
+    /// `toggle_deleted` is the one that carries the weight: without it a
+    /// deletion leaves no trace and the file reads as if nothing was there.
+    @Test("the diff is shown, not only marked")
+    func showsTheDiffItself() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        #expect(command.contains("toggle_deleted"), "a deletion must not be invisible")
+        #expect(command.contains("toggle_word_diff"))
+        #expect(command.contains("toggle_linehl"))
+    }
+
+    /// Order matters and is invisible. Switching a display on makes gitsigns
+    /// recompute, and the hunk list is empty while it does — so toggling first
+    /// makes the jump report `No hunks` on a file with six of them. Measured
+    /// both ways on the same file.
+    @Test("the jump happens before the displays are switched on")
+    func jumpPrecedesTheDisplays() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        guard let jump = command.range(of: "nav_hunk"),
+              let firstToggle = command.range(of: "toggle_deleted")
+        else {
+            Issue.record("the command no longer both jumps and toggles")
+            return
+        }
+        #expect(
+            jump.lowerBound < firstToggle.lowerBound,
+            "a toggle before the jump empties the hunk list under it"
+        )
+    }
+
+    /// Set, not toggled. A toggle assumes it knows the current value and would
+    /// switch these off for a user whose own config turns them on.
+    @Test("the displays are set true, never flipped")
+    func displaysAreSetNotToggled() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        for display in ["toggle_deleted", "toggle_word_diff", "toggle_linehl"] {
+            #expect(
+                command.contains("pcall(gs.\(display),true)"),
+                "\(display) must be set to true explicitly"
+            )
+        }
+    }
+
     /// The bound is the point. An unbounded wait would still be armed after the
     /// file is open, so the first edit that made gitsigns recompute would pull
     /// the cursor away from wherever the user was typing.
