@@ -58,6 +58,28 @@ struct FilesPanel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
+            // Where the session is running, above everything it wrote.
+            //
+            // The tree groups by root, so a panel without this reads as if the
+            // roots were the whole story — and they are not: an agent working
+            // in one checkout and writing to the vault shows two roots, neither
+            // of which is where it was launched. `truncationMode(.head)`
+            // because the tail of a path is the part that identifies it.
+            //
+            // Same `pathLabel` the card shows, so the two cannot disagree.
+            if let path = session.pathLabel {
+                HStack(spacing: 4) {
+                    Image(systemName: "folder")
+                        .appFont(.micro)
+                    Text(path)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                .appFont(.caption)
+                .foregroundStyle(.secondary)
+                .help(session.cwd ?? path)
+            }
+
             if let list, !list.isEmpty {
                 HStack(spacing: 6) {
                     Text("\(list.files.count) file\(list.files.count == 1 ? "" : "s")")

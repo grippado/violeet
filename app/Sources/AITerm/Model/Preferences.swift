@@ -136,8 +136,11 @@ final class Preferences: ObservableObject {
         // Hidden until asked for. The left sidebar is what the window is about;
         // this one is a tool you open, use and close.
         inspectorVisible = defaults.object(forKey: Key.inspectorVisible) as? Bool ?? false
+        // Files, not Settings: opening the inspector is nearly always a
+        // question about the session, and settings are a place you go once. A
+        // stored choice still wins — this is the default, not an override.
         inspectorPanel = (defaults.string(forKey: Key.inspectorPanel))
-            .flatMap(InspectorPanel.init(rawValue:)) ?? .settings
+            .flatMap(InspectorPanel.init(rawValue:)) ?? .files
 
         let storedSettings = defaults.dictionary(forKey: Key.terminalSettings) ?? [:]
         unknownTerminalKeys = storedSettings

@@ -16,11 +16,16 @@ import SwiftUI
 
 /// What the right sidebar can show.
 ///
-/// One case today. The enum is the seam: adding a panel is a case, a title, a
-/// symbol and a view, with nothing else to touch.
+/// The enum is the seam: adding a panel is a case, a title, a symbol and a
+/// view, with nothing else to touch.
+///
+/// Declaration order is tab order, and `files` comes first on purpose. The
+/// inspector is open while an agent works, and what the agent is writing is a
+/// thing to watch; a colour scheme is a thing to set once. Settings earned the
+/// first slot only by being the panel that existed first.
 enum InspectorPanel: String, CaseIterable, Identifiable {
-    case settings
     case files
+    case settings
 
     var id: String { rawValue }
 
