@@ -199,41 +199,65 @@ private struct RootSection: View {
     }
 }
 
+/// One file, and a way into it.
+///
+/// Clicking opens the file in a tab running the user's editor. The row was
+/// inert before, which made the panel a place to read a filename and then type
+/// it somewhere else — the one thing a terminal is already good at was the
+/// thing it would not do.
 private struct FileRow: View {
+    @EnvironmentObject private var state: AppState
     let entry: FileRoot.Entry
+    @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            if entry.change.created {
-                // A letter and not only a colour: the same two-channel rule the
-                // menu bar icon follows, for the same reader.
-                Text("A")
-                    .appFont(.micro, weight: .semibold)
-                    .foregroundStyle(.green)
-                    .frame(width: 9)
-            } else {
-                Text(" ").appFont(.micro).frame(width: 9)
-            }
-
-            HStack(spacing: 0) {
-                if !entry.directory.isEmpty {
-                    Text(entry.directory)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
+        QuietButton(action: { state.openInEditor(path: entry.change.path) }) {
+            HStack(spacing: 6) {
+                if entry.change.created {
+                    // A letter and not only a colour: the same two-channel rule
+                    // the menu bar icon follows, for the same reader.
+                    Text("A")
+                        .appFont(.micro, weight: .semibold)
+                        .foregroundStyle(.green)
+                        .frame(width: 9)
+                } else {
+                    Text(" ").appFont(.micro).frame(width: 9)
                 }
-                Text(entry.name)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .appFont(.caption)
 
-            Spacer(minLength: 6)
-            DiffStat(added: entry.change.added, removed: entry.change.removed, approximate: false)
-                .appFont(.micro)
+                HStack(spacing: 0) {
+                    if !entry.directory.isEmpty {
+                        Text(entry.directory)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                    Text(entry.name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .appFont(.caption)
+
+                Spacer(minLength: 6)
+                DiffStat(added: entry.change.added, removed: entry.change.removed, approximate: false)
+                    .appFont(.micro)
+            }
+            .padding(.vertical, 1)
+            .padding(.leading, 4)
+            .padding(.trailing, 4)
+            // The row is a click target, so it says so before it is clicked.
+            // Without this the only affordance is the cursor, which arrives
+            // after the user has already decided the panel is a list to read.
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(hovering ? Color.primary.opacity(0.08) : .clear)
+            )
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 4)
-        .help(entry.change.path)
+        .onHover { hovering = $0 }
+        .pointingHand()
+        .help("\(entry.change.path)\n\nClick to open in a new tab.")
+        .accessibilityLabel(entry.name)
+        .accessibilityHint("Opens \(entry.change.path) in a new tab.")
     }
 }
 

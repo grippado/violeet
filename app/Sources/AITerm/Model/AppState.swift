@@ -393,7 +393,7 @@ final class AppState: ObservableObject {
     /// `register_tab` to reach the daemon **before** the child exists, so the
     /// daemon can never receive a hook naming a tab it has not heard of.
     @discardableResult
-    func newTab(directory: String? = nil) -> TabModel {
+    func newTab(directory: String? = nil, command: String? = nil) -> TabModel {
         let cwd = directory ?? defaultDirectory()
         let tab = TabModel(font: preferences.terminalFont, directory: cwd)
 
@@ -416,12 +416,84 @@ final class AppState: ObservableObject {
         }
         tab.start(
             socketPath: Discovery.socketPath(),
-            shell: preferences.terminal.behaviour.shellOverride
+            shell: preferences.terminal.behaviour.shellOverride,
+            command: command
         )
 
         tabs.append(tab)
         selectedTabID = tab.tabID
         return tab
+    }
+
+    /// Open a file the Files panel is showing, in a tab of its own.
+    ///
+    /// # Why a new tab and not the session's own
+    ///
+    /// The obvious version writes `:e <path>` into the tab the session is
+    /// running in. That tab is almost always running the agent — it is a
+    /// session card, that is what a session is — so the obvious version types a
+    /// vim command into Claude Code's prompt. A file opened in a new tab cannot
+    /// do that to anything.
+    ///
+    /// # Why the editor and not `open`
+    ///
+    /// `open` hands the file to whatever the Finder has bound to the extension,
+    /// which for a `.swift` is an IDE and for a `.md` may be a note-taking app.
+    /// This is a terminal; the editor the user configured is the one they meant.
+    ///
+    /// The tab closes when the editor exits, which is the same rule tabs
+    /// already follow for a shell that exits.
+    func openInEditor(path: String) {
+        let directory = (path as NSString).deletingLastPathComponent
+        newTab(
+            directory: directory.isEmpty ? nil : directory,
+            command: Self.editorCommand(forFileAt: path)
+        )
+    }
+
+    /// The shell command that opens one file for editing.
+    ///
+    /// `$VISUAL` then `$EDITOR` first, because a user who set either has said
+    /// what they want. Neither is set on a stock macOS account, though, and
+    /// falling straight to `vi` there would open the system vim on a machine
+    /// with Neovim installed — the honoured convention producing the least
+    /// wanted answer. So the fallback searches, and only reaches `vi` when it
+    /// is genuinely all there is.
+    ///
+    /// The search runs in the shell rather than here because *this* process
+    /// does not have the user's `PATH` — an app launched from Finder inherits
+    /// almost none of it, which is why tabs spawn login shells at all. Asking
+    /// `command -v` from inside that shell asks the environment that will run
+    /// the editor, not the one that built the string.
+    ///
+    /// `exec` so the editor replaces the shell: no shell survives it, so
+    /// quitting the editor exits the tab's process and the tab closes, which is
+    /// the rule tabs already follow.
+    nonisolated static func editorCommand(forFileAt path: String) -> String {
+        """
+        editor=${VISUAL:-${EDITOR:-}}
+        if [ -z "$editor" ]; then
+          for candidate in nvim vim vi; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              editor=$candidate
+              break
+            fi
+          done
+        fi
+        exec $editor \(shellQuoted(path))
+        """
+    }
+
+    /// A string the shell will read back as exactly these bytes.
+    ///
+    /// Single quotes disable every expansion the shell has, so the only case to
+    /// handle is a single quote in the path itself — closed, escaped, reopened.
+    /// A path is user data and reaches a shell here; nothing else in it may be
+    /// interpreted.
+    /// `nonisolated` because it is a function of its argument and nothing else
+    /// — it touches no state, so it has no reason to be on the main actor.
+    nonisolated static func shellQuoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Close a tab: kill the shell, tell the daemon, pick a neighbour.
