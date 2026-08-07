@@ -469,8 +469,52 @@ final class AppState: ObservableObject {
     /// `exec` so the editor replaces the shell: no shell survives it, so
     /// quitting the editor exits the tab's process and the tab closes, which is
     /// the rule tabs already follow.
+    /// # Landing on the change
+    ///
+    /// A vim-family editor is opened on the first uncommitted hunk rather than
+    /// on line 1. The panel's whole promise is "this session wrote here", and
+    /// answering a click with the top of a 900-line file makes the reader do the
+    /// search the panel just claimed to have done.
+    ///
+    /// The marks themselves are gitsigns' — there is nothing to draw. What is
+    /// worth being precise about is that this is the **git** diff, not the
+    /// session's: it shows what has not been committed, so it is exactly right
+    /// while reviewing an agent's work and empty once that work is committed.
+    /// The session's own line ranges exist in `structuredPatch` but the daemon
+    /// sums them away, and carrying them would mean rebasing every earlier
+    /// hunk's position past every later edit.
+    ///
+    /// # Waiting for the hunks, and giving up on purpose
+    ///
+    /// The jump polls for hunks rather than firing on `User GitSignsUpdate`,
+    /// which was the first attempt and is wrong twice. That event fires more
+    /// than once, and the first fire is before the hunks are computed — so a
+    /// `++once` handler burns on the empty one and never runs again. Measured:
+    /// the event fires, `nav_hunk` returns cleanly, and the cursor stays on
+    /// line 1.
+    ///
+    /// The obvious repair — an autocmd that stays until it finds hunks — is
+    /// worse. It would still be armed later, so the first edit that made
+    /// gitsigns recompute would yank the cursor to the top of the file while
+    /// the user was typing somewhere else. Opening a file is a moment, not a
+    /// mode.
+    ///
+    /// So: twenty tries, 100ms apart, then it stops caring. Two seconds is far
+    /// past a local attach, and the failure mode is a file that opens at the
+    /// top — which is what it did before any of this.
+    ///
+    /// Only for `nvim` and `vim`. `-c` is theirs; handing it to an `$EDITOR` of
+    /// `code` or `emacs` would be passing a flag that means something else.
     nonisolated static func editorCommand(forFileAt path: String) -> String {
-        """
+        let jumpToFirstHunk = """
+            lua local t=0 local function go() t=t+1 \
+            local ok,gs=pcall(require,"gitsigns") \
+            if ok then local h=gs.get_hunks() \
+            if h and #h>0 then gs.nav_hunk("first") return end end \
+            if t<20 then vim.defer_fn(go,100) end end vim.defer_fn(go,100)
+            """
+
+        return """
         editor=${VISUAL:-${EDITOR:-}}
         if [ -z "$editor" ]; then
           for candidate in nvim vim vi; do
@@ -480,7 +524,14 @@ final class AppState: ObservableObject {
             fi
           done
         fi
-        exec $editor \(shellQuoted(path))
+        case "${editor##*/}" in
+          nvim|nvim\\ *|vim|vim\\ *)
+            exec $editor -c \(shellQuoted(jumpToFirstHunk)) \(shellQuoted(path))
+            ;;
+          *)
+            exec $editor \(shellQuoted(path))
+            ;;
+        esac
         """
     }
 

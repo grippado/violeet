@@ -74,7 +74,40 @@ struct ShellQuotingTests {
     @Test("the editor replaces the shell, and gets the path quoted")
     func commandExecsWithQuotedPath() {
         let command = AppState.editorCommand(forFileAt: "/tmp/it's here.md")
-        #expect(command.contains("exec $editor '/tmp/it'\\''s here.md'"))
+        #expect(command.contains("exec $editor -c "))
+        #expect(command.contains("'/tmp/it'\\''s here.md'"))
+    }
+
+    /// The jump waits for hunks to exist, because the attach is asynchronous and
+    /// gitsigns' own `GitSignsUpdate` fires once before they are computed.
+    @Test("a vim-family editor opens on the first uncommitted hunk")
+    func jumpsToFirstHunk() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        #expect(command.contains("nav_hunk"))
+        #expect(command.contains("get_hunks"), "it must wait for hunks, not fire blind")
+        #expect(command.contains("pcall(require,\"gitsigns\")"), "a missing gitsigns must not raise")
+    }
+
+    /// The bound is the point. An unbounded wait would still be armed after the
+    /// file is open, so the first edit that made gitsigns recompute would pull
+    /// the cursor away from wherever the user was typing.
+    @Test("the jump gives up rather than staying armed")
+    func jumpIsBounded() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        #expect(command.contains("t<20"), "the retry must terminate")
+        #expect(command.contains("return end"), "finding a hunk must stop the retry")
+        #expect(!command.contains("autocmd"), "an autocmd would outlive the opening")
+    }
+
+    /// `-c` belongs to vim and nvim. An `$EDITOR` of `code` or `emacs` reads it
+    /// as something else entirely, so the command has two branches.
+    @Test("only vim-family editors are handed -c")
+    func onlyVimFamilyGetsTheFlag() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        #expect(command.contains("case \"${editor##*/}\" in"), "the branch keys off the program name, not the full path")
+        #expect(command.contains("nvim|nvim\\ *|vim|vim\\ *"))
+        // The other branch exists and is plain.
+        #expect(command.contains("exec $editor '/tmp/a.md'"))
     }
 
     /// The property the whole thing rests on: whatever the path is, the result

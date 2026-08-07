@@ -20,6 +20,19 @@
 // Grouping and sorting happen here — presentation over data the daemon sent.
 // The counts do not: no `git`, no stat, no diff. `SessionFileList.grouped` is a
 // pure function for exactly that reason.
+//
+// # A list you can act on
+//
+// A row opens its file in a tab running the user's editor — see
+// `AppState.openInEditor`. A panel that only names files makes the reader
+// retype a path into the terminal beside it, which is the one errand a terminal
+// should never hand back.
+//
+// The diff marks in that editor are gitsigns' and are the **git** diff: what is
+// not yet committed. That is the right answer while reviewing an agent's work
+// and an empty one afterwards. The session's own line ranges arrive in
+// `structuredPatch` and the daemon sums them away — showing those instead would
+// mean carrying every hunk and rebasing its position past every later edit.
 
 import SwiftUI
 
