@@ -192,11 +192,13 @@ struct SidebarView: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text("Sessions")
                 .appFont(.body, weight: .semibold)
                 .foregroundStyle(.secondary)
-            Spacer()
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            spanButton
             Button { state.newTab() } label: { Image(systemName: "plus") }
                 .buttonStyle(.plain)
                 .pointingHand()
@@ -206,6 +208,30 @@ struct SidebarView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 6)
+    }
+
+    /// Cycles the sidebar through its three widths.
+    ///
+    /// Labelled with the width it is at, not the one it will go to. A button
+    /// that names its own effect reads as a state the moment you stop watching
+    /// it change — the sidebar is plainly at some width, and a control beside it
+    /// saying `66%` while it sits at 33% is a contradiction on screen.
+    private var spanButton: some View {
+        let span = Preferences.SidebarSpan.nearest(to: state.preferences.sidebarWidth)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                state.preferences.setSidebarWidth(span.next.width)
+            }
+        } label: {
+            Text(span.label)
+                .appFont(.small, weight: .medium, monospacedDigit: true)
+        }
+        .buttonStyle(.plain)
+        .pointingHand()
+        .foregroundStyle(.secondary)
+        .help("Sidebar width — \(span.label). Click for \(span.next.label).")
+        .accessibilityLabel("Sidebar width, \(span.label)")
+        .accessibilityHint("Changes the sidebar to \(span.next.label) of its widest.")
     }
 
     private func sectionLabel(_ text: String) -> some View {

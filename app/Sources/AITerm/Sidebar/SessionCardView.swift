@@ -219,15 +219,40 @@ struct SessionCardView: View {
             .fixedSize()
     }
 
+    /// Tool and model, side by side while they fit and stacked when they do not.
+    ///
+    /// `claude` + `claude-opus-5[1m]` is about 150pt of text, which is more than
+    /// the whole card has at the narrowest width the sidebar allows. Stacking is
+    /// the only degradation that keeps both readable; truncating the model to
+    /// `claude-opus…` throws away the half that distinguishes one session from
+    /// another.
     private var pillRow: some View {
-        HStack(spacing: 4) {
-            pill(CardTheme.toolLabel(for: card.agent), border: tool)
-            // An unknown model is a dash in a pill, not a missing pill: the
-            // absence is information, and a row that silently loses an element
-            // reads as a different kind of session.
-            pill(card.model ?? Fmt.unknown, border: .secondary.opacity(0.45))
-            Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) {
+                toolPill
+                modelPill
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) { toolPill; Spacer(minLength: 0) }
+                HStack(spacing: 4) { modelPill; Spacer(minLength: 0) }
+            }
         }
+    }
+
+    private var toolPill: some View {
+        pill(CardTheme.toolLabel(for: card.agent), border: tool)
+    }
+
+    /// An unknown model is a dash in a pill, not a missing pill: the absence is
+    /// information, and a row that silently loses an element reads as a
+    /// different kind of session.
+    private var modelPill: some View {
+        pill(card.model ?? Fmt.unknown, border: .secondary.opacity(0.45))
+            // The last resort, when even a stacked pill is wider than the card.
+            // Middle truncation keeps the family and the tag — `claude…5[1m]`
+            // over `claude-opus…`, which loses the part that varies.
+            .truncationMode(.middle)
     }
 
     private func pill(_ text: String, border: Color) -> some View {
@@ -255,7 +280,22 @@ struct SessionCardView: View {
     /// The absolute pair earns its place too: `28%` alone cannot distinguish a
     /// small window nearly full from a large one barely touched, and those call
     /// for opposite reactions.
+    ///
+    /// `28% · 56k/200k` is the full reading and the first thing to go when the
+    /// card runs out of width. It degrades to the percentage alone rather than
+    /// truncating: `28% · 56k/2…` is a number cut in half, which is worse than
+    /// no number at all. The gauge and the label never leave — between them they
+    /// still say what the row measures and roughly where it stands.
     private var contextRow: some View {
+        ViewThatFits(in: .horizontal) {
+            contextRow(readout: contextReadout)
+            contextRow(readout: contextReadoutShort)
+            contextRow(readout: nil)
+        }
+        .help(contextHelp)
+    }
+
+    private func contextRow(readout: String?) -> some View {
         HStack(spacing: 6) {
             Text("ctx")
                 .appFont(.caption, weight: .medium)
@@ -267,13 +307,14 @@ struct SessionCardView: View {
                 threshold: compactionThreshold
             )
 
-            Text(contextReadout)
-                .appFont(.caption, weight: .medium, monospacedDigit: true)
-                .foregroundStyle(contextTint)
-                .lineLimit(1)
-                .fixedSize()
+            if let readout {
+                Text(readout)
+                    .appFont(.caption, weight: .medium, monospacedDigit: true)
+                    .foregroundStyle(contextTint)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
-        .help(contextHelp)
     }
 
     /// `28% · 56k/200k` when the window is known, `56k` when it is not.
@@ -290,6 +331,17 @@ struct SessionCardView: View {
         guard let used = card.contextUsedTokens else { return Fmt.unknown }
         guard let size = card.contextSizeTokens else { return Fmt.tokens(used) }
         return "\(Fmt.percent(card.contextFraction)) · \(Fmt.tokens(used))/\(Fmt.tokens(size))"
+    }
+
+    /// The percentage on its own, for a card too narrow for the ratio.
+    ///
+    /// Falls back to the absolute count when there is no window size, because
+    /// that is the one number still measured — the same rule the full readout
+    /// follows, for the same reason.
+    private var contextReadoutShort: String {
+        guard let used = card.contextUsedTokens else { return Fmt.unknown }
+        guard card.contextSizeTokens != nil else { return Fmt.tokens(used) }
+        return Fmt.percent(card.contextFraction)
     }
 
     private var contextTint: Color {
@@ -337,6 +389,13 @@ struct SessionCardView: View {
     /// Tokens on the left, limits pushed to the right edge. What this session
     /// spent belongs with the rest of the session's own numbers; the account's
     /// limits are a different subject and sit apart from them.
+    ///
+    /// Four rungs, each narrower than the last, because the two-rung version
+    /// shipped assuming the second one always fits — and at the narrowest
+    /// sidebar width neither did. `ViewThatFits` takes the last alternative
+    /// whether or not it fits, so the last one has to be genuinely narrow;
+    /// anything wider than the card silently becomes the overflow it was meant
+    /// to prevent.
     private var usageRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {
@@ -350,6 +409,18 @@ struct SessionCardView: View {
                     HStack(spacing: 10) { limits; Spacer(minLength: 0) }
                 }
             }
+            VStack(alignment: .leading, spacing: 4) {
+                tokensStacked
+                if hasLimits {
+                    HStack(spacing: 10) { limits; Spacer(minLength: 0) }
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                tokensStacked
+                if hasLimits {
+                    HStack(spacing: 10) { limitsBare; Spacer(minLength: 0) }
+                }
+            }
         }
     }
 
@@ -361,17 +432,52 @@ struct SessionCardView: View {
 
     @ViewBuilder
     private var limits: some View {
+        limitPair(showsCountdown: true)
+    }
+
+    /// The same pair without the reset countdowns, for the narrowest card.
+    ///
+    /// The countdown is the part that can be given up: `22%` is the state, and
+    /// `2h19m` is when it stops being true. Both survive in the tooltip.
+    @ViewBuilder
+    private var limitsBare: some View {
+        limitPair(showsCountdown: false)
+    }
+
+    @ViewBuilder
+    private func limitPair(showsCountdown: Bool) -> some View {
         if hasLimits {
             HStack(spacing: 10) {
-                limitStat("5h", card.fiveHourLimitUsedPercent, card.fiveHourLimitResetsAt)
-                limitStat("7d", card.sevenDayLimitUsedPercent, card.sevenDayLimitResetsAt)
+                limitStat(
+                    "5h", card.fiveHourLimitUsedPercent, card.fiveHourLimitResetsAt,
+                    showsCountdown: showsCountdown
+                )
+                limitStat(
+                    "7d", card.sevenDayLimitUsedPercent, card.sevenDayLimitResetsAt,
+                    showsCountdown: showsCountdown
+                )
             }
             .fixedSize()
-            .help("Your Claude subscription's usage limits, and when each window resets.")
+            .help(limitHelp)
         }
     }
 
-    private func limitStat(_ label: String, _ percent: Double?, _ resetsAt: String?) -> some View {
+    /// Spells out both resets, so the countdowns the narrow card drops are still
+    /// somewhere.
+    private var limitHelp: String {
+        var lines = ["Your Claude subscription's usage limits."]
+        if let reset = Fmt.countdown(to: card.fiveHourLimitResetsAt) {
+            lines.append("5-hour window resets in \(reset).")
+        }
+        if let reset = Fmt.countdown(to: card.sevenDayLimitResetsAt) {
+            lines.append("Weekly window resets in \(reset).")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func limitStat(
+        _ label: String, _ percent: Double?, _ resetsAt: String?, showsCountdown: Bool
+    ) -> some View {
         HStack(spacing: 3) {
             Text(label)
                 .appFont(.caption, weight: .medium)
@@ -383,7 +489,7 @@ struct SessionCardView: View {
                 .foregroundStyle(percent.map {
                     CardTheme.gaugeColor(fraction: $0 / 100, threshold: compactionThreshold)
                 } ?? .secondary)
-            if let countdown = Fmt.countdown(to: resetsAt) {
+            if showsCountdown, let countdown = Fmt.countdown(to: resetsAt) {
                 Text(countdown)
                     .appFont(.small, monospacedDigit: true)
                     .foregroundStyle(.tertiary)
@@ -401,37 +507,71 @@ struct SessionCardView: View {
     private var tokens: some View {
         let partial = card.cumulativeTokensPartial == true
         return HStack(spacing: 10) {
-            tokenStat(
-                "in", "↑",
-                Fmt.tokens(card.cumulativeInputTokens, partial: partial),
-                CardTheme.tokenIn
-            )
-            // The number that was missing, and the one that dominates. Measured
-            // on real sessions, cache reads are 99.5% of everything the prompt
-            // side consumed: `in` alone read 628 where the true figure was 121
-            // million. A card without this one is not showing a rounded total,
-            // it is showing a different quantity.
-            //
-            // Cache *creation* is on the wire but not on the card — it is
-            // priced differently, so it cannot be added to this, and it ran
-            // under 1% of cache reads in every session measured. It is in the
-            // tooltip, where a number that small belongs.
-            tokenStat(
-                "cache", "⟳",
-                Fmt.tokens(card.cumulativeCacheReadTokens, partial: partial),
-                CardTheme.tokenCache
-            )
-            tokenStat(
-                "out", "↓",
-                Fmt.tokens(card.cumulativeOutputTokens, partial: partial),
-                CardTheme.tokenOut
-            )
+            inStat(partial: partial)
+            cacheStat(partial: partial)
+            outStat(partial: partial)
         }
         .fixedSize()
         // The tilde is easy to miss and the tooltip is where "why" lives. The
         // breakdown is here too, because the three are priced differently and
         // adding them together is the mistake this card is arranged to avoid.
         .help(tokenHelp(partial: partial))
+    }
+
+    /// The same three on two lines, for a card too narrow for one.
+    ///
+    /// `cache` gets the second line to itself because it is the widest by an
+    /// order of magnitude — a session's cache reads run into the millions while
+    /// `in` and `out` stay in the thousands. Pairing the two small ones and
+    /// giving the large one its own row wastes the least width.
+    private var tokensStacked: some View {
+        let partial = card.cumulativeTokensPartial == true
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 10) {
+                inStat(partial: partial)
+                outStat(partial: partial)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                cacheStat(partial: partial)
+                Spacer(minLength: 0)
+            }
+        }
+        .help(tokenHelp(partial: partial))
+    }
+
+    private func inStat(partial: Bool) -> some View {
+        tokenStat(
+            "in", "↑",
+            Fmt.tokens(card.cumulativeInputTokens, partial: partial),
+            CardTheme.tokenIn
+        )
+    }
+
+    /// The number that was missing, and the one that dominates. Measured on real
+    /// sessions, cache reads are 99.5% of everything the prompt side consumed:
+    /// `in` alone read 628 where the true figure was 121 million. A card without
+    /// this one is not showing a rounded total, it is showing a different
+    /// quantity.
+    ///
+    /// Cache *creation* is on the wire but not on the card — it is priced
+    /// differently, so it cannot be added to this, and it ran under 1% of cache
+    /// reads in every session measured. It is in the tooltip, where a number
+    /// that small belongs.
+    private func cacheStat(partial: Bool) -> some View {
+        tokenStat(
+            "cache", "⟳",
+            Fmt.tokens(card.cumulativeCacheReadTokens, partial: partial),
+            CardTheme.tokenCache
+        )
+    }
+
+    private func outStat(partial: Bool) -> some View {
+        tokenStat(
+            "out", "↓",
+            Fmt.tokens(card.cumulativeOutputTokens, partial: partial),
+            CardTheme.tokenOut
+        )
     }
 
     private func tokenHelp(partial: Bool) -> String {
@@ -459,6 +599,13 @@ struct SessionCardView: View {
                 .appFont(.caption, weight: .medium, monospacedDigit: true)
                 .foregroundStyle(.primary)
         }
+        // A stat is atomic: it wraps as a unit or not at all. Without this, a
+        // narrow card breaks the number itself rather than the row — `~142`
+        // becomes `~14` over `2`, which is not a smaller reading of the figure,
+        // it is a different figure. The rows above choose how many stats share a
+        // line; none of them may split one.
+        .lineLimit(1)
+        .fixedSize()
     }
 
     // MARK: Chrome

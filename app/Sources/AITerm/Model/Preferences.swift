@@ -36,6 +36,53 @@ final class Preferences: ObservableObject {
     static let minimumFontSize: CGFloat = 8
     static let maximumFontSize: CGFloat = 32
 
+    /// Three sidebar widths, as fractions of the widest one allowed.
+    ///
+    /// The drag handle is precise and slow; this is the opposite trade. Widening
+    /// the sidebar to read a card and narrowing it again is a round trip that
+    /// happens many times an hour, and doing it by dragging means aiming at a
+    /// 9pt target twice.
+    ///
+    /// Fractions of `maximumSidebarWidth` rather than of the window: the card is
+    /// what the sidebar is sized for, and the card does not get more readable
+    /// because the display is wider. A fraction of the window would also make
+    /// the same setting mean different widths on a laptop and on a monitor.
+    ///
+    /// `third` lands on `minimumSidebarWidth` once clamped, which is deliberate
+    /// — the narrow rung is the narrowest the sidebar goes, not a fourth width
+    /// between the two.
+    enum SidebarSpan: Double, CaseIterable, Identifiable {
+        case third = 0.33
+        case twoThirds = 0.66
+        case full = 1.0
+
+        var id: Double { rawValue }
+
+        var width: CGFloat {
+            Preferences.clampWidth(Preferences.maximumSidebarWidth * CGFloat(rawValue))
+        }
+
+        /// `33%`, `66%`, `100%`. What the button says it will become.
+        var label: String {
+            "\(Int((rawValue * 100).rounded()))%"
+        }
+
+        var next: SidebarSpan {
+            let all = Self.allCases
+            let index = all.firstIndex(of: self) ?? 0
+            return all[(index + 1) % all.count]
+        }
+
+        /// Which rung a given width counts as.
+        ///
+        /// The handle can leave the sidebar between two rungs, and the button
+        /// still has to say something. Nearest rather than next-lowest, so a
+        /// width one point under `full` does not read as `66%`.
+        static func nearest(to width: CGFloat) -> SidebarSpan {
+            allCases.min(by: { abs($0.width - width) < abs($1.width - width) }) ?? .third
+        }
+    }
+
     private let defaults: UserDefaults
 
     @Published var sidebarWidth: CGFloat {
