@@ -65,18 +65,30 @@ impl SessionState {
     ///
     /// - nothing may transition *into* `Starting`; it is only ever the birth state
     /// - nothing leaves `Dead`
-    /// - `Done` may only become `Dead`
+    /// - `Done` may go back to any live state: a session can be resumed
     /// - the live states (`Starting`, `Idle`, `Working`, `WaitingHitl`) may move
     ///   to any non-`Starting` state, including themselves — re-asserting the
     ///   current state on every hook is normal traffic, not an error
+    ///
+    /// # Why `Done` is not terminal
+    ///
+    /// It was, and the bug that cost was worth the rule change. `SessionEnd`
+    /// maps to `Done`, and `claude --resume` brings a session back **under the
+    /// same `session_id`** — so every hook after a resume tried `done ->
+    /// working`, was refused, and was logged. The session went on working,
+    /// spending tokens and raising permission requests, while `live_sessions`
+    /// filtered it out of every snapshot: the card was gone from the board and
+    /// the daemon held a HITL that could still block a human.
+    ///
+    /// `Dead` remains the only terminal state, and it is the honest one — it
+    /// means the tab closed or the session expired, neither of which a resume
+    /// can undo.
     pub fn can_transition_to(self, next: SessionState) -> bool {
         use SessionState::*;
         match (self, next) {
             (_, Starting) => false,
             (Dead, _) => false,
-            (Done, Dead) => true,
-            (Done, _) => false,
-            (Starting | Idle | Working | WaitingHitl, _) => true,
+            (Done | Starting | Idle | Working | WaitingHitl, _) => true,
         }
     }
 
@@ -161,6 +173,12 @@ mod tests {
         (WaitingHitl, WaitingHitl),
         (WaitingHitl, Done),
         (WaitingHitl, Dead),
+        // A resumed session comes back under the same id, so `Done` is a
+        // resting state and not a terminal one.
+        (Done, Idle),
+        (Done, Working),
+        (Done, WaitingHitl),
+        (Done, Done),
         (Done, Dead),
     ];
 
@@ -195,10 +213,24 @@ mod tests {
     }
 
     #[test]
-    fn done_only_becomes_dead() {
-        for to in SessionState::ALL {
-            assert_eq!(Done.can_transition_to(to), to == Dead, "done -> {to}");
+    fn done_goes_back_to_work_because_a_session_can_be_resumed() {
+        // The case this rule exists for: `claude --resume` reuses the
+        // `session_id`, so the first hook after a resume is `done -> working`.
+        // While that was refused, the session kept working off the board.
+        for to in [Idle, Working, WaitingHitl] {
+            assert!(Done.can_transition_to(to), "done -> {to}");
         }
+        assert!(Done.can_transition_to(Dead), "done -> dead");
+        assert!(!Done.can_transition_to(Starting), "done -> starting");
+    }
+
+    #[test]
+    fn dead_is_the_only_state_a_resume_cannot_undo() {
+        // The distinction the rule change rests on: `Done` means the agent
+        // stopped, which a resume reverses; `Dead` means the tab closed or the
+        // session expired, which it does not.
+        assert!(!Done.is_terminal());
+        assert!(Dead.is_terminal());
     }
 
     #[test]

@@ -355,7 +355,14 @@ impl Hub {
 
             let msg = match registry.session(&outcome.session_id) {
                 _ if outcome.rejected_transition.is_some() => None,
-                Some(session) if outcome.created => Some(Self::session_registered(session)),
+                // A resumed session is announced like a new one, not patched.
+                // The app dropped its card when `session_ended` arrived, and
+                // `session_registered` is an idempotent upsert by contract
+                // (docs/PROTOCOL.md, the snapshot replay), so re-announcing is
+                // ordinary traffic rather than a duplicate to detect.
+                Some(session) if outcome.created || outcome.resurrected => {
+                    Some(Self::session_registered(session))
+                }
                 // A session that just finished gets no patch. `session_ended`
                 // is the message that reports the end, and `Done`/`Dead` have
                 // no wire state anyway — so a patch here would be a stateless

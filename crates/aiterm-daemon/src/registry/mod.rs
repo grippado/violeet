@@ -95,6 +95,11 @@ pub struct HookOutcome {
     pub session_id: String,
     /// First time we have seen this session.
     pub created: bool,
+    /// It had ended and is running again — a resumed session, which Claude Code
+    /// brings back under the same `session_id`. The socket layer announces it
+    /// exactly like a new one: the app removed the card when `session_ended`
+    /// arrived, so a patch would be an update about a card that is not there.
+    pub resurrected: bool,
     /// It acquired a tab binding on this observation.
     pub newly_bound: bool,
     /// Its lifecycle state moved.
@@ -290,6 +295,10 @@ impl Registry {
             session.harness = obs.harness;
         }
 
+        // Read before the move, because the move is what we are measuring: a
+        // session that was finished and is about to be live again.
+        let was_finished = session.state().is_finished();
+
         let mut state_changed = false;
         let mut rejected_transition = None;
         match obs.state {
@@ -300,9 +309,14 @@ impl Registry {
             _ => session.touch(now),
         }
 
+        // Never both: a session seen for the first time was not resurrected,
+        // whatever state it was born into.
+        let resurrected = !created && was_finished && !session.state().is_finished();
+
         HookOutcome {
             session_id: session.session_id.clone(),
             created,
+            resurrected,
             newly_bound,
             state_changed,
             origin_changed,
@@ -708,6 +722,59 @@ mod tests {
         assert_eq!(r.session("s1").unwrap().title_source, TitleSource::User);
 
         assert!(!r.rename_session("ghost", "nope", t(2)));
+    }
+
+    #[test]
+    fn a_resumed_session_comes_back_to_the_board() {
+        // The whole bug, in one test. `SessionEnd` ends the session; `claude
+        // --resume` brings it back under the same id; the next hook says
+        // `Working`. Before this was allowed, the transition was refused and
+        // the session went on working while every snapshot filtered it out.
+        let mut r = registry();
+        r.observe_hook(hook("s1"), t(0));
+
+        let ended = r.observe_hook(hook("s1").with_state(SessionState::Done), t(1));
+        assert!(ended.state_changed);
+        assert!(!ended.resurrected, "ending is not a resurrection");
+        assert_eq!(r.live_sessions().count(), 0, "an ended session is off the board");
+
+        let resumed = r.observe_hook(hook("s1").with_state(SessionState::Working), t(2));
+        assert_eq!(resumed.rejected_transition, None, "a resume is not an illegal move");
+        assert!(resumed.state_changed);
+        assert!(resumed.resurrected, "the socket layer re-announces on this flag");
+        assert!(!resumed.created, "same session, not a second one");
+
+        assert_eq!(r.session("s1").unwrap().state(), SessionState::Working);
+        let live: Vec<_> = r.live_sessions().map(|s| s.session_id.clone()).collect();
+        assert_eq!(live, vec!["s1".to_string()], "and it is back on the board");
+    }
+
+    #[test]
+    fn a_session_that_never_ended_is_not_resurrected() {
+        // Guards the flag against the obvious over-fire: ordinary traffic on a
+        // live session must not make the socket layer re-announce it.
+        let mut r = registry();
+        let created = r.observe_hook(hook("s1"), t(0));
+        assert!(created.created);
+        assert!(!created.resurrected, "a birth is not a resurrection");
+
+        let working = r.observe_hook(hook("s1").with_state(SessionState::Working), t(1));
+        assert!(!working.resurrected);
+    }
+
+    #[test]
+    fn a_dead_session_stays_dead_when_a_hook_arrives() {
+        // `Dead` is what a resume genuinely cannot undo: the tab closed, or the
+        // session expired. It must keep refusing.
+        let mut r = registry();
+        r.observe_hook(hook("s1"), t(0));
+        r.set_state("s1", SessionState::Dead, t(1)).unwrap().unwrap();
+
+        let out = r.observe_hook(hook("s1").with_state(SessionState::Working), t(2));
+        assert!(out.rejected_transition.is_some(), "dead -> working stays illegal");
+        assert!(!out.resurrected);
+        assert_eq!(r.session("s1").unwrap().state(), SessionState::Dead);
+        assert_eq!(r.live_sessions().count(), 0);
     }
 
     #[test]
