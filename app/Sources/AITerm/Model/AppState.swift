@@ -403,6 +403,17 @@ final class AppState: ObservableObject {
         // default font and was resized afterwards would hand its child one
         // size and then immediately a different one.
         tab.session.apply(preferences.terminal)
+        // `exit` closes the tab, the way it does in every other terminal. The
+        // hop to the main actor is what lets the tab call us at all: the exit
+        // arrives on SwiftTerm's delegate, and `closeTab` touches `tabs` and
+        // `selectedTabID`, which are this actor's.
+        //
+        // `weak tab` and not a captured id, because a tab that has already been
+        // removed must not be resurrected by its own dying callback.
+        tab.onShellExit = { [weak self, weak tab] in
+            guard let tab else { return }
+            Task { @MainActor in self?.closeTab(tab.tabID) }
+        }
         tab.start(
             socketPath: Discovery.socketPath(),
             shell: preferences.terminal.behaviour.shellOverride

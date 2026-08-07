@@ -41,10 +41,24 @@ final class TabModel: ObservableObject, Identifiable {
     /// the tab.
     @Published private(set) var manualName: String?
 
-    /// The shell exited but the tab is still on screen. The user closes it; the
-    /// app does not close it for them, because the scrollback is often the
-    /// reason they want to look.
+    /// The shell exited. True for the moment between the child dying and the
+    /// tab being taken off screen — `AppState` closes the tab through
+    /// `onShellExit`, the way every other terminal does when you type `exit`.
+    ///
+    /// The flag outlives that moment only when nobody is listening on
+    /// `onShellExit`, which is why the sidebar still knows how to draw a dead
+    /// tab rather than assuming it can never see one.
     @Published private(set) var hasExited = false
+
+    /// Called when this tab's shell dies, for whatever reason: `exit`, a signal,
+    /// or the process crashing.
+    ///
+    /// A callback rather than the tab closing itself, because closing is not a
+    /// tab's decision to make: `AppState.closeTab` is the only path that also
+    /// tells the daemon (`close_tab`) and picks the neighbour to select. A tab
+    /// removing itself from the list would leave the daemon believing in a tab
+    /// that no longer exists.
+    var onShellExit: (() -> Void)?
 
     var id: String { tabID }
 
@@ -68,10 +82,12 @@ final class TabModel: ObservableObject, Identifiable {
             self?.foregroundProcess = name
         }
         session.onExit = { [weak self] _ in
-            self?.hasExited = true
+            guard let self else { return }
+            self.hasExited = true
             // A dead shell has no foreground program. Leaving the last one
             // would leave the tab named after something that is not running.
-            self?.foregroundProcess = nil
+            self.foregroundProcess = nil
+            self.onShellExit?()
         }
     }
 
