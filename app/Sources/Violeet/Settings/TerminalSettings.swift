@@ -346,9 +346,13 @@ struct TerminalTheme: Equatable {
         // inverted in theory and unreadable in practice. Every colour was
         // re-picked at a luminance that clears AA on `#FAF8FE`.
         //
-        // `white` and `brightWhite` are the exception, and have to be: they
-        // mean "the palest thing here", which on a pale ground is a surface to
-        // fill with rather than something to write with.
+        // `white` and `brightWhite` are legible text here, not the palest thing
+        // available, and that is a correction rather than a preference. They
+        // were `#C9C3DE` and `#FFFFFF` on the reasoning that colour 7 means "the
+        // palest thing" and so is a surface. Correct about the name, wrong about
+        // the use: colour 7 is the default foreground of a large share of
+        // terminal programs. Under btop it measured 1.61 against this ground and
+        // the memory labels were simply absent.
         TerminalTheme(
             name: "Violeeter Light",
             background: RGB(0xFA, 0xF8, 0xFE),
@@ -357,10 +361,10 @@ struct TerminalTheme: Equatable {
             ansi: [
                 RGB(0x2A, 0x24, 0x40), RGB(0xC0, 0x2A, 0x47), RGB(0x14, 0x7A, 0x52),
                 RGB(0x8A, 0x5A, 0x0B), RGB(0x2B, 0x4A, 0xCB), RGB(0x7C, 0x3A, 0xED),
-                RGB(0x0F, 0x6E, 0x80), RGB(0xC9, 0xC3, 0xDE),
+                RGB(0x0F, 0x6E, 0x80), RGB(0x55, 0x50, 0x6E),
                 RGB(0x6B, 0x66, 0x85), RGB(0xA8, 0x1E, 0x39), RGB(0x0F, 0x64, 0x44),
                 RGB(0x74, 0x49, 0x0A), RGB(0x20, 0x39, 0xA8), RGB(0x64, 0x25, 0xC9),
-                RGB(0x0B, 0x5A, 0x69), RGB(0xFF, 0xFF, 0xFF),
+                RGB(0x0B, 0x5A, 0x69), RGB(0x2A, 0x24, 0x40),
             ]
         ),
         TerminalTheme(

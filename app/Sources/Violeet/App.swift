@@ -66,9 +66,16 @@ private struct VioleetCommands: Commands {
         // right thing. `.appSettings` is the group AppKit puts "Settings…" in,
         // so replacing it swaps the behaviour without leaving a dead menu entry
         // that opens an empty window beside the working one.
+        // Settings keeps its menu item and loses `⌘,`.
+        //
+        // `⌘,` is the Mac convention for preferences and it is given up on
+        // purpose. This window has two sidebars, and they are opened and closed
+        // many times an hour while a settings panel is opened about twice a
+        // month. Two adjacent keys that mirror the two edges of the window are
+        // worth more here than a convention for a panel that is one click away
+        // in the inspector it already lives in.
         CommandGroup(replacing: .appSettings) {
             Button("Settings…") { state.toggleInspector(showing: .settings) }
-                .keyboardShortcut(",", modifiers: .command)
         }
 
         // The About panel is the app's own, not AppKit's. `.appInfo` is the
@@ -90,20 +97,30 @@ private struct VioleetCommands: Commands {
             Button(state.preferences.sidebarVisible ? "Hide Sessions" : "Show Sessions") {
                 state.toggleSidebar()
             }
-            // `⌘.` rather than the old `⌥⌘S`: this is a sidebar people collapse
-            // to read a wide diff and open again a second later, and it should
-            // be one hand. SwiftUI binds one shortcut per item, so it is a
-            // replacement and not an addition.
+            // The two keys mirror the two edges: `,` is left of `.` on the
+            // keyboard and the sessions sidebar is left of the inspector. Both
+            // are one hand, which is what a control used many times an hour has
+            // to be.
+            //
+            // Getting this backwards is worse than an arbitrary pair, because
+            // the mapping *looks* like it should mean something and then does
+            // the opposite. It was backwards until now.
             //
             // The classic Mac meaning of `⌘.` is "cancel", but nothing in this
             // window cancels — interrupting the program in the terminal is
             // `Ctrl-C`, which never reaches the menu bar.
-            .keyboardShortcut(".", modifiers: .command)
+            .keyboardShortcut(",", modifiers: .command)
 
+            // Opens on whichever panel was last used, which is the whole point
+            // of `toggleInspector()` taking no argument: reopening a panel you
+            // closed a second ago and being given a different one is the app
+            // overruling a choice you just made. `Settings…` and `Files` still
+            // ask for a specific panel, because there the panel *is* the
+            // request.
             Button(state.preferences.inspectorVisible ? "Hide Inspector" : "Show Inspector") {
                 state.toggleInspector()
             }
-            .keyboardShortcut("i", modifiers: [.command, .option])
+            .keyboardShortcut(".", modifiers: .command)
 
             // Its own shortcut, so the panel is reachable without going through
             // Settings and clicking across.

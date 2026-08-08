@@ -93,7 +93,14 @@ done < <(
 )
 
 QUARANTINED=0
-for path in "${FOUND[@]:-}"; do
+# `"${FOUND[@]:-}"` looks like a safe expansion under `set -u` and is not: with
+# an empty array it yields one *empty string* rather than nothing, so the loop
+# runs once with `path=""`, every guard below passes vacuously, and the script
+# tries to move a file with no name to the Trash. Seen for real the first time
+# there were no stray copies to clean up — which is to say, on a clean machine.
+# `${FOUND[@]+"${FOUND[@]}"}` expands to nothing at all when the array is empty.
+for path in ${FOUND[@]+"${FOUND[@]}"}; do
+    [[ -n "$path" ]] || continue
     # The one being installed, and the place it is going, are not strays.
     [[ "$path" == "$TARGET" ]] && continue
     [[ "$path" == "$BUNDLE" ]] && continue

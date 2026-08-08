@@ -44,11 +44,21 @@ struct SettingRow<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
+                // The label is atomic. Without this, a control wider than the
+                // row wins the argument and the *label* is what gives way —
+                // `Family` beside a font called "CaskaydiaMono Nerd Font Mono"
+                // wrapped to one letter per line, which is not a smaller label,
+                // it is a column of letters. The control is what should
+                // truncate: it holds a value the user just chose and can read
+                // back from the section header.
                 Text(label)
                     .appFont(.body)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
                 Spacer(minLength: 8)
                 content
+                    .layoutPriority(-1)
             }
             if let hint {
                 Text(hint)
@@ -280,7 +290,15 @@ struct QuietMenu: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
+        // No `fixedSize()` here, deliberately. It was what made the row overflow
+        // rather than truncate: `lineLimit(1)` and `truncationMode(.middle)`
+        // were already on the text and could never fire, because a fixed-size
+        // menu asks for its ideal width and takes it. A font called
+        // "CaskaydiaMono Nerd Font Mono" then ran off the edge of the panel.
+        //
+        // The floor stops the other failure — a menu squeezed to nothing is not
+        // a control, and this one has to stay clickable at any panel width.
+        .frame(minWidth: 90, alignment: .trailing)
         .focusable(false)
         .pointingHand()
     }

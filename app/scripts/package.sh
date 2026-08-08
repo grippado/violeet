@@ -125,6 +125,44 @@ else
   echo "==> no Resources/violeet.icns; the bundle will use the generic icon"
 fi
 
+# ---------------------------------------------------------------------------
+# The daemon travels inside the app
+# ---------------------------------------------------------------------------
+#
+# Until this existed, a .dmg contained an app that could never find a daemon:
+# there was no installer for one, the README said "run it", and the only
+# machine where it worked was the one where somebody had put it under launchd
+# by hand. Downloading the app and getting a permanently offline board is not a
+# missing feature, it is a broken product.
+#
+# So the daemon and the CLI ship in `Contents/Resources`, universal like the
+# app, and the app starts the daemon from there. Nothing outside the bundle has
+# to exist. Updating the app updates the daemon, because the launchd job points
+# at this path.
+#
+# Not a `LoginItem` bundle, which is the modern Apple answer: those need a real
+# Developer ID to register at all, and this build is ad-hoc signed. A LaunchAgent
+# plist works either way, and the app writes it on first run.
+
+echo "==> Building the daemon and CLI"
+DAEMON_SLICES=()
+CLI_SLICES=()
+for arch in arm64 x86_64; do
+  target="$( [[ "$arch" == arm64 ]] && echo aarch64-apple-darwin || echo x86_64-apple-darwin )"
+  # `rustup target add` is a no-op when it is already there, and the build fails
+  # with a clear message when rustup itself is missing.
+  rustup target add "$target" >/dev/null 2>&1 || true
+  (cd .. && cargo build --release --target "$target" --bin violeet-daemon --bin violeet) \
+    || { echo "package.sh: cargo build failed for $target" >&2; exit 1; }
+  DAEMON_SLICES+=("../target/$target/release/violeet-daemon")
+  CLI_SLICES+=("../target/$target/release/violeet")
+done
+
+lipo -create "${DAEMON_SLICES[@]}" -output "$APP/Contents/Resources/violeet-daemon"
+lipo -create "${CLI_SLICES[@]}" -output "$APP/Contents/Resources/violeet"
+chmod +x "$APP/Contents/Resources/violeet-daemon" "$APP/Contents/Resources/violeet"
+echo "==> daemon: $(lipo -archs "$APP/Contents/Resources/violeet-daemon")"
+
 # `APPL????` is what a bundle's PkgInfo has said since before any of this
 # mattered. Some tooling still looks for the file; none of it looks inside.
 printf 'APPL????' > "$APP/Contents/PkgInfo"

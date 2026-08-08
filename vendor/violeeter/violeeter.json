@@ -1,10 +1,9 @@
 {
   "name": "Violeeter",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "license": "MIT",
   "description": "A violet theme for everything. Dark and light, every colour verified against WCAG AA.",
   "homepage": "https://grippado.github.io/violeeter/",
-
   "_syntax": [
     "Which palette slot plays which part in code. Written once here and resolved",
     "per variant, so an editor port is a mapping and not a second palette — the",
@@ -49,7 +48,6 @@
     "removed": "red",
     "modified": "blue"
   },
-
   "variants": {
     "dark": {
       "name": "Violeeter Dark",
@@ -63,7 +61,7 @@
         "surfaceRaised": "#332D55",
         "border": "#3F3968",
         "lineHighlight": "#2A2547",
-        "gutter": "#6C6596",
+        "gutter": "#8F88BD",
         "gutterActive": "#B9B3D8",
         "accent": "#C78BF7",
         "onAccent": "#24203F"
@@ -99,7 +97,7 @@
         "surfaceRaised": "#FFFFFF",
         "border": "#DCD5EE",
         "lineHighlight": "#F1ECFA",
-        "gutter": "#8B85A6",
+        "gutter": "#71698F",
         "gutterActive": "#3B3557",
         "accent": "#7C3AED",
         "onAccent": "#FFFFFF"
@@ -112,7 +110,7 @@
         "blue": "#2B4ACB",
         "magenta": "#7C3AED",
         "cyan": "#0F6E80",
-        "white": "#C9C3DE",
+        "white": "#55506E",
         "brightBlack": "#6B6685",
         "brightRed": "#A81E39",
         "brightGreen": "#0F6444",
@@ -120,8 +118,14 @@
         "brightBlue": "#2039A8",
         "brightMagenta": "#6425C9",
         "brightCyan": "#0B5A69",
-        "brightWhite": "#FFFFFF"
+        "brightWhite": "#2A2440"
       }
     }
-  }
+  },
+  "_ui": [
+    "Surfaces an editor needs and sixteen ANSI slots do not have.",
+    "`gutter` and `gutterActive` are TEXT (the line number column) and are held to",
+    "AA like any other text. The rest are surfaces and are only required to be",
+    "distinguishable from the background."
+  ]
 }

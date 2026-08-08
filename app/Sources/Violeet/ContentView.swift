@@ -74,6 +74,32 @@ struct ContentView: View {
         // all of them together — and the terminal, whose font is its own
         // setting entirely, does not move at all.
         .environment(\.appFont, AppFont(body: preferences.terminal.window.interfaceFontSize))
+        // The interface follows the *theme's* lightness, not the system's.
+        //
+        // Every label the app draws asks for `.primary`, `.secondary` or
+        // `.tertiary`, and those are resolved against the colour scheme in the
+        // environment. Left alone that is the system's, so a Mac in dark mode
+        // choosing a light theme repainted every surface white and left the
+        // secondary labels near-white on top: `Sessions`, `TABS`, `APPEARANCE`,
+        // every section header in Settings and the daemon status line went
+        // invisible together, while `.primary` still read fine — which is what
+        // made it look like only *some* of the interface was broken.
+        //
+        // Setting the scheme here rather than tinting labels means the whole
+        // hierarchy follows, including what nobody remembered to tint: dividers,
+        // disclosure arrows, placeholder text, focus rings, and anything added
+        // later. `WindowChrome.isLight` already knew; nothing was told.
+        //
+        // Doing it in SwiftUI and not only on the `NSWindow` is the part that
+        // actually works. `WindowConfigurator` sets `NSAppearance` too, but that
+        // view is passed its settings rather than observing them — by its own
+        // comment, it updates on translucency changes "and at no other time" —
+        // so a theme switch did not reach it.
+        .preferredColorScheme(
+            WindowChrome(background: preferences.terminal.appearance.background).isLight
+                ? .light
+                : .dark
+        )
         // Configured from here, not from the `App` body: this view observes
         // `preferences`, so it re-renders when translucency changes. The scene
         // body does not, and the backdrop would only appear on relaunch.
@@ -277,6 +303,27 @@ private struct WindowConfigurator: NSViewRepresentable {
         window.backgroundColor = translucent
             ? .clear
             : settings.appearance.background.nsColor
+
+        // The window wears the theme's appearance, not the system's.
+        //
+        // Everything the app draws in SwiftUI asks AppKit what colour `.primary`
+        // and `.secondary` are, and AppKit answers from the window's
+        // `NSAppearance` — which, left alone, is whatever the *system* is set to.
+        // So on a Mac in dark mode, choosing a light theme repainted every
+        // surface white and left every label near-white on top of it: the
+        // sidebar, the section headers, the settings panel and the daemon status
+        // line all became invisible at once. `WindowChrome.isLight` already knew
+        // the theme had flipped; nothing had told AppKit.
+        //
+        // Setting it here rather than tinting each label means the whole
+        // hierarchy follows, including the parts nobody remembered to tint:
+        // dividers, placeholder text, focus rings, the disclosure arrows in
+        // Settings, and any view added later.
+        let appearance: NSAppearance.Name =
+            WindowChrome(background: settings.appearance.background).isLight ? .aqua : .darkAqua
+        if window.appearance?.name != appearance {
+            window.appearance = NSAppearance(named: appearance)
+        }
     }
 }
 
