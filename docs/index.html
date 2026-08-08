@@ -98,8 +98,21 @@
     background: var(--violeeter-selection);
   }
 
-  .icon-only { padding-left: 9px; padding-right: 9px; }
-  .icon-only .ic { width: 1.15em; height: 1.15em; }
+  /* Sized, not padded.
+     Padding made the height a consequence of the glyph, so this button came out
+     shorter than the text links beside it. Fixing width and height in the same
+     unit the row is measured in makes it square by construction and the same
+     height as its neighbours, and `box-sizing: border-box` keeps the
+     transparent border from adding to it.
+     The icon is 1.25rem rather than 1.15rem: an icon alone in a box has to read
+     at a glance, and there is no label beside it doing half the work. */
+  .icon-only {
+    box-sizing: border-box;
+    width: 2.1rem; height: 2.1rem;
+    padding: 0;
+    justify-content: center;
+  }
+  .icon-only .ic { width: 1.25rem; height: 1.25rem; }
   .with-icon { display: inline-flex; align-items: center; gap: 0.45em; }
 
 
