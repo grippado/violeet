@@ -75,6 +75,18 @@ struct SessionCard: Identifiable, Equatable {
     /// free. See `lifecycle`.
     var pendingAgents: Int?
 
+    /// The session stopped having *asked* rather than having finished.
+    ///
+    /// An object means it is asking now; `nil` covers both "no longer asking"
+    /// and "this daemon never looked", which is why `lifecycle` tests for
+    /// presence and never for `!= nil` on the patch. See `AnswerRequest`.
+    ///
+    /// No daemon populates this yet — the field is on the wire and in the
+    /// decoder, and the producer is still to come. The precedence it takes over
+    /// `pendingAgents` is implemented and tested here regardless, so the day the
+    /// producer lands the card is already right instead of hiding the question.
+    var answerRequest: AnswerRequest?
+
     var id: String { sessionID }
 
     init(registered: SessionRegistered) {
@@ -117,6 +129,7 @@ struct SessionCard: Identifiable, Equatable {
         sevenDayLimitUsedPercent = patch.sevenDayLimitUsedPercent.applied(to: sevenDayLimitUsedPercent)
         sevenDayLimitResetsAt = patch.sevenDayLimitResetsAt.applied(to: sevenDayLimitResetsAt)
         pendingAgents = patch.pendingAgents.applied(to: pendingAgents)
+        answerRequest = patch.answerRequest.applied(to: answerRequest)
     }
 }
 
@@ -269,6 +282,18 @@ extension SessionCard {
         case "working": return .working
         case "hitl": return .waitingForYou
         case "idle":
+            // **A question outranks a count, always.** A session with agents out
+            // *and* something asked on screen is waiting on the human: the agents
+            // are somebody else's problem, the question is the only thing here
+            // with an action attached to it. Reporting it as busy hides that, and
+            // hiding it is the exact failure this product exists to prevent —
+            // `docs/PROTOCOL.md` § `pending_agents` decides this case and this is
+            // the line that obeys it.
+            //
+            // Presence, not `!= nil` on the patch: an absent `answer_request`
+            // means unchanged, which includes "this daemon never looked", and a
+            // card must not claim a question it has never seen.
+            if answerRequest != nil { return .waitingForYou }
             // `idle` plus a positive count is the one reading the wire cannot
             // express in `state` alone, and it is the reason this case exists:
             // the session stopped, nothing is computing, and nobody needs to
@@ -287,9 +312,6 @@ extension SessionCard {
         }
     }
 
-    /// Sort key. Cards waiting on the user come first — they are the only ones
-    /// with an action attached, and burying them under six working sessions is
-    /// the failure this product exists to fix.
     /// Sort key. Cards waiting on the user come first — they are the only ones
     /// with an action attached, and burying them under six working sessions is
     /// the failure this product exists to fix.
