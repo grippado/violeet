@@ -79,6 +79,14 @@
     color: var(--violeeter-fg); border-radius: 6px;
     padding: 5px 11px; font-size: 0.82rem; cursor: pointer;
   }
+  /* Remix Icon and the GitHub octicon, inline. `1em` and `currentColor` so both
+     take the size and colour of the control they sit in, which is what stopped
+     the theme toggle from rendering a size smaller than its neighbours. */
+  .ic { width: 1.05em; height: 1.05em; flex: none; }
+  .icon-only { padding-left: 9px; padding-right: 9px; }
+  .icon-only .ic { width: 1.15em; height: 1.15em; }
+  .with-icon { display: inline-flex; align-items: center; gap: 0.45em; }
+
 
   /* ---- terminal ---- */
   .term {
@@ -147,7 +155,8 @@
     <img class="mark only-dark" src="violeet-dark.png" alt="Violeet">
     <img class="mark only-light" src="violeet-light.png" alt="Violeet">
     <span class="brand-name">Violeet</span>
-    <button class="toggle" id="toggle" type="button">Light</button>
+    <button class="toggle icon-only with-icon" id="toggle" type="button"
+            title="Switch to light" aria-label="Switch to light"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/></svg></button>
   </div>
 
   <h1>A terminal for watching agents work.</h1>
@@ -160,7 +169,7 @@
 
   <div class="cta">
     <a class="btn btn-primary" href="https://github.com/grippado/violeet/releases">Download for macOS</a>
-    <a class="btn" href="https://github.com/grippado/violeet">Source on GitHub</a>
+    <a class="btn with-icon" href="https://github.com/grippado/violeet"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>Source on GitHub</span></a>
     <a class="btn" href="https://grippado.github.io/violeeter/">Wears <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
   </div>
 
@@ -347,10 +356,20 @@ app/scripts/install.sh</pre>
 
   const root = document.documentElement;
   const button = document.getElementById("toggle");
+  const SUN_ICON = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/></svg>`;
+  const MOON_ICON = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 6a8 8 0 0 0 11.955 6.956C21.474 18.03 17.2 22 12 22 6.477 22 2 17.523 2 12c0-5.2 3.97-9.474 9.044-9.955A7.963 7.963 0 0 0 10 6zm-6 6a8 8 0 0 0 8 8 8.006 8.006 0 0 0 6.957-4.045c-.316.03-.636.045-.957.045-5.523 0-10-4.477-10-10 0-.321.015-.641.045-.957A8.006 8.006 0 0 0 4 12z"/></svg>`;
+
+  function paintToggle(next) {
+    button.innerHTML = next === "dark" ? MOON_ICON : SUN_ICON;
+    const label = next === "dark" ? "Switch to dark" : "Switch to light";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
   button.addEventListener("click", () => {
     const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
     root.setAttribute("data-theme", next);
-    button.textContent = next === "dark" ? "Light" : "Dark";
+    paintToggle(next === "dark" ? "light" : "dark");
   });
 </script>
 
