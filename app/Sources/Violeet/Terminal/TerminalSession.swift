@@ -429,9 +429,60 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
+    /// Ask the editor in this tab to quit, the way the user would.
+    ///
+    /// # The bug this exists for
+    ///
+    /// `SIGHUP` at a vim means "your session has crashed": it runs `:preserve`
+    /// and exits, **leaving the swap file behind on purpose** so the work can be
+    /// recovered. That is right when a terminal really did die, and wrong here
+    /// — closing an editor tab is routine. So every ⌘W and every quit planted a
+    /// `.swp`, and reopening the same file from the Files panel met a recovery
+    /// prompt about a session that had not crashed. Reported from the screen,
+    /// twice, before it was believed.
+    ///
+    /// # Why a keystroke and not a signal
+    ///
+    /// There is no signal that means "quit the way the user would". `:qa` is
+    /// that, and the PTY is the only door into a program that owns the
+    /// terminal.
+    ///
+    /// **`Esc` first**, because the editor may be in insert mode, where `:` is
+    /// a colon and not a command. **`:qa` and not `:qa!`**, and this is the
+    /// whole safety argument: `:qa` refuses when a buffer is modified. So an
+    /// editor with nothing to lose exits cleanly and leaves no swap, and one
+    /// holding unsaved work stays exactly where it is — and then meets the
+    /// `SIGHUP` two seconds later, which preserves it. The bang would have
+    /// turned a stale swap file into lost work.
+    ///
+    /// Only for tabs the Files panel opened, and only best-effort: an `$EDITOR`
+    /// of `code` or `emacs` reads these bytes as text, types them into
+    /// whatever is focused, and is then signalled as before. Harmless, because
+    /// it is followed by the same `SIGHUP` that was the only behaviour until
+    /// now — the bytes change nothing that was not already about to end.
+    ///
+    /// Separate from `terminate` rather than a flag on it, because the two must
+    /// be separated *in time*: the editor needs the PTY to still be there when
+    /// it reads this. See `AppState.editorQuitGrace` for how long, and for why
+    /// closing a tab waits asynchronously and quitting the app cannot.
+    func askEditorToQuit() {
+        send(Self.quitKeystrokes)
+    }
+
+    /// `Esc` `:qa` `Return`, as bytes.
+    ///
+    /// A constant so the one property that must never drift can be asserted
+    /// without a live PTY: **no bang**. `:qa!` would discard unsaved work, and
+    /// this is sent to every editor tab on quit.
+    static let quitKeystrokes: [UInt8] = [0x1B] + Array(":qa".utf8) + [0x0D]
+
     /// How long a shell gets to notice its terminal is gone before it is killed
     /// outright. Long enough for a `zsh` to run its exit hooks, short enough
     /// that the pid cannot plausibly have been recycled.
+    ///
+    /// Also what a vim gets to act on the `:qa` above before it is signalled.
+    /// Two seconds is far past writing a swap file away and far short of
+    /// anything a user would notice while closing a tab.
     private static let killGrace: TimeInterval = 2
 
     // MARK: - LocalProcessTerminalViewDelegate

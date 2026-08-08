@@ -102,4 +102,31 @@ struct TerminalKeysTests {
         #expect(TerminalKeys.bytes(for: key(letterA, .shift, characters: "A")) == nil)
         #expect(TerminalKeys.bytes(for: key(letterA, characters: "a")) == nil)
     }
+
+    // MARK: - Asking an editor to leave
+
+    /// The safety property of the whole swap-file fix, and the only one that
+    /// could cost a user their work.
+    ///
+    /// `:qa` refuses when a buffer is modified, which is exactly what should
+    /// happen: the editor stays, and the `SIGHUP` two seconds later preserves
+    /// it — the behaviour that was there before any of this. `:qa!` would
+    /// discard it instead, and this is sent to every editor tab on quit.
+    @Test("the editor is asked to quit, never told to discard")
+    func quitKeystrokesCarryNoBang() {
+        let keys = TerminalSession.quitKeystrokes
+        let text = String(decoding: keys, as: UTF8.self)
+        #expect(!text.contains("!"), "a bang here throws away unsaved work")
+        #expect(text.contains(":qa"))
+    }
+
+    /// `Esc` first, because the editor may be in insert mode — where `:` is a
+    /// colon typed into the file and not the start of a command.
+    @Test("the quit sequence leaves insert mode before it types a command")
+    func quitKeystrokesEscapeFirst() {
+        let keys = TerminalSession.quitKeystrokes
+        #expect(keys.first == 0x1B, "Esc must come first")
+        #expect(keys.last == 0x0D, "the command has to be entered to run")
+        #expect(keys == [0x1B, 0x3A, 0x71, 0x61, 0x0D], "Esc : q a Return")
+    }
 }
