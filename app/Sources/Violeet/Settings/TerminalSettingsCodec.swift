@@ -107,6 +107,9 @@ extension TerminalSettings {
                 self.editor.diffMode = parsed
             }
             if let minimap = flag(editor["minimap"]) { self.editor.showMinimap = minimap }
+            if let apps = editor["openWith"] as? [String] {
+                self.editor.openWith = apps.filter { !$0.isEmpty }
+            }
         }
     }
 
@@ -166,6 +169,7 @@ extension TerminalSettings {
         var editorOut = previous["editor"] as? [String: Any] ?? [:]
         editorOut["diffMode"] = editor.diffMode.rawValue
         editorOut["minimap"] = editor.showMinimap
+        editorOut["openWith"] = editor.openWith
         out["editor"] = editorOut
 
         return out

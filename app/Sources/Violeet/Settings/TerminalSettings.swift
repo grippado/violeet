@@ -199,6 +199,20 @@ struct TerminalSettings: Equatable {
     /// why `-c` is not handed to an `$EDITOR` of `code` or `emacs`.
     struct EditorSettings: Equatable {
         var diffMode: DiffMode = .inline
+
+        /// Applications offered by the editor panel's "Open with", chosen by
+        /// the user, as absolute paths.
+        ///
+        /// Empty means "ask the system", which is the behaviour without this
+        /// setting and the right default: a fresh install cannot know which
+        /// editor somebody uses, and a list nobody curated is better supplied
+        /// by Launch Services than guessed here.
+        ///
+        /// Paths rather than names, because a name is not an identity: two
+        /// applications can share one, and the name is what gets rendered from
+        /// the path anyway. Paths rot when an app moves, and `ExternalApps.
+        /// resolve` drops the dead ones at read time rather than trusting them.
+        var openWith: [String] = []
         /// Switch on a minimap, when the user's config has one.
         ///
         /// Off by default and useless without a plugin, which this app does not

@@ -20,6 +20,7 @@
 // panel offers both, rather than one pretending to be the other.
 
 import AppKit
+import UniformTypeIdentifiers
 
 enum ExternalApps {
     /// One application that can open a file.
@@ -76,5 +77,59 @@ enum ExternalApps {
     /// which is the right place for the question at that point.
     static func openWithDefault(path: String) {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    /// Applications worth offering as "the editor I use", for the settings list.
+    ///
+    /// Asked by **type**, not by file. The first version probed with paths
+    /// under `/tmp` that did not exist, and Launch Services answered nothing
+    /// for every one of them: `urlsForApplications(toOpen: URL)` wants a file
+    /// that is there. The list came back empty on a machine full of editors,
+    /// and a test asserting the section is not a heading over nothing is what
+    /// caught it.
+    ///
+    /// Plain text, markdown, JSON and source code, unioned. That is a proxy for
+    /// "is an editor" and a deliberately loose one: an IDE claims all of them,
+    /// a note-taking app claims markdown, and both are things somebody might
+    /// genuinely want here. Guessing narrower would be this file's own opening
+    /// argument in reverse.
+    static func editorCandidates() -> [Choice] {
+        var seen = Set<String>()
+        var out: [Choice] = []
+
+        // `markdown` has no constant in `UniformTypeIdentifiers`, so it is
+        // named by its identifier. Anything unknown to this system resolves to
+        // `nil` and is skipped rather than crashing a settings panel.
+        let types = [UTType.plainText, .json, .sourceCode, .yaml]
+            + [UTType("net.daringfireball.markdown")].compactMap { $0 }
+
+        for type in types {
+            for app in NSWorkspace.shared.urlsForApplications(toOpen: type) {
+                let name = FileManager.default.displayName(atPath: app.path)
+                    .replacingOccurrences(of: ".app", with: "")
+                guard seen.insert(name).inserted else { continue }
+                out.append(Choice(name: name, url: app))
+            }
+        }
+        return out.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// The chosen applications, dropping any that are no longer installed.
+    ///
+    /// A path is stored and a path can rot: an app is moved to the Trash,
+    /// renamed, or lives on a machine this synced preferences file has never
+    /// seen. A stale entry would be a menu item that silently does nothing, so
+    /// it is filtered at read time rather than trusted.
+    ///
+    /// The stored order is kept. It is the order the user built the list in,
+    /// and re-sorting it here would move the single-app case's button label
+    /// out from under them.
+    static func resolve(_ paths: [String]) -> [Choice] {
+        paths.compactMap { path in
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            let name = FileManager.default.displayName(atPath: path)
+                .replacingOccurrences(of: ".app", with: "")
+            return Choice(name: name, url: URL(fileURLWithPath: path))
+        }
     }
 }

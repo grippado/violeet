@@ -53,4 +53,48 @@ struct ExternalAppsTests {
             #expect(!choice.name.isEmpty)
         }
     }
+
+    // MARK: - The chosen list
+
+    /// A stored path can rot: the app is moved to the Trash, renamed, or lives
+    /// on a machine this synced preferences file has never seen. A stale entry
+    /// would be a menu item that silently does nothing.
+    @Test("an application that is no longer there is dropped")
+    func missingAppsAreDropped() {
+        let resolved = ExternalApps.resolve([
+            "/Applications/ThisWasNeverInstalled\(UUID().uuidString).app",
+            "/System/Applications/TextEdit.app",
+        ])
+        #expect(resolved.count <= 1)
+        #expect(!resolved.contains { $0.name.hasPrefix("ThisWasNeverInstalled") })
+    }
+
+    /// The stored order is the order the user built, and it decides which name
+    /// the single-app button carries. Sorting here would move that label out
+    /// from under them.
+    @Test("the chosen order survives")
+    func chosenOrderIsKept() {
+        let paths = ["/System/Applications/TextEdit.app", "/System/Applications/Preview.app"]
+            .filter { FileManager.default.fileExists(atPath: $0) }
+        let resolved = ExternalApps.resolve(paths)
+        #expect(resolved.map(\.url.path) == paths)
+    }
+
+    @Test("an empty choice resolves to nothing, not to a default")
+    func emptyResolvesEmpty() {
+        #expect(ExternalApps.resolve([]).isEmpty)
+    }
+
+    /// The settings list has to offer something on a stock machine, or the
+    /// section is a heading over nothing.
+    @Test("a machine offers at least one editor candidate")
+    func candidatesExist() {
+        #expect(!ExternalApps.editorCandidates().isEmpty)
+    }
+
+    @Test("candidates carry no duplicates")
+    func candidatesAreUnique() {
+        let names = ExternalApps.editorCandidates().map(\.name)
+        #expect(Set(names).count == names.count)
+    }
 }

@@ -605,6 +605,14 @@ struct SettingsPanel: View {
                 )
             }
             SettingRow(
+                label: "Open with",
+                hint: "Applications offered when a file is open. Choose one and the panel shows a button naming it; choose several and it shows a menu. With none chosen it asks the system, which is what it did before."
+            ) {
+                EmptyView()
+            }
+            openWithList
+
+            SettingRow(
                 label: "Minimap",
                 hint: "Needs a minimap plugin in your Neovim config — mini.map. Violeet switches it on when it is there and stays quiet when it is not."
             ) {
@@ -615,6 +623,71 @@ struct SettingsPanel: View {
                 )
             }
         }
+    }
+
+    /// The applications to offer, as a list of toggles.
+    ///
+    /// Every candidate is an application this machine has, asked for rather
+    /// than guessed. See `ExternalApps.editorCandidates` for what counts as a
+    /// candidate and why the net is cast loosely.
+    ///
+    /// Chosen ones sort to the top and keep the order they were added in, which
+    /// is what decides the single-app button's label. Re-sorting them
+    /// alphabetically would move that label out from under somebody who had
+    /// just set it.
+    @ViewBuilder
+    private var openWithList: some View {
+        let chosen = settings.editor.openWith
+        let candidates = ExternalApps.editorCandidates()
+        let chosenFirst = ExternalApps.resolve(chosen).map(\.url.path)
+            + candidates.map(\.url.path).filter { !chosen.contains($0) }
+
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(chosenFirst, id: \.self) { path in
+                let name = FileManager.default.displayName(atPath: path)
+                    .replacingOccurrences(of: ".app", with: "")
+                let isOn = chosen.contains(path)
+                QuietButton(action: { toggleOpenWith(path) }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                            .appFont(.caption)
+                            .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
+                        Text(name)
+                            .appFont(.caption)
+                            .foregroundStyle(isOn ? Color.primary : Color.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                }
+            }
+
+            if candidates.isEmpty {
+                Text("No applications on this machine claim a text file.")
+                    .appFont(.small)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    /// Add or remove one application.
+    ///
+    /// Appended rather than inserted in list order, because the list the user
+    /// is building is theirs: the first one they tick is the one the button
+    /// names while there is only one.
+    private func toggleOpenWith(_ path: String) {
+        editing { settings in
+            if let index = settings.editor.openWith.firstIndex(of: path) {
+                settings.editor.openWith.remove(at: index)
+            } else {
+                settings.editor.openWith.append(path)
+            }
+        }
+        state.focusTerminal()
     }
 
     /// Shells worth offering, filtered to the ones actually installed. A menu

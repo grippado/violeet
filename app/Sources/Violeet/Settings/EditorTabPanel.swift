@@ -250,48 +250,66 @@ struct EditorTabPanel: View {
 
     /// Hand the file to another application.
     ///
-    /// A menu rather than a button, because the answer is a list and the list
-    /// belongs to the machine. See `ExternalApps` for why it is asked for
-    /// rather than hard-coded.
+    /// Three shapes, and which one appears is a consequence of how much the
+    /// user has told us rather than a setting of its own:
+    ///
+    ///  · **One chosen app** becomes a plain button that names it. There is no
+    ///    choice left to present, and a menu holding a single item is a click
+    ///    spent asking a question with one answer.
+    ///  · **Several chosen** become a menu of exactly those. The list is short
+    ///    because somebody curated it.
+    ///  · **None chosen** falls back to what the system claims, which is the
+    ///    behaviour before this setting existed. A fresh install cannot know
+    ///    which editor anybody uses.
     ///
     /// This is the counterpart to opening in `$EDITOR`, not a replacement:
     /// that one keeps the file inside a tab, which is what a terminal should do
-    /// with text. This one is the other intention, "take this out of here",
-    /// and a `.pdf` or a `.png` has no other answer.
+    /// with text. This is the other intention, "take this out of here", and a
+    /// PDF or an image has no other answer.
     @ViewBuilder
     private func openWith(_ editing: EditorTab) -> some View {
-        let apps = ExternalApps.choices(for: editing.path)
-        Menu {
-            ForEach(apps) { app in
-                Button(app.name) { ExternalApps.open(path: editing.path, with: app.url) }
+        let chosen = ExternalApps.resolve(state.preferences.terminal.editor.openWith)
+
+        if chosen.count == 1, let app = chosen[0] as ExternalApps.Choice? {
+            actionButton("Open in \(app.name)", symbol: "arrow.up.forward.app") {
+                ExternalApps.open(path: editing.path, with: app.url)
             }
-            if !apps.isEmpty { Divider() }
-            // Always present, and the only entry when nothing claims the type.
-            // macOS answers that case with its own picker, which is the right
-            // place for the question once we have nothing useful to offer.
-            Button("System default") { ExternalApps.openWithDefault(path: editing.path) }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.up.forward.app")
-                    .appFont(.micro)
-                Text("Open with")
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.down")
-                    .appFont(.micro)
-                    .foregroundStyle(.tertiary)
+            .help("Open \(editing.name) in \(app.name).")
+        } else {
+            let apps = chosen.isEmpty ? ExternalApps.choices(for: editing.path) : chosen
+            Menu {
+                ForEach(apps) { app in
+                    Button(app.name) { ExternalApps.open(path: editing.path, with: app.url) }
+                }
+                if !apps.isEmpty { Divider() }
+                // Always present, and the only entry when nothing claims the
+                // type. macOS answers that case with its own picker, which is
+                // the right place for the question once we have nothing useful
+                // to offer.
+                Button("System default") { ExternalApps.openWithDefault(path: editing.path) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.forward.app")
+                        .appFont(.micro)
+                    Text("Open in")
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .appFont(.micro)
+                        .foregroundStyle(.tertiary)
+                }
+                .appFont(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Self.buttonBackground)
+                .contentShape(Rectangle())
             }
-            .appFont(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Self.buttonBackground)
-            .contentShape(Rectangle())
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize(horizontal: false, vertical: true)
+            .pointingHand()
+            .help("Open \(editing.name) in another application.")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize(horizontal: false, vertical: true)
-        .pointingHand()
-        .help("Open \(editing.name) in another application.")
     }
 
     /// An action that looks like one.
