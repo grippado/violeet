@@ -7,7 +7,8 @@ Named after the colour it has always used, and shipping with
 
 **This `violeet`:** a native macOS terminal built for running several AI coding agents (Claude Code, Codex, opencode) as tabs in a single window, instead of scattering them across six terminal windows you lose track of. Tabs name themselves from what the agent is actually working on. A SwiftUI sidebar keeps one card per session showing its state, how full its context window is, and, the reason this exists, any permission request currently blocking that agent, answerable from the sidebar without switching tabs. It is the sibling of [aitop](https://github.com/grippado/aitop), which monitors agent sessions read-only from a TUI; `violeet` is where you actually run them.
 
-<img width="1914" height="1270" alt="image" src="https://github.com/user-attachments/assets/960b6917-3501-40b5-9ca0-725fadb172b5" />
+<img width="2168" height="1402" alt="Screenshot 2026-08-08 at 15 26 17" src="https://github.com/user-attachments/assets/561a668b-6daa-4159-aac4-cbe461559197" />
+
 
 ## Shape of the thing
 
