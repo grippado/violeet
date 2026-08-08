@@ -4,8 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Violeet: a terminal for watching agents work</title>
-<meta name="description" content="A macOS terminal built for running several coding agents at once: every session on a board, permission requests surfaced, and the files each one wrote.">
+<meta name="description" id="meta-description" content="A macOS terminal built for running several coding agents at once: every session on a board, permission requests surfaced, and the files each one wrote.">
 <link rel="stylesheet" href="violeeter.css">
+<!-- The copy, in four languages. In <head> and not deferred: the strings have
+     to exist before the page is translated, and translating happens as soon as
+     the body is parsed. It is one small file, so this costs a parse, not a
+     round-trip. -->
+<script src="i18n.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   body {
@@ -33,6 +38,12 @@
     vertical-align: -0.14em;
     margin-right: 0.3em;
   }
+  /* Inside a button the word before the mark is its own element now, because it
+     is the part that gets translated. A `.btn` is an `inline-flex`, and a flex
+     container throws away the whitespace between its items, so the space that
+     used to sit in the markup stopped existing the moment the word was wrapped.
+     The gap has to be a margin, not a character. */
+  .btn .inline-mark { margin-left: 0.3em; }
 
   .mark {
     width: 40px; height: 40px; flex: none;
@@ -108,12 +119,36 @@
     border-color: var(--violeeter-magenta);
     color: var(--violeeter-bg);
   }
+  /* The two controls the page's chrome offers, as one group pushed to the far
+     end: language and theme are the same kind of thing, a way of asking for
+     this page in a different dress, so they sit together rather than each
+     finding its own way to the right. */
+  .chrome { margin-left: auto; display: flex; align-items: center; gap: 6px; }
   .toggle {
-    margin-left: auto; align-self: center;
+    align-self: center;
     background: none; border: 1px solid var(--violeeter-brightblack);
     color: var(--violeeter-fg); border-radius: 6px;
     padding: 5px 11px; font-size: 0.82rem; cursor: pointer;
   }
+  /* A native <select>, dressed down to match its neighbour. Native because the
+     alternative is rebuilding a listbox, and a hand-rolled one is worse on a
+     phone and worse with a screen reader than the one the platform already
+     ships. `appearance: none` removes the chrome, not the behaviour. */
+  .lang {
+    appearance: none; -webkit-appearance: none;
+    background: none; border: 1px solid transparent;
+    color: var(--violeeter-fg); border-radius: 6px;
+    padding: 0 0.55rem; height: 2.1rem;
+    font: inherit; font-size: 0.82rem; font-weight: 600;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: background-color .12s ease;
+  }
+  .lang:hover, .lang:focus-visible { background: var(--violeeter-selection); }
+  /* The dropdown itself is drawn by the OS and does not inherit the page, so
+     the options are told the colours explicitly. Without this, a light-themed
+     system opens a white menu over the dark page. */
+  .lang option { background: var(--violeeter-bg); color: var(--violeeter-fg); }
   /* Remix Icon and the GitHub octicon, inline. `1em` and `currentColor` so both
      take the size and colour of the control they sit in, which is what stopped
      the theme toggle from rendering a size smaller than its neighbours. */
@@ -166,6 +201,15 @@
   .term-title { margin-left: 8px; font-size: 0.8rem; opacity: 0.6; }
   .term-body { padding: 16px; font-size: 0.85rem; line-height: 1.65; overflow-x: auto; }
   .term-body pre { margin: 0; }
+  /* The session rows used to be one <pre> where the status was pushed to the
+     right by counted spaces. That column only lines up for the words it was
+     counted against, and this page now says those words in four languages, so
+     the alignment had to stop being a property of the string. The name and the
+     status are two ends of a row and the gap between them is the browser's
+     problem. */
+  .sess + .sess { margin-top: 1.15em; }
+  .sess-head { display: flex; justify-content: space-between; gap: 2.5em; }
+  .sess-line { padding-left: 2ch; white-space: pre; }
   .c-magenta { color: var(--violeeter-magenta); }
   .c-green   { color: var(--violeeter-green); }
   .c-yellow  { color: var(--violeeter-yellow); }
@@ -219,17 +263,29 @@
          who clicks a logo is asking for. `./` rather than `/`: this is a
          project page under a user site, so `/` is grippado.github.io and not
          this page at all. -->
-    <a class="brand-home" href="./" aria-label="Violeet, home">
+    <a class="brand-home" href="./" id="brand-home" aria-label="Violeet, home">
       <img class="mark only-dark" src="violeet-dark.png" alt="Violeet">
       <img class="mark only-light" src="violeet-light.png" alt="Violeet">
       <span class="brand-name">Violeet</span>
     </a>
+    <div class="chrome">
+    <!-- The names of the languages are in their own languages, which is the one
+         labelling rule a picker like this has: someone looking for German is
+         looking for "Deutsch", and if they could read "German" they would not
+         need the control. -->
+    <select class="lang" id="lang" aria-label="Language">
+      <option value="en">English</option>
+      <option value="pt">Português</option>
+      <option value="es">Español</option>
+      <option value="de">Deutsch</option>
+    </select>
     <button class="toggle icon-only with-icon" id="toggle" type="button"
             title="Switch to light" aria-label="Switch to light"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/></svg></button>
+    </div>
   </div>
 
-  <h1>A terminal for watching agents work.</h1>
-  <p class="lede">
+  <h1 data-i18n="hero.h1">A terminal for watching agents work.</h1>
+  <p class="lede" data-i18n="hero.lede">
     Run six coding agents at once and the hard part stops being the code. It is
     knowing which one is blocked on you, which one is burning context, and what
     any of them actually changed. Violeet puts that on a board beside the
@@ -237,9 +293,13 @@
   </p>
 
   <div class="cta">
-    <a class="btn btn-primary" href="https://github.com/grippado/violeet/releases">Download for macOS</a>
-    <a class="btn with-icon" href="https://github.com/grippado/violeet"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>Source on GitHub</span></a>
-    <a class="btn" href="https://grippado.github.io/violeeter/">Wears <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
+    <a class="btn btn-primary" href="https://github.com/grippado/violeet/releases" data-i18n="cta.download">Download for macOS</a>
+    <a class="btn with-icon" href="https://github.com/grippado/violeet"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span data-i18n="cta.source">Source on GitHub</span></a>
+    <!-- The gap between the word and the mark is a margin, because a flex
+         container drops the whitespace in the markup. A margin is not a space
+         to a screen reader, though, so the link carries its own label rather
+         than being read as one run-together word. -->
+    <a class="btn" id="cta-wears" href="https://grippado.github.io/violeeter/" aria-label="Wears Violeeter"><span data-i18n="cta.wears">Wears</span> <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
   </div>
 
   <div class="term" style="margin-top:44px">
@@ -247,55 +307,70 @@
       <span class="dot" style="background:var(--violeeter-red)"></span>
       <span class="dot" style="background:var(--violeeter-yellow)"></span>
       <span class="dot" style="background:var(--violeeter-green)"></span>
-      <span class="term-title">violeet · sessions</span>
+      <span class="term-title" data-i18n="term.title">violeet · sessions</span>
     </div>
-    <div class="term-body">
-<pre><span class="c-yellow">▌ refactor the transcript reader</span>   <span class="c-yellow">waiting for you</span>
-<span class="c-dim">  ~/www/personal/violeet</span>
-<span class="c-dim">  ctx</span> <span class="c-green">████████</span><span class="c-dim">░░░░░░░░</span>  38% · 375k/1.0M
-<span class="c-dim">  Edit</span> crates/violeet-transcript/src/lib.rs
+    <div class="term-body mono">
+      <div class="sess">
+        <div class="sess-head">
+          <span class="c-yellow">▌ <span data-i18n="term.s1.name">refactor the transcript reader</span></span>
+          <span class="c-yellow" data-i18n="term.s1.status">waiting for you</span>
+        </div>
+        <div class="sess-line c-dim">~/www/personal/violeet</div>
+        <div class="sess-line"><span class="c-dim">ctx</span> <span class="c-green">████████</span><span class="c-dim">░░░░░░░░</span>  38% · 375k/1.0M</div>
+        <div class="sess-line"><span class="c-dim">Edit</span> crates/violeet-transcript/src/lib.rs</div>
+      </div>
 
-<span class="c-magenta">▌ files panel</span>                        <span class="c-cyan">working</span>
-<span class="c-dim">  ~/www/personal/violeet</span>
-<span class="c-dim">  ctx</span> <span class="c-green">███</span><span class="c-dim">░░░░░░░░░░░░░</span>  14% · 140k/1.0M
-<span class="c-dim">  Bash</span> swift test
+      <div class="sess">
+        <div class="sess-head">
+          <span class="c-magenta">▌ <span data-i18n="term.s2.name">files panel</span></span>
+          <span class="c-cyan" data-i18n="term.s2.status">working</span>
+        </div>
+        <div class="sess-line c-dim">~/www/personal/violeet</div>
+        <div class="sess-line"><span class="c-dim">ctx</span> <span class="c-green">███</span><span class="c-dim">░░░░░░░░░░░░░</span>  14% · 140k/1.0M</div>
+        <div class="sess-line"><span class="c-dim">Bash</span> swift test</div>
+      </div>
 
-<span class="c-dim">▌ docs sweep                             idle</span>
-<span class="c-dim">  ~/.notes</span>
-<span class="c-dim">  ctx ██░░░░░░░░░░░░░  9% · 90k/1.0M</span></pre>
+      <div class="sess c-dim">
+        <div class="sess-head">
+          <span>▌ <span data-i18n="term.s3.name">docs sweep</span></span>
+          <span data-i18n="term.s3.status">idle</span>
+        </div>
+        <div class="sess-line">~/www/personal/violeeter</div>
+        <div class="sess-line">ctx ██░░░░░░░░░░░░░  9% · 90k/1.0M</div>
+      </div>
     </div>
   </div>
 </header>
 
 <section>
-  <h2>What it does</h2>
-  <p class="section-lede">
+  <h2 data-i18n="does.h2">What it does</h2>
+  <p class="section-lede" data-i18n="does.lede">
     Every agent session on the machine appears on the board, including the ones
     started somewhere else.
   </p>
   <div class="grid">
     <div class="card">
-      <h3>Blocked agents come to you</h3>
-      <p>A session waiting on a permission request is signalled three ways at
+      <h3 data-i18n="does.blocked.h3">Blocked agents come to you</h3>
+      <p data-i18n="does.blocked.p">A session waiting on a permission request is signalled three ways at
       once: a lit edge, a slow pulse, and a colour used nowhere else. You are
       not watching the sidebar, so it has to reach you from the corner of your
       eye.</p>
     </div>
     <div class="card">
-      <h3>Context, measured</h3>
-      <p>How full each window is, with the absolute pair beside the percentage.
+      <h3 data-i18n="does.context.h3">Context, measured</h3>
+      <p data-i18n="does.context.p">How full each window is, with the absolute pair beside the percentage.
       A small window nearly full and a large one barely touched call for
       opposite reactions, and one number cannot tell them apart.</p>
     </div>
     <div class="card">
-      <h3>The files each session wrote</h3>
-      <p>A tree grouped by root, with a real diffstat, read from the diff the
+      <h3 data-i18n="does.files.h3">The files each session wrote</h3>
+      <p data-i18n="does.files.p">A tree grouped by root, with a real diffstat, read from the diff the
       agent itself produced, not estimated. Click a file and it opens in your
       editor, on the first uncommitted change.</p>
     </div>
     <div class="card">
-      <h3>Sessions from anywhere</h3>
-      <p>An agent started in iTerm, or in another window, is still a real
+      <h3 data-i18n="does.anywhere.h3">Sessions from anywhere</h3>
+      <p data-i18n="does.anywhere.p">An agent started in iTerm, or in another window, is still a real
       session. It shows up on the board, clearly marked as living somewhere
       else rather than quietly omitted.</p>
     </div>
@@ -304,7 +379,7 @@
 
 <section id="theme">
   <h2><img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter</h2>
-  <p class="section-lede">
+  <p class="section-lede" data-i18n="theme.lede">
     The palette Violeet ships with, published on its own under MIT. Two
     variants. This page is painted with it, and the stylesheet below is generated
     from the same file the terminals download, so the page cannot advertise
@@ -314,7 +389,7 @@
   <div class="variant">
     <div class="variant-head">
       <span class="variant-name">Violeeter Dark</span>
-      <span class="variant-meta mono">#24203F · worst text contrast 4.53</span>
+      <span class="variant-meta mono" data-i18n="theme.meta_dark">#24203F · worst text contrast 4.53</span>
     </div>
     <div class="swatches" id="sw-dark"></div>
   </div>
@@ -322,12 +397,12 @@
   <div class="variant">
     <div class="variant-head">
       <span class="variant-name">Violeeter Light</span>
-      <span class="variant-meta mono">#FAF8FE · worst text contrast 5.06</span>
+      <span class="variant-meta mono" data-i18n="theme.meta_light">#FAF8FE · worst text contrast 5.06</span>
     </div>
     <div class="swatches" id="sw-light"></div>
   </div>
 
-  <p class="section-lede" style="margin-top:28px">
+  <p class="section-lede" style="margin-top:28px" data-i18n="theme.aa">
     Every colour that can carry text clears WCAG AA against its own background,
     and that is checked rather than claimed: the build fails if one drops under
     4.5:1. It is MIT and has its own home, so you can wear it without ever
@@ -336,7 +411,7 @@
 
   <div class="scroll">
     <table>
-      <thead><tr><th>Editors</th><th>Terminals</th><th>Web</th></tr></thead>
+      <thead><tr><th data-i18n="theme.th_editors">Editors</th><th data-i18n="theme.th_terminals">Terminals</th><th data-i18n="theme.th_web">Web</th></tr></thead>
       <tbody>
         <tr>
           <td>VS Code · Neovim · Zed</td>
@@ -347,20 +422,20 @@
     </table>
   </div>
 
-  <p class="section-lede" style="margin-top:24px">
+  <p class="section-lede" style="margin-top:24px" data-i18n="theme.painted">
     The page you are reading is painted with it, and so is
     <a href="https://grippado.github.io/violeeter/">its own</a>. Nothing here
     uses a colour the theme does not ship.
   </p>
 
   <p style="margin-top:20px">
-    <a class="btn btn-primary" href="https://grippado.github.io/violeeter/">Get <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
+    <a class="btn btn-primary" id="cta-get" href="https://grippado.github.io/violeeter/" aria-label="Get Violeeter"><span data-i18n="theme.get">Get</span> <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
   </p>
 </section>
 
 <section>
-  <h2>Install</h2>
-  <p class="section-lede">
+  <h2 data-i18n="install.h2">Install</h2>
+  <p class="section-lede" data-i18n="install.lede">
     macOS, Apple silicon and Intel. Builds are ad-hoc signed, so the first
     launch needs the quarantine flag cleared.
   </p>
@@ -368,14 +443,14 @@
 cd violeet
 app/scripts/package.sh
 app/scripts/install.sh</pre>
-  <p class="section-lede" style="margin-top:20px">
+  <p class="section-lede" style="margin-top:20px" data-i18n="install.daemon">
     The daemon that watches sessions installs separately and runs under
     <code>launchd</code>. It is optional: with it stopped, Violeet is still a
     terminal, and the board simply says so.
   </p>
 </section>
 
-<footer>
+<footer data-i18n="footer">
   Violeet and Violeeter are MIT licensed. Built by
   <a href="https://github.com/grippado">grippado</a>.
 </footer>
@@ -428,18 +503,100 @@ app/scripts/install.sh</pre>
   const SUN_ICON = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/></svg>`;
   const MOON_ICON = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 6a8 8 0 0 0 11.955 6.956C21.474 18.03 17.2 22 12 22 6.477 22 2 17.523 2 12c0-5.2 3.97-9.474 9.044-9.955A7.963 7.963 0 0 0 10 6zm-6 6a8 8 0 0 0 8 8 8.006 8.006 0 0 0 6.957-4.045c-.316.03-.636.045-.957.045-5.523 0-10-4.477-10-10 0-.321.015-.641.045-.957A8.006 8.006 0 0 0 4 12z"/></svg>`;
 
-  function paintToggle(next) {
-    button.innerHTML = next === "dark" ? MOON_ICON : SUN_ICON;
-    const label = next === "dark" ? "Switch to dark" : "Switch to light";
-    button.title = label;
-    button.setAttribute("aria-label", label);
+  // The toggle offers the theme you are not wearing, so it shows the sun while
+  // the page is dark. Its label is a sentence like any other on the page and
+  // comes out of the same dictionary, which is why this reads the current
+  // language instead of holding two English strings.
+  function paintToggle() {
+    const isDark = root.getAttribute("data-theme") === "dark";
+    button.innerHTML = isDark ? SUN_ICON : MOON_ICON;
+    // If the dictionary never arrived, the label already on the button is the
+    // English one from the markup, and keeping it beats blanking it.
+    const label = dict()[isDark ? "theme.to_light" : "theme.to_dark"];
+    if (label) {
+      button.title = label;
+      button.setAttribute("aria-label", label);
+    }
   }
 
   button.addEventListener("click", () => {
-    const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
-    root.setAttribute("data-theme", next);
-    paintToggle(next === "dark" ? "light" : "dark");
+    root.setAttribute("data-theme",
+      root.getAttribute("data-theme") === "dark" ? "light" : "dark");
+    paintToggle();
   });
+
+  // ---- language ----
+  //
+  // English is already in the markup, so this only ever overwrites. That order
+  // matters: a reader with JavaScript off, and a crawler, still get the whole
+  // page, and the fallback for a missing key is the English that is already
+  // sitting there rather than an empty element.
+  // A page whose dictionary failed to load is an English page with a picker
+  // that would lie, so the picker goes rather than sitting there doing nothing.
+  const LANGS = window.VIOLEET_I18N || { en: {} };
+  const select = document.getElementById("lang");
+  if (!window.VIOLEET_I18N) select.remove();
+  const STORE_KEY = "violeet-lang";
+  let current = "en";
+
+  function dict() { return LANGS[current] || LANGS.en || {}; }
+
+  // localStorage throws rather than no-ops in a locked-down Safari, and a page
+  // that cannot remember a preference should still honour the click.
+  function remember(code) {
+    try { localStorage.setItem(STORE_KEY, code); } catch (e) { /* not fatal */ }
+  }
+  function recall() {
+    try { return localStorage.getItem(STORE_KEY); } catch (e) { return null; }
+  }
+
+  function applyLang(code) {
+    if (!LANGS[code]) code = "en";
+    current = code;
+    const strings = dict();
+
+    // `innerHTML` rather than `textContent`: several of these sentences carry a
+    // link or a `<code>`, and splitting them into fragments to avoid markup
+    // would hand translators a jigsaw instead of a sentence. The only thing
+    // that ever writes here is `i18n.js`, which the page ships itself.
+    for (const el of document.querySelectorAll("[data-i18n]")) {
+      const value = strings[el.dataset.i18n];
+      if (value !== undefined) el.innerHTML = value;
+    }
+
+    // The parts of the page that are not elements: what the tab says, what a
+    // link preview quotes, and what the document declares itself to be. `lang`
+    // is not decoration — it is what a screen reader consults before choosing
+    // how to pronounce any of this.
+    root.setAttribute("lang", code);
+    document.title = strings["meta.title"];
+    document.getElementById("meta-description")
+            .setAttribute("content", strings["meta.description"]);
+    document.getElementById("brand-home")
+            .setAttribute("aria-label", strings["brand.home"]);
+    // The mark sits between the word and the name with only a margin holding
+    // them apart, which is a space to the eye and nothing at all to a screen
+    // reader. These two links say the whole phrase themselves.
+    document.getElementById("cta-wears")
+            .setAttribute("aria-label", strings["cta.wears"] + " Violeeter");
+    document.getElementById("cta-get")
+            .setAttribute("aria-label", strings["theme.get"] + " Violeeter");
+    select.setAttribute("aria-label", strings["lang.label"]);
+
+    paintToggle();
+    remember(code);
+  }
+
+  select.addEventListener("change", () => applyLang(select.value));
+
+  // English on a first visit, whatever was chosen on a return one. Deliberately
+  // not `navigator.language`: this page is indexed in English, and guessing
+  // would serve a visitor something other than the result they clicked.
+  const stored = recall();
+  if (stored && LANGS[stored] && stored !== "en") {
+    select.value = stored;
+    applyLang(stored);
+  }
 </script>
 
 </body>
