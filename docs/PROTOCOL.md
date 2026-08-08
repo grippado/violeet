@@ -20,10 +20,9 @@
 >   (2026-08-01) added `release_session_title`, an inbound message: a new
 >   `type` is ignored by older receivers, which is the same rule. Revision 7
 >   (2026-08-08) added `answer_request` and `pending_agents`, both optional
->   fields of `session_updated`, absorbing the Track C request — same rule
->   again, so `v` stays `1`. (That request is `docs/tracks/C-protocol-request.md`
->   on the `feat/write-the-answer` branch, unlinked here because this revision
->   lands first; it is marked absorbed when that branch merges.)
+>   fields of `session_updated`, absorbing
+>   [`tracks/C-protocol-request.md`](tracks/C-protocol-request.md) — same rule
+>   again, so `v` stays `1`.
 >
 > When a brief says "the protocol is at v2", it means this document's second
 > revision. The wire is still `1`.
