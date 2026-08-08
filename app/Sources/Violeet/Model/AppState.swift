@@ -314,10 +314,25 @@ final class AppState: ObservableObject {
     let preferences: Preferences
     let daemon = DaemonClient()
 
+    /// Puts the bundled daemon under launchd when nothing is answering. See
+    /// `DaemonSupervisor` for why the app carries one at all.
+    let supervisor = DaemonSupervisor()
+
+    /// Whether Claude Code's hooks point at this daemon. A daemon with no hooks
+    /// is running and blind, which looks identical to a daemon that is down
+    /// until you notice the board never fills.
+    @Published private(set) var hooksInstalled = true
+
     private var cancellables = Set<AnyCancellable>()
 
     init(preferences: Preferences = Preferences()) {
         self.preferences = preferences
+
+        // Before the client connects, so the first attempt has something to
+        // reach. It is a no-op when a daemon is already listening, which is
+        // what makes it safe on every launch rather than only on first run.
+        supervisor.ensureRunning()
+        refreshHookStatus()
 
         daemon.onMessage = { [weak self] message in
             MainActor.assumeIsolated { self?.apply(message) }
@@ -701,6 +716,23 @@ final class AppState: ObservableObject {
             preferences.inspectorVisible = true
         }
         focusTerminal()
+    }
+
+    // MARK: - Daemon plumbing
+
+    /// Re-read whether Claude Code's hooks point here.
+    func refreshHookStatus() {
+        hooksInstalled = HookStatus.read().installed
+    }
+
+    /// Install the hooks with the bundled CLI, then re-check rather than
+    /// assuming: the status line should report what is on disk, not what was
+    /// attempted.
+    @discardableResult
+    func installHooks() -> HookInstaller.Result {
+        let result = HookInstaller.install()
+        refreshHookStatus()
+        return result
     }
 
     /// Point the Files panel at a session.

@@ -118,7 +118,14 @@ struct SidebarView: View {
             elsewhereSection
 
             Divider()
-            DaemonStatusLine(status: state.daemon.status, sessionCount: state.sessions.count)
+            DaemonStatusLine(
+                status: state.daemon.status,
+                sessionCount: state.sessions.count,
+                hooksInstalled: state.hooksInstalled,
+                telemetry: state.daemon.telemetry,
+                onInstallHooks: { state.installHooks() },
+                onRefreshHooks: { state.refreshHookStatus() }
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: preferences.chrome.surfaceResolved.nsColor))
@@ -488,23 +495,110 @@ private struct EditorTabRow: View {
 private struct DaemonStatusLine: View {
     let status: DaemonClient.Status
     let sessionCount: Int
+    /// Whether Claude Code's hooks point here. A connected daemon with no hooks
+    /// is the state this line used to have no way of showing.
+    var hooksInstalled: Bool = true
+    var telemetry: DaemonTelemetry?
+    var onInstallHooks: (() -> Void)?
+    /// Re-read the hook state. It was read once at launch, which made the
+    /// warning outlive the problem: installing the hooks from a terminal fixed
+    /// the machine and left this line still saying they were missing, with a
+    /// button that had nothing to do. A banner that is wrong is worse than no
+    /// banner, because the next one gets ignored too.
+    var onRefreshHooks: (() -> Void)?
+
+    /// Ticks the reading. The numbers change while nothing else does, so
+    /// something has to ask for a redraw; five seconds is slower than a glance
+    /// and far cheaper than a timer per figure.
+    @State private var now = Date()
+    private let clock = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label)
-                .appFont(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 0) {
+            // The one state the old line could not express: everything up, and
+            // nothing arriving, because Claude Code was never told where to
+            // send it. Actionable, because the fix is one command the app
+            // already carries.
+            if status == .connected && !hooksInstalled {
+                QuietButton(action: { onInstallHooks?() }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .appFont(.micro)
+                            .foregroundStyle(CardTheme.attention)
+                        Text("Hooks not installed — click to fix")
+                            .appFont(.caption)
+                            .foregroundStyle(CardTheme.attention)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                }
+                .pointingHand()
+                .help("""
+                    The daemon is running, but Claude Code is not sending it \
+                    anything. Installs Violeet's hooks in ~/.claude/settings.json, \
+                    absorbing any left by an older install.
+                    """)
+                Divider()
+            }
+
+            HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Text(label)
+                    .appFont(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .help(detail)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .onReceive(clock) {
+            now = $0
+            onRefreshHooks?()
+        }
     }
 
     // Both come from `DaemonClient.Status` itself, so the status-bar menu and
     // this footer cannot come to describe the same state differently.
     private var color: Color { status.indicatorColor }
 
-    private var label: String { status.summary(sessionCount: sessionCount) }
+    /// `daemon · 3 sessions · 12/min · 0.4ms`
+    ///
+    /// Measured on this side, never reported by the daemon about itself: a
+    /// process claiming its own health says it is fine right up until it stops
+    /// answering. Each figure is dropped rather than shown as a zero when it is
+    /// not yet known, because `0/min` on a link that has been up for two seconds
+    /// is a wrong answer and a blank is an honest one.
+    private var label: String {
+        let base = status.summary(sessionCount: sessionCount)
+        guard status == .connected, let telemetry else { return base }
+
+        var parts = [base]
+        if let rate = telemetry.messagesPerMinute(now: now) {
+            parts.append("\(rate)/min")
+        }
+        if let latency = telemetry.connectLatency {
+            parts.append(DaemonTelemetry.latency(latency))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var detail: String {
+        guard status == .connected, let telemetry else { return "" }
+        var lines = ["Measured by this app on its own socket, not reported by the daemon."]
+        if let uptime = telemetry.uptime(now: now) {
+            lines.append("Connected for \(DaemonTelemetry.short(uptime)).")
+        }
+        lines.append("\(telemetry.messages) messages on this connection.")
+        if let latency = telemetry.connectLatency {
+            lines.append("Socket answered in \(DaemonTelemetry.latency(latency)).")
+        }
+        return lines.joined(separator: "\n")
+    }
 }

@@ -47,6 +47,44 @@ struct Options {
     /// Skip the confirmation prompt. Never skips the *conflict* prompt — see
     /// `resolve_permission_conflict`.
     yes: bool,
+    /// Answer the conflict prompt without asking. `None` means ask.
+    ///
+    /// `--yes` deliberately does not cover this: the conflict question is about
+    /// somebody else's hook, and "yes" is not an answer to it. But a caller with
+    /// no terminal still needs a way to say what it wants, and the app has one —
+    /// it puts a button on the status line and the user presses it. Without this
+    /// flag that button could not work at all: the CLI reached the prompt,
+    /// found no terminal, and aborted.
+    on_conflict: Option<ConflictChoice>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ConflictChoice {
+    Absorb,
+    Replace,
+    Abort,
+    Coexist,
+}
+
+impl ConflictChoice {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "absorb" => Some(Self::Absorb),
+            "replace" => Some(Self::Replace),
+            "abort" => Some(Self::Abort),
+            "coexist" => Some(Self::Coexist),
+            _ => None,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Absorb => 0,
+            Self::Replace => 1,
+            Self::Abort => 2,
+            Self::Coexist => 3,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -54,11 +92,23 @@ fn main() -> ExitCode {
     let style = Style::detect();
 
     let mut command = None;
-    let mut options = Options { yes: false };
+    let mut options = Options { yes: false, on_conflict: None };
 
     for arg in &args {
         match arg.as_str() {
             "-y" | "--yes" => options.yes = true,
+            other if other.starts_with("--on-conflict=") => {
+                let value = &other["--on-conflict=".len()..];
+                match ConflictChoice::parse(value) {
+                    Some(choice) => options.on_conflict = Some(choice),
+                    None => {
+                        eprintln!(
+                            "violeet: --on-conflict must be absorb, replace, abort or coexist (got {value})"
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
             "-h" | "--help" | "help" => {
                 print_help();
                 return ExitCode::SUCCESS;
@@ -181,7 +231,7 @@ fn run_install(options: &Options, style: &Style) -> ExitCode {
     };
 
     // Settle any competing PermissionRequest hook before writing anything.
-    let absorbed = match resolve_permission_conflict(&mut settings, style) {
+    let absorbed = match resolve_permission_conflict(&mut settings, style, options.on_conflict) {
         Conflict::Proceed(absorbed) => absorbed,
         Conflict::Abort => {
             println!("Aborted. Nothing was written.");
@@ -273,7 +323,11 @@ enum Conflict {
 /// decide wins and the slower one is not awaited. violeet holds its response open
 /// for minutes waiting for a human, so it is *structurally* the slower one. A
 /// competing hook does not degrade HITL — it silently wins the race.
-fn resolve_permission_conflict(settings: &mut Settings, style: &Style) -> Conflict {
+fn resolve_permission_conflict(
+    settings: &mut Settings,
+    style: &Style,
+    preset: Option<ConflictChoice>,
+) -> Conflict {
     let foreign: Vec<Value> = settings
         .foreign_groups_for(hooks::PERMISSION_EVENT)
         .into_iter()
@@ -307,7 +361,17 @@ fn resolve_permission_conflict(settings: &mut Settings, style: &Style) -> Confli
         )
     );
 
-    let choice = ui::choose(
+    // A preset answers without asking. Printed, not silent: the caller chose
+    // this on the user's behalf and the user is entitled to see what happened
+    // to a hook they installed.
+    let choice = if let Some(preset) = preset {
+        println!(
+            "\n{}",
+            style.dim("Answering with --on-conflict, so nothing is being asked.")
+        );
+        Ok(Some(preset.index()))
+    } else {
+        ui::choose(
         "How should violeet handle this?",
         &[
             (
@@ -324,7 +388,8 @@ fn resolve_permission_conflict(settings: &mut Settings, style: &Style) -> Confli
                 "leave it in place — HITL becomes non-deterministic and doctor reports ✗",
             ),
         ],
-    );
+        )
+    };
 
     match choice {
         Ok(Some(0)) => {

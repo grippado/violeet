@@ -112,6 +112,7 @@ final class DaemonClient: ObservableObject {
         publish(.connecting)
 
         let path = Discovery.socketPath()
+        let dialStarted = Date()
 
         // Read the discovery file before connecting so a version mismatch is
         // named instead of showing up as an unexplained silence.
@@ -129,6 +130,9 @@ final class DaemonClient: ObservableObject {
 
         fd = socket
         attempt = 0
+        DispatchQueue.main.async { [weak self] in
+            self?.telemetry.connected(after: Date().timeIntervalSince(dialStarted))
+        }
         publish(.connected)
 
         let generation = self.generation
@@ -190,10 +194,21 @@ final class DaemonClient: ObservableObject {
         readerThread = nil
     }
 
+    /// Throughput, latency and uptime of this link. See `DaemonTelemetry`.
+    ///
+    /// Main-actor isolated because everything that reads it is a view, and the
+    /// reader thread already hops to main to deliver each message. Built lazily
+    /// so this client can still be constructed off the main actor.
+    @MainActor let telemetry = DaemonTelemetry()
+
     private func publish(_ new: Status) {
         DispatchQueue.main.async { [weak self] in
             guard let self, status != new else { return }
             status = new
+            // Cleared on the way down rather than left standing. A rate from
+            // the last connection, shown beside a dot that says disconnected,
+            // is a reading about a link that no longer exists.
+            if new != .connected { telemetry.disconnected() }
         }
     }
 
@@ -279,7 +294,10 @@ final class DaemonClient: ObservableObject {
     private func handle(line: Data) {
         switch DaemonMessageDecoder.decode(line: line) {
         case .success(let message):
-            DispatchQueue.main.async { [weak self] in self?.onMessage?(message) }
+            DispatchQueue.main.async { [weak self] in
+                self?.telemetry.received()
+                self?.onMessage?(message)
+            }
 
         case .failure(.unknownType(let type)):
             // Not a problem. This is exactly what lets the daemon ship a new

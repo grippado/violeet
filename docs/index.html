@@ -25,7 +25,10 @@
   .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
   .mark {
     width: 40px; height: 40px; border-radius: 10px; flex: none;
-    background: linear-gradient(145deg, var(--violeeter-magenta), var(--violeeter-blue));
+    /* The app's own icon, not an approximation of it in CSS. A gradient that
+       merely resembles the icon is a second copy to keep in sync, and it drifts
+       the first time the artwork changes. */
+    display: block;
   }
   .brand-name { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
   h1 { font-size: clamp(2rem, 6vw, 3.1rem); font-weight: 700; letter-spacing: -0.03em; max-width: 16ch; }
@@ -113,7 +116,7 @@
 
 <header>
   <div class="brand">
-    <div class="mark"></div>
+    <img class="mark" src="violeet.png" alt="Violeet">
     <span class="brand-name">Violeet</span>
     <button class="toggle" id="toggle" type="button">Light</button>
   </div>
