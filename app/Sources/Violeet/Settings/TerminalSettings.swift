@@ -305,8 +305,23 @@ struct TerminalTheme: Equatable {
         // from this background and the two stop separating, so it is lifted and
         // pulled toward cyan. **Neutral grey text reads yellow** against a cold
         // ground, so the foreground carries a trace of the same hue.
+        // Violeeter, the house palette. Published on its own under `theme/`,
+        // where `violeeter.json` is the source and everything else is
+        // generated from it — including these values, which are transcribed
+        // from that file and verified by `theme/build.py --check`.
+        //
+        // The base asked for was `#222240`, and it is `R=34 G=34 B=64`: with
+        // red and green equal, the eye reads cold blue-violet rather than
+        // purple. `#24203F` puts red a step above green at the same luminance,
+        // which is what makes it read as purple without making it louder.
+        //
+        // Two things follow from a violet background and neither is optional.
+        // **Blue has to move**: the default terminal blue sits a few degrees
+        // from this background and the two stop separating, so it is lifted and
+        // pulled toward cyan. **Neutral grey text reads yellow** against a cold
+        // ground, so the foreground carries a trace of the same hue.
         TerminalTheme(
-            name: "violeet violet",
+            name: "Violeeter Dark",
             background: RGB(0x24, 0x20, 0x3F),
             foreground: RGB(0xD9, 0xD6, 0xEC),
             cursor: RGB(0xC7, 0x8B, 0xF7),
@@ -317,24 +332,35 @@ struct TerminalTheme: Equatable {
                 RGB(0x3A, 0x35, 0x5E), RGB(0xFF, 0x6B, 0x81), RGB(0x6F, 0xE3, 0x9B),
                 RGB(0xF2, 0xC9, 0x7B), RGB(0x7F, 0xAE, 0xFF), RGB(0xC7, 0x8B, 0xF7),
                 RGB(0x6F, 0xE0, 0xE0), RGB(0xD9, 0xD6, 0xEC),
-                // Bright.
-                RGB(0x55, 0x4F, 0x7E), RGB(0xFF, 0x93, 0xA4), RGB(0x96, 0xF0, 0xB8),
+                // Bright. `brightBlack` is `#8B84BC` and not the `#554F7E` this
+                // palette grew up with: that measured 2.07 against this ground,
+                // and this slot is where nearly every highlighter puts
+                // *comments*. Unreadable comments are not a style.
+                RGB(0x8B, 0x84, 0xBC), RGB(0xFF, 0x93, 0xA4), RGB(0x96, 0xF0, 0xB8),
                 RGB(0xF7, 0xDA, 0x9E), RGB(0xA6, 0xC7, 0xFF), RGB(0xDC, 0xA9, 0xFF),
                 RGB(0x96, 0xEF, 0xEF), RGB(0xF3, 0xF1, 0xFF),
             ]
         ),
+        // The same hue family on a pale ground, and not the dark one with its
+        // lightness flipped — flipping produces pastels on white, which are
+        // inverted in theory and unreadable in practice. Every colour was
+        // re-picked at a luminance that clears AA on `#FAF8FE`.
+        //
+        // `white` and `brightWhite` are the exception, and have to be: they
+        // mean "the palest thing here", which on a pale ground is a surface to
+        // fill with rather than something to write with.
         TerminalTheme(
-            name: "violeet dark",
-            background: RGB(0x11, 0x13, 0x16),
-            foreground: RGB(0xD8, 0xDE, 0xE9),
-            cursor: RGB(0xE8, 0xB1, 0x39),
+            name: "Violeeter Light",
+            background: RGB(0xFA, 0xF8, 0xFE),
+            foreground: RGB(0x2A, 0x24, 0x40),
+            cursor: RGB(0x7C, 0x3A, 0xED),
             ansi: [
-                RGB(0x2E, 0x34, 0x36), RGB(0xFF, 0x6B, 0x6B), RGB(0x5F, 0xD7, 0x5F),
-                RGB(0xE8, 0xB1, 0x39), RGB(0x6F, 0xB7, 0xFF), RGB(0xC7, 0x8B, 0xF7),
-                RGB(0x5F, 0xD7, 0xD7), RGB(0xD8, 0xDE, 0xE9),
-                RGB(0x55, 0x5F, 0x66), RGB(0xFF, 0x8A, 0x8A), RGB(0x8A, 0xE8, 0x8A),
-                RGB(0xF2, 0xC9, 0x6B), RGB(0x94, 0xCB, 0xFF), RGB(0xDA, 0xAE, 0xFA),
-                RGB(0x8A, 0xE8, 0xE8), RGB(0xFF, 0xFF, 0xFF),
+                RGB(0x2A, 0x24, 0x40), RGB(0xC0, 0x2A, 0x47), RGB(0x14, 0x7A, 0x52),
+                RGB(0x8A, 0x5A, 0x0B), RGB(0x2B, 0x4A, 0xCB), RGB(0x7C, 0x3A, 0xED),
+                RGB(0x0F, 0x6E, 0x80), RGB(0xC9, 0xC3, 0xDE),
+                RGB(0x6B, 0x66, 0x85), RGB(0xA8, 0x1E, 0x39), RGB(0x0F, 0x64, 0x44),
+                RGB(0x74, 0x49, 0x0A), RGB(0x20, 0x39, 0xA8), RGB(0x64, 0x25, 0xC9),
+                RGB(0x0B, 0x5A, 0x69), RGB(0xFF, 0xFF, 0xFF),
             ]
         ),
         TerminalTheme(
@@ -377,20 +403,6 @@ struct TerminalTheme: Equatable {
                 RGB(0x92, 0x83, 0x74), RGB(0xFB, 0x49, 0x34), RGB(0xB8, 0xBB, 0x26),
                 RGB(0xFA, 0xBD, 0x2F), RGB(0x83, 0xA5, 0x98), RGB(0xD3, 0x86, 0x9B),
                 RGB(0x8E, 0xC0, 0x7C), RGB(0xEB, 0xDB, 0xB2),
-            ]
-        ),
-        TerminalTheme(
-            name: "Light",
-            background: RGB(0xFA, 0xFA, 0xFA),
-            foreground: RGB(0x24, 0x29, 0x2E),
-            cursor: RGB(0x00, 0x5C, 0xC5),
-            ansi: [
-                RGB(0x24, 0x29, 0x2E), RGB(0xD1, 0x34, 0x38), RGB(0x1A, 0x7F, 0x37),
-                RGB(0x95, 0x36, 0x00), RGB(0x00, 0x5C, 0xC5), RGB(0x81, 0x50, 0xB4),
-                RGB(0x1B, 0x7C, 0x83), RGB(0x6E, 0x77, 0x81),
-                RGB(0x57, 0x60, 0x6A), RGB(0xA4, 0x0E, 0x26), RGB(0x11, 0x6A, 0x2E),
-                RGB(0x7A, 0x2C, 0x00), RGB(0x03, 0x4C, 0xA3), RGB(0x62, 0x39, 0xA5),
-                RGB(0x15, 0x66, 0x6B), RGB(0x24, 0x29, 0x2E),
             ]
         ),
     ]

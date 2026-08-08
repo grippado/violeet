@@ -1,0 +1,22 @@
+# Violeeter Light — https://github.com/grippado/violeet
+background = FAF8FE
+foreground = 2A2440
+cursor-color = 7C3AED
+selection-background = DED6F5
+selection-foreground = 2A2440
+palette = 0=#2A2440
+palette = 1=#C02A47
+palette = 2=#147A52
+palette = 3=#8A5A0B
+palette = 4=#2B4ACB
+palette = 5=#7C3AED
+palette = 6=#0F6E80
+palette = 7=#C9C3DE
+palette = 8=#6B6685
+palette = 9=#A81E39
+palette = 10=#0F6444
+palette = 11=#74490A
+palette = 12=#2039A8
+palette = 13=#6425C9
+palette = 14=#0B5A69
+palette = 15=#FFFFFF

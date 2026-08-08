@@ -1,0 +1,22 @@
+# Violeeter Dark — https://github.com/grippado/violeet
+background = 24203F
+foreground = D9D6EC
+cursor-color = C78BF7
+selection-background = 3A355E
+selection-foreground = D9D6EC
+palette = 0=#3A355E
+palette = 1=#FF6B81
+palette = 2=#6FE39B
+palette = 3=#F2C97B
+palette = 4=#7FAEFF
+palette = 5=#C78BF7
+palette = 6=#6FE0E0
+palette = 7=#D9D6EC
+palette = 8=#8B84BC
+palette = 9=#FF93A4
+palette = 10=#96F0B8
+palette = 11=#F7DA9E
+palette = 12=#A6C7FF
+palette = 13=#DCA9FF
+palette = 14=#96EFEF
+palette = 15=#F3F1FF

@@ -221,7 +221,7 @@ struct HousePaletteTests {
     /// them equal, which the eye reads as cold blue-violet.
     @Test func the_default_background_reads_as_purple() {
         let theme = TerminalTheme.builtins[0]
-        #expect(theme.name == "violeet violet")
+        #expect(theme.name == "Violeeter Dark")
         #expect(theme.background.r > theme.background.g, "red above green is what makes it purple")
         #expect(theme.background.b > theme.background.r)
     }
