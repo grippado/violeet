@@ -209,6 +209,74 @@ struct CardStateTests {
         card.pendingAgents = 2
         #expect(card.lifecycle == .working)
     }
+
+    /// **A question outranks a count, always.** The simultaneous case: agents
+    /// out *and* something asked. The session is waiting on the human, and the
+    /// question is the only thing on this card with an action attached to it —
+    /// showing "3 agents running" would sort it below the working pile and hide
+    /// the one thing somebody has to answer.
+    ///
+    /// The field has no producer yet, so it is populated by hand here. That is
+    /// the point of the test: the precedence has to already be right on the day
+    /// the producer lands.
+    @Test func a_question_outranks_a_count_when_both_are_true() {
+        var card = SessionCard(registered: registered())
+        card.state = "idle"
+        card.pendingAgents = 3
+        card.answerRequest = asking()
+
+        #expect(card.lifecycle == .waitingForYou, "the question wins, and not by tie-break")
+        #expect(card.lifecycle.label == "waiting for you")
+
+        var agentsOnly = SessionCard(registered: registered(id: "agents"))
+        agentsOnly.state = "idle"
+        agentsOnly.pendingAgents = 3
+        #expect(card.sortRank < agentsOnly.sortRank, "and it sorts above the same card without one")
+
+        // The question goes away; the agents are still out. The card falls back
+        // to the count rather than to free.
+        card.answerRequest = nil
+        #expect(card.lifecycle == .waitingOnAgents(3))
+    }
+
+    /// A question with no agents out is the ordinary asking case, and it must
+    /// read the same way — the precedence above must not have made the question
+    /// depend on a count being present.
+    @Test func a_question_alone_still_waits_for_you() {
+        var card = SessionCard(registered: registered())
+        card.state = "idle"
+        card.pendingAgents = 0
+        card.answerRequest = asking()
+        #expect(card.lifecycle == .waitingForYou)
+    }
+
+    /// The patch path for the same rule: a question that arrives while the card
+    /// is showing a count takes the card over, and an explicit null hands it back.
+    @Test func a_question_arriving_by_patch_takes_over_from_the_count() {
+        var card = SessionCard(registered: registered())
+        card.state = "idle"
+        card.apply(SessionUpdated(sessionID: "s1", pendingAgents: .value(2)))
+        #expect(card.lifecycle == .waitingOnAgents(2))
+
+        card.apply(SessionUpdated(sessionID: "s1", answerRequest: .value(asking())))
+        #expect(card.lifecycle == .waitingForYou)
+
+        // No longer asking. The agents never went anywhere.
+        card.apply(SessionUpdated(sessionID: "s1", answerRequest: .unknown))
+        #expect(card.lifecycle == .waitingOnAgents(2))
+    }
+}
+
+/// A minimal `AnswerRequest`, as the daemon will send one.
+private func asking() -> AnswerRequest {
+    let json = """
+    {"signal":"question_mark","question":"vou com a opção A ou a B?",
+     "context":[{"role":"user","text":"segue"}],
+     "context_truncated":false,"question_truncated":false}
+    """
+    // Decoded rather than constructed: the type has no memberwise initialiser
+    // available to tests, and decoding is also how it will ever arrive.
+    return try! JSONDecoder().decode(AnswerRequest.self, from: Data(json.utf8))
 }
 
 @Suite("Card patching")
