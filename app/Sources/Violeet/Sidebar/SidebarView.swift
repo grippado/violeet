@@ -494,9 +494,25 @@ private struct EditorTabRow: View {
     /// The same glyph the Files panel puts on an open row, so the pair reads as
     /// one relationship seen from two ends.
     private var glyph: some View {
-        Image(systemName: "macwindow")
+        // The file's own kind, from the same `FileIcons` the Files panel and
+        // the directory tree use.
+        //
+        // It used to be `macwindow`, chosen so this row and the panel row it
+        // came from would read as one relationship seen from two ends. That
+        // pairing is not lost by this change, it is improved: both ends now
+        // show the same type icon, and `macwindow` still marks the panel row
+        // as open. The window glyph was saying "this is a tab", which the
+        // reader can see, instead of "this is a Swift file", which they cannot
+        // until they read the name.
+        //
+        // A tab whose editor has exited keeps the icon and loses the colour,
+        // the same way a missing file does in the panel.
+        let icon = FileIcons.icon(for: tab.editing?.name ?? "", isDirectory: false)
+        return Image(systemName: icon.symbol)
             .appFont(.micro)
-            .foregroundStyle(tab.hasExited ? .tertiary : .secondary)
+            .foregroundStyle(tab.hasExited
+                ? AnyShapeStyle(.tertiary)
+                : (icon.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary)))
     }
 
     var body: some View {
