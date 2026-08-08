@@ -242,6 +242,19 @@ pub struct SessionUpdated {
 /// 3.3 KB and a maximum of 6.8 KB, so this sits roughly nineteen times above
 /// the largest one observed and about eight times below the line limit with an
 /// excerpt attached.
+///
+/// # Known inconsistency (debt, recorded on purpose)
+///
+/// This cap lives here, in the contract, because that is where a wire limit
+/// belongs: every peer needs it, and a producer that owns it privately is a
+/// producer whose limit nobody else can honour. The repo's other wire cap does
+/// the opposite — `MAX_FILES_ON_WIRE` sits in
+/// `crates/violeet-daemon/src/transcript.rs`, on the producer side.
+///
+/// So there are now two contract caps in two different places. The intended end
+/// state is both here; moving the other one is code from a different front and
+/// was kept out of this branch deliberately rather than carried in as a
+/// passenger. Written down because silent debt is the kind that gets paid twice.
 pub const MAX_QUESTION_BYTES: usize = 128 * 1024;
 
 /// The session stopped having *asked*, rather than having finished.
@@ -707,6 +720,24 @@ mod tests {
     /// and it exists so the round-trip test below asserts on the *distinction*
     /// rather than on the shape of the JSON. `SessionUpdated` itself is
     /// serialize-only, so this is where "the receiver got all three" is checked.
+    ///
+    /// # What the tests below do NOT prove
+    ///
+    /// This is a **mirror** of the Swift decoder, hand-written, not the decoder
+    /// itself. A mirror can drift from its original without a single test going
+    /// red: change `Patch.decode` in Swift and nothing here notices, because
+    /// nothing here reads that file.
+    ///
+    /// So "round-trip green" means *this wire shape carries three distinct
+    /// states and the serialiser preserves them*. It does **not** mean the Swift
+    /// client agrees, and it is not evidence of parity between the two
+    /// projections. The equivalent Swift tests in `ProtocolTests.swift` assert
+    /// the same three states on the real decoder; the two suites agreeing is
+    /// what parity rests on, and nothing checks that they still agree.
+    ///
+    /// Real parity needs `Deserialize` on `SessionUpdated`, which needs a
+    /// `deserialize_with` on each of its 27 patch fields. That is its own
+    /// branch, deliberately not taken here.
     fn read_patch<T: for<'de> Deserialize<'de>>(j: &serde_json::Value, key: &str) -> Patch<T> {
         match j.get(key) {
             None => None,
