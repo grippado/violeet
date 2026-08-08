@@ -204,59 +204,36 @@ struct EditorTabPanel: View {
 
     @ViewBuilder
     private func ways(out editing: EditorTab) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Closing the tab is `AppState.closeTab`, the same path ⌘W takes —
+        VStack(alignment: .leading, spacing: 5) {
+            // Closing the tab is `AppState.closeTab`, the same path ⌘W takes,
             // so the editor is asked to quit cleanly and the daemon is told the
             // tab is gone. A button that only removed the row would leave both
             // a live process and a daemon believing in a tab that is not there.
-            QuietButton(action: { state.closeTab(tab.tabID) }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "xmark.circle")
-                        .appFont(.micro)
-                    Text("Close this tab")
-                }
-                .appFont(.caption)
-                .foregroundStyle(.secondary)
+            actionButton("Close this tab", symbol: "xmark.circle") {
+                state.closeTab(tab.tabID)
             }
-            .pointingHand()
             .help("Close the tab and return to what you were doing (⌘W)")
 
             // Reveal, not open. `activateFileViewerSelecting` puts the file on
-            // screen *selected in its folder*, which is what someone asking for
-            // Finder wants: the neighbours, the size, the ability to drag it
-            // somewhere. `NSWorkspace.open` would hand it to whichever app owns
-            // the extension — for a `.swift` an IDE, for a `.md` a note-taking
-            // app — which is the same wrong turn `openInEditor` documents
-            // refusing to take.
-            QuietButton(action: {
+            // screen selected in its folder, which is what someone asking for
+            // the Finder wants: the neighbours, the size, the ability to drag
+            // it somewhere.
+            actionButton("Reveal in Finder", symbol: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([
                     URL(fileURLWithPath: editing.path)
                 ])
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "folder")
-                        .appFont(.micro)
-                    Text("Reveal in Finder")
-                }
-                .appFont(.caption)
-                .foregroundStyle(.secondary)
             }
-            .pointingHand()
             .help("Show \(editing.name) in its folder.")
 
+            openWith(editing)
+
             if let owner = editing.sessionID, let card = state.sessions[owner] {
-                QuietButton(action: { state.inspect(session: owner) }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.uturn.backward")
-                            .appFont(.micro)
-                        Text("Files of \(state.displayTitle(for: card))")
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .appFont(.caption)
-                    .foregroundStyle(.secondary)
+                actionButton(
+                    "Files of \(state.displayTitle(for: card))",
+                    symbol: "arrow.uturn.backward"
+                ) {
+                    state.inspect(session: owner)
                 }
-                .pointingHand()
                 .help("Show what that session wrote.")
             } else if editing.sessionID != nil {
                 // Named a session, and it is gone. Only sayable when there was
@@ -266,7 +243,92 @@ struct EditorTabPanel: View {
                 Text("Opened from a session that has since ended.")
                     .appFont(.caption)
                     .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
             }
         }
+    }
+
+    /// Hand the file to another application.
+    ///
+    /// A menu rather than a button, because the answer is a list and the list
+    /// belongs to the machine. See `ExternalApps` for why it is asked for
+    /// rather than hard-coded.
+    ///
+    /// This is the counterpart to opening in `$EDITOR`, not a replacement:
+    /// that one keeps the file inside a tab, which is what a terminal should do
+    /// with text. This one is the other intention, "take this out of here",
+    /// and a `.pdf` or a `.png` has no other answer.
+    @ViewBuilder
+    private func openWith(_ editing: EditorTab) -> some View {
+        let apps = ExternalApps.choices(for: editing.path)
+        Menu {
+            ForEach(apps) { app in
+                Button(app.name) { ExternalApps.open(path: editing.path, with: app.url) }
+            }
+            if !apps.isEmpty { Divider() }
+            // Always present, and the only entry when nothing claims the type.
+            // macOS answers that case with its own picker, which is the right
+            // place for the question once we have nothing useful to offer.
+            Button("System default") { ExternalApps.openWithDefault(path: editing.path) }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.up.forward.app")
+                    .appFont(.micro)
+                Text("Open with")
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .appFont(.micro)
+                    .foregroundStyle(.tertiary)
+            }
+            .appFont(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Self.buttonBackground)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .pointingHand()
+        .help("Open \(editing.name) in another application.")
+    }
+
+    /// An action that looks like one.
+    ///
+    /// These were bare rows of text with a glyph, which read as a list of facts
+    /// rather than as things that do something, and the only way to find out
+    /// was to hover and watch for the cursor. A quiet filled shape says "target"
+    /// without turning a side panel into a toolbar.
+    private func actionButton(
+        _ title: String,
+        symbol: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        QuietButton(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .appFont(.micro)
+                Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .appFont(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Self.buttonBackground)
+            .contentShape(Rectangle())
+        }
+    }
+
+    /// Derived from the text colour rather than named, so it belongs to
+    /// whatever theme is active: this panel sits on chrome tinted from the
+    /// terminal's own background, and a fixed grey would be a foreign patch on
+    /// a violet or a light one.
+    private static var buttonBackground: some View {
+        RoundedRectangle(cornerRadius: 5)
+            .fill(Color.primary.opacity(0.06))
     }
 }
