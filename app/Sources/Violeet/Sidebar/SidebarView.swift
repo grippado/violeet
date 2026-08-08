@@ -67,13 +67,12 @@ struct SidebarView: View {
                             density: .forSidebar(width: preferences.sidebarWidth)
                         )
                         .contentShape(Rectangle())
-                        // Two effects, one gesture: go to the tab, and point
-                        // the Files panel at this session. The second is
+                        // One call, two effects: go to the tab and point the
+                        // Files panel at this session. They used to be two
+                        // calls here and undid each other — see
+                        // `AppState.inspect(session:)`. The panel part is
                         // harmless while that panel is closed.
-                        .onTapGesture {
-                            state.inspect(session: card.sessionID)
-                            reveal(card)
-                        }
+                        .onTapGesture { state.inspect(session: card.sessionID) }
                         .pointingHand(card.tabID != nil)
                         .help(card.tabID == nil
                             ? "Running outside violeet. Shown because it is a real session, but there is no tab to reveal."
@@ -98,7 +97,7 @@ struct SidebarView: View {
                                 onFinish: { state.focusTerminal() }
                             )
                             .contentShape(Rectangle())
-                            .onTapGesture { state.selectedTabID = tab.tabID }
+                            .onTapGesture { state.select(tab: tab.tabID) }
                             .pointingHand()
                         }
                     }
@@ -212,14 +211,11 @@ struct SidebarView: View {
         }
     }
 
-    /// Bring the tab a card belongs to to the front.
-    ///
-    /// A session with no tab cannot be revealed — an agent started in iTerm is
-    /// a supported state (ADR-003), so the tap is a no-op rather than an error.
-    private func reveal(_ card: SessionCard) {
-        guard let tabID = card.tabID else { return }
-        state.selectedTabID = tabID
-    }
+    // Revealing a card's tab used to live here, beside the tap that pinned the
+    // panel to it, and the two undid each other. Both now happen inside
+    // `AppState.inspect(session:)`, which is the only place that knows they
+    // have to be ordered — including the case this view had to state twice,
+    // that a session started in iTerm has no tab to reveal (ADR-003).
 
     private var header: some View {
         HStack(spacing: 8) {
@@ -300,10 +296,15 @@ struct SidebarView: View {
                 ForEach(tabs) { tab in
                     EditorTabRow(
                         tab: tab,
-                        isSelected: tab.tabID == state.selectedTabID
+                        isSelected: tab.tabID == state.selectedTabID,
+                        // The row's own file, out of the tree it came from. The
+                        // numbers are the daemon's — this looks one up, it does
+                        // not compute one.
+                        change: state.sessionFiles[card.sessionID]?.files
+                            .first { $0.path == tab.editing?.path }
                     )
                     .contentShape(Rectangle())
-                    .onTapGesture { state.selectedTabID = tab.tabID }
+                    .onTapGesture { state.select(tab: tab.tabID) }
                     .pointingHand()
                 }
             }
@@ -462,20 +463,71 @@ private struct TabRow: View {
 private struct EditorTabRow: View {
     @ObservedObject var tab: TabModel
     let isSelected: Bool
+    /// What the session did to this file, when the panel's tree knows. `nil`
+    /// for a file the session never wrote — a row opened from a directory tree,
+    /// or one whose session has since ended.
+    var change: FileChange?
+
+    /// The filename, sized and truncated the same way in both layouts.
+    private var name: some View {
+        Text(tab.editing?.name ?? tab.currentDirectory)
+            .appFont(.caption, weight: isSelected ? .semibold : .regular)
+            .foregroundStyle(tab.hasExited ? .secondary : .primary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
+    /// The same figures the row in the Files panel carries, from the same
+    /// `FileChange`, so a file cannot read as `+40 −44` in one place and
+    /// something else two panels away. Absent rather than zeroed when there is
+    /// nothing to look up: `— —` on a row whose numbers are simply unknown
+    /// would be stating a measurement.
+    @ViewBuilder
+    private var stat: some View {
+        if let change {
+            DiffStat(added: change.added, removed: change.removed, approximate: false)
+                .appFont(.micro)
+                .foregroundStyle(tab.hasExited ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+        }
+    }
+
+    /// The same glyph the Files panel puts on an open row, so the pair reads as
+    /// one relationship seen from two ends.
+    private var glyph: some View {
+        Image(systemName: "macwindow")
+            .appFont(.micro)
+            .foregroundStyle(tab.hasExited ? .tertiary : .secondary)
+    }
 
     var body: some View {
-        HStack(spacing: 6) {
-            // The same glyph the Files panel puts on an open row, so the pair
-            // reads as one relationship seen from two ends.
-            Image(systemName: "macwindow")
-                .appFont(.micro)
-                .foregroundStyle(tab.hasExited ? .tertiary : .secondary)
-            Text(tab.editing?.name ?? tab.currentDirectory)
-                .appFont(.caption, weight: isSelected ? .semibold : .regular)
-                .foregroundStyle(tab.hasExited ? .secondary : .primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
+        // One line when it fits, two when it does not.
+        //
+        // At the narrow sidebar rungs the two did not fit and neither gave way
+        // cleanly: the name collapsed to `S…ift` and `+118` broke across lines
+        // as `+11` over `8`, which is not a smaller number, it is a wrong one.
+        //
+        // `ViewThatFits` picks the first layout that has room, so the wide
+        // sidebar keeps the compact row and the narrow one drops the figures
+        // under the name — where they have the full width and the name gets it
+        // back. Measured at 33% and 66%, which is where it broke.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                glyph
+                name
+                Spacer(minLength: 4)
+                stat
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    glyph
+                    name
+                    Spacer(minLength: 0)
+                }
+                // Indented to the name's own left edge, so the figures read as
+                // belonging to the row above rather than as a row of their own.
+                stat.padding(.leading, 18)
+            }
         }
         .padding(.horizontal, 7)
         .padding(.vertical, 3)

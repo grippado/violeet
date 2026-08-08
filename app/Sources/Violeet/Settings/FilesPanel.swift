@@ -34,6 +34,7 @@
 // `structuredPatch` and the daemon sums them away — showing those instead would
 // mean carrying every hunk and rebasing its position past every later edit.
 
+import AppKit
 import SwiftUI
 
 struct FilesPanel: View {
@@ -51,80 +52,19 @@ struct FilesPanel: View {
                 Divider()
                 body(for: list ?? SessionFileList())
             } else if let tab = state.inspectedTab {
-                notASession(tab)
+                if let editing = tab.editing {
+                    EditorTabPanel(tab: tab, editing: editing)
+                } else {
+                    // A shell has no file list and does have a directory, which
+                    // is a tree of exactly the rows this panel already draws.
+                    // See `DirectoryTree`.
+                    DirectoryTree(tab: tab, preferences: state.preferences)
+                }
             } else {
                 hint("No session selected", detail: "Run an agent in a tab, then click its card.")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    /// What the panel says when the selected tab is not an agent.
-    ///
-    /// It names the tab rather than going blank, because "no files" and "this is
-    /// not a thing that has files" are different facts — the same distinction
-    /// the two empties below are built around, one level up. A blank panel here
-    /// would read as a session that wrote nothing.
-    ///
-    /// An editor tab knows which session sent it, and says so: it is the one
-    /// tab that can point back at a file list, and a dead end that knows the way
-    /// out should offer it.
-    @ViewBuilder
-    private func notASession(_ tab: TabModel) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let editing = tab.editing {
-                Text(editing.name)
-                    .appFont(.body, weight: .semibold)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(ProcessDirectory.abbreviated(editing.path))
-                    .appFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.head)
-                    .help(editing.path)
-
-                if let owner = editing.sessionID, let card = state.sessions[owner] {
-                    Divider().padding(.vertical, 4)
-                    QuietButton(action: { state.inspect(session: owner) }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.uturn.backward")
-                                .appFont(.micro)
-                            Text("Files of \(state.displayTitle(for: card))")
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .appFont(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                    .pointingHand()
-                    .help("Show what that session wrote.")
-                } else {
-                    Text("Opened from a session that has since ended.")
-                        .appFont(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 2)
-                }
-            } else {
-                Text(state.name(for: tab).text)
-                    .appFont(.body, weight: .semibold)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(ProcessDirectory.abbreviated(tab.currentDirectory))
-                    .appFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.head)
-                    .help(tab.currentDirectory)
-                Text("No agent is running in this tab, so there are no files to list.")
-                    .appFont(.caption)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
     }
 
     // MARK: - Header
@@ -314,22 +254,110 @@ private struct FileRow: View {
         FileManager.default.fileExists(atPath: entry.change.path)
     }
 
+    private var mark: FileMark {
+        FileMark.of(entry.change, stillThere: stillThere)
+    }
+
+    /// What kind of file this is. Dimmed to nothing when the file is gone —
+    /// the row is already saying it is not there, and a confident icon beside
+    /// that would be arguing with it.
+    @ViewBuilder
+    private var typeIcon: some View {
+        let icon = FileIcons.icon(for: entry.name, isDirectory: false)
+        Image(systemName: icon.symbol)
+            .appFont(.caption)
+            .foregroundStyle(stillThere
+                ? (icon.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
+                : AnyShapeStyle(.tertiary))
+    }
+
+    /// The same menu the directory tree offers, over a different list.
+    ///
+    /// Deliberately the same items in the same order: these two panels show
+    /// files one click apart, and a right-click that means different things in
+    /// each is a menu you have to read every time instead of aim at.
+    ///
+    /// The one difference is the relative path, which here is measured from the
+    /// root this file was grouped under — the heading directly above the row —
+    /// rather than from a shell's directory. `FileRoot.Entry` already carries
+    /// it, computed once when the tree was grouped.
+    @ViewBuilder
+    private var contextMenu: some View {
+        if !stillThere {
+            // Every action below either opens the file or copies a path to it.
+            // With the file gone, only the paths still mean anything, and
+            // offering to open it would be offering to fail.
+            Text("Not there any more")
+        } else if FilePreview.canPreview(entry.name) {
+            Button("Preview") { FilePreview.show(path: entry.change.path) }
+        } else {
+            Button(isOpen ? "Go to Tab" : "Open in Editor") {
+                state.openInEditor(path: entry.change.path, session: sessionID)
+            }
+        }
+
+        if stillThere {
+            Divider()
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([
+                    URL(fileURLWithPath: entry.change.path)
+                ])
+            }
+        }
+
+        Divider()
+
+        Button("Copy Name") { copy(entry.name) }
+        Button("Copy Relative Path") { copy(entry.relativePath) }
+        Button("Copy Absolute Path") { copy(entry.change.path) }
+    }
+
+    private func copy(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Green added, red gone, and updated in neither.
+    ///
+    /// `U` is the common case — most rows in most sessions — and a column of
+    /// coloured letters down a long list is a column nobody reads. Secondary
+    /// leaves the colour meaning "this one is not the ordinary case", which is
+    /// the only time the eye needs to be pulled here at all.
+    private var markColor: Color {
+        switch mark {
+        case .added: return .green
+        case .updated: return .secondary
+        case .gone: return .red
+        }
+    }
+
     var body: some View {
         QuietButton(action: {
             guard stillThere else { return }
             state.openInEditor(path: entry.change.path, session: sessionID)
         }) {
             HStack(spacing: 6) {
-                if entry.change.created {
-                    // A letter and not only a colour: the same two-channel rule
-                    // the menu bar icon follows, for the same reader.
-                    Text("A")
-                        .appFont(.micro, weight: .semibold)
-                        .foregroundStyle(.green)
-                        .frame(width: 9)
-                } else {
-                    Text(" ").appFont(.micro).frame(width: 9)
-                }
+                // `A` added, `U` updated, `D` gone. A letter and not only a
+                // colour: the same two-channel rule the menu bar icon follows,
+                // for the same reader. See `FileMark`, including why `D` is
+                // the one that can mislead and why it says `D` anyway.
+                //
+                // Every row carries one, where only created files used to. A
+                // blank in this column meant "modified", which is a fact the
+                // panel was leaving the reader to infer from the absence of
+                // another one.
+                Text(mark.rawValue)
+                    .appFont(.micro, weight: .semibold)
+                    .foregroundStyle(markColor)
+                    .frame(width: 9)
+
+                // The same glyphs the directory tree uses, from the same
+                // `FileIcons`. Two panels one click apart describing the same
+                // file with different pictures would be two vocabularies to
+                // learn for one idea. Fixed width so the names line up.
+                typeIcon
+                    .frame(width: 14)
 
                 HStack(spacing: 0) {
                     if !entry.directory.isEmpty {
@@ -388,6 +416,7 @@ private struct FileRow: View {
             .contentShape(Rectangle())
         }
         .onHover { hovering = $0 }
+        .contextMenu { contextMenu }
         .pointingHand(stillThere)
         .help(!stillThere
             ? "\(entry.change.path)\n\nNot there any more. The session wrote it at this path, and it has since been moved, renamed or deleted."
@@ -403,7 +432,11 @@ private struct FileRow: View {
 }
 
 /// `+12 −3`, in figures that do not jitter as they change.
-private struct DiffStat: View {
+///
+/// Not `private`: the sidebar draws the same figures on the editor tab a row
+/// opened, and two spellings of one diffstat is how they come to disagree about
+/// the same file.
+struct DiffStat: View {
     let added: Int
     let removed: Int
     /// Prefix with `~`, the same way a partial token total is marked.
@@ -422,5 +455,11 @@ private struct DiffStat: View {
             }
         }
         .monospacedDigit()
+        // A diffstat may be dropped, never folded. Squeezed into a narrow
+        // sidebar these wrapped mid-number — `+118` became `+11` above `8`,
+        // which reads as a different measurement rather than as a cramped one.
+        // `fixedSize` makes the row give way instead of the figure.
+        .fixedSize(horizontal: true, vertical: false)
+        .lineLimit(1)
     }
 }

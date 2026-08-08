@@ -34,6 +34,32 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The user picked this tab. Not the same as "the selection changed".
+    ///
+    /// # The bug this exists for
+    ///
+    /// Clearing the pinned session lived in `selectedTabID`'s `didSet`, and
+    /// `didSet` does not fire when the value assigned equals the one already
+    /// there. So: click a card under ELSEWHERE to pin its changes, then click
+    /// the tab that was *already selected* — the assignment is a no-op, nothing
+    /// clears, and the panel keeps showing a session's changes while the window
+    /// is plainly on a shell. It only came right after visiting some other tab
+    /// and coming back, which is what made it look like a redraw problem rather
+    /// than a state one.
+    ///
+    /// The two are genuinely different events. "The selection changed" is a
+    /// fact about a variable; "the user asked for this tab" is an intention,
+    /// and it means *show me this tab* whether or not the variable moves. Every
+    /// click surface goes through here; the internal assignments — opening,
+    /// closing, cycling — always do change the value, so their `didSet` is
+    /// enough.
+    func select(tab tabID: String) {
+        // Ordered so the panel cannot flicker through the wrong subject: the
+        // pin comes off first, then the selection lands.
+        inspectedSessionID = nil
+        selectedTabID = tabID
+    }
+
     /// The selected tab's name, for the window's own title bar.
     ///
     /// This window has no tab bar — the sidebar is the tab list — so the title
@@ -314,6 +340,10 @@ final class AppState: ObservableObject {
     let preferences: Preferences
     let daemon = DaemonClient()
 
+    /// The themes on disk, and the live-reload loop over the one being edited.
+    /// See `ThemeStore`.
+    let themes: ThemeStore
+
     /// Puts the bundled daemon under launchd when nothing is answering. See
     /// `DaemonSupervisor` for why the app carries one at all.
     let supervisor = DaemonSupervisor()
@@ -327,6 +357,7 @@ final class AppState: ObservableObject {
 
     init(preferences: Preferences = Preferences()) {
         self.preferences = preferences
+        self.themes = ThemeStore(preferences: preferences)
 
         // Before the client connects, so the first attempt has something to
         // reach. It is a no-op when a daemon is already listening, which is
@@ -350,6 +381,13 @@ final class AppState: ObservableObject {
         // Re-publishing the client's own changes: `daemon` is a nested
         // ObservableObject, and SwiftUI does not observe through one.
         daemon.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        // Same for the theme store, and for the same reason. Without it a parse
+        // error from a save would sit in the store unread, because nothing in
+        // the view tree is watching the object it lives on.
+        themes.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
@@ -477,7 +515,7 @@ final class AppState: ObservableObject {
         let directory = (path as NSString).deletingLastPathComponent
         let tab = newTab(
             directory: directory.isEmpty ? nil : directory,
-            command: Self.editorCommand(forFileAt: path)
+            command: Self.editorCommand(forFileAt: path, settings: preferences.terminal.editor)
         )
         tab.editing = EditorTab(path: path, sessionID: sessionID)
         // `editing` is not `@Published` — it is set once, here, before anything
@@ -517,9 +555,28 @@ final class AppState: ObservableObject {
     /// the rule tabs already follow.
     /// # Showing the diff, not just marking it
     ///
-    /// A vim-family editor opens on the first uncommitted hunk, with three
-    /// gitsigns displays switched on. All of it is gitsigns' — there is nothing
-    /// here that draws.
+    /// A vim-family editor opens on the first uncommitted hunk, in whichever of
+    /// two shapes the user chose — see `EditorSettings.DiffMode`. All of it is
+    /// gitsigns' and vim's; there is nothing here that draws.
+    ///
+    /// **Side by side** is one call, `diffthis`, which opens a vertical split
+    /// against the index and lets vim's own diff mode place the cursor. Nothing
+    /// below applies to it: no jump, because the split arrives on the first
+    /// change, and no displays, because they would mark up one half of a window
+    /// that is already showing both.
+    ///
+    /// **Inline** is the default and the rest of this comment. It is the one
+    /// that cannot be too narrow to read — a split in an 80-column tab leaves
+    /// 40 a side, and that is where a terminal usually is.
+    ///
+    /// # What a new file does
+    ///
+    /// Nothing, in either mode, and correctly. `attach_to_untracked` is `false`
+    /// in gitsigns by default, so a file git has never seen gets no attach and
+    /// `get_hunks` answers `nil` rather than an empty list — the poll below runs
+    /// out its twenty tries and the file opens plain. That is the honest answer:
+    /// the diff of a new file is the file, which is already on screen. The Files
+    /// panel marks these with an `A` for the same reason.
     ///
     /// The sign column alone marks *that* a line changed and never what it
     /// replaced, so a rewritten line and a brand new one look identical and a
@@ -576,18 +633,69 @@ final class AppState: ObservableObject {
     ///
     /// Only for `nvim` and `vim`. `-c` is theirs; handing it to an `$EDITOR` of
     /// `code` or `emacs` would be passing a flag that means something else.
-    nonisolated static func editorCommand(forFileAt path: String) -> String {
+    nonisolated static func editorCommand(
+        forFileAt path: String,
+        settings: TerminalSettings.EditorSettings = TerminalSettings.EditorSettings()
+    ) -> String {
+        // What to do once the hunks exist. The wait around it is identical
+        // either way — the difference is one call against four, and it is the
+        // reason the poll is written as a body it drops in rather than as two
+        // commands.
+        let onHunks: String
+        switch settings.diffMode {
+        case .inline:
+            // The cursor is placed from the hunk we already have, not by asking
+            // gitsigns to navigate. `nav_hunk("first")` treats a cursor that is
+            // *inside* the first hunk as a reason to move to its far edge, and
+            // a brand new file is one hunk covering every line — so opening one
+            // landed on the last line of the file. Measured: a 114-line new
+            // file put the cursor on 114, a modified file on 28, which is why
+            // it looked correct for months.
+            //
+            // `added.start` is 0 for a hunk that only deletes, where it means
+            // "after this line". `math.max` keeps that from being an invalid
+            // cursor position rather than pretending it is a real line.
+            onHunks = """
+                pcall(vim.api.nvim_win_set_cursor,0,{math.max(1,h[1].added.start),0}) \
+                pcall(gs.toggle_deleted,true) \
+                pcall(gs.toggle_word_diff,true) \
+                pcall(gs.toggle_linehl,true)
+                """
+        case .sideBySide:
+            // `diffthis` opens the split itself, against the index, and vim's
+            // own diff mode lands the cursor on the first change — so there is
+            // no `nav_hunk` here and no toggle either. The inline displays
+            // would be drawn *inside* one half of a diff that is already
+            // showing both, which is the same information twice at half the
+            // width.
+            onHunks = "pcall(gs.diffthis)"
+        }
+
+        // Only when the user's config has one. See `EditorSettings.showMinimap`
+        // for why this detects rather than installs.
+        //
+        // Deferred like the jump is, and for a weaker version of the same
+        // reason: the map is drawn from the buffer, and asking for it before
+        // the file is in one gets an empty strip. It does not poll, though —
+        // unlike the hunks, there is nothing here that arrives late. One delay
+        // past the load is enough, and a map that missed it is a missing
+        // sidebar rather than a wrong one.
+        let minimap = settings.showMinimap
+            ? """
+             vim.defer_fn(function() \
+            local mok,mm=pcall(require,"mini.map") \
+            if mok then pcall(mm.open) end end,150)
+            """
+            : ""
+
         let showTheDiff = """
             lua local t=0 local function go() t=t+1 \
             local ok,gs=pcall(require,"gitsigns") \
             if ok then local h=gs.get_hunks() \
             if h and #h>0 then \
-            gs.nav_hunk("first") \
-            pcall(gs.toggle_deleted,true) \
-            pcall(gs.toggle_word_diff,true) \
-            pcall(gs.toggle_linehl,true) \
+            \(onHunks) \
             return end end \
-            if t<20 then vim.defer_fn(go,100) end end vim.defer_fn(go,100)
+            if t<20 then vim.defer_fn(go,100) end end vim.defer_fn(go,100)\(minimap)
             """
 
         return """
@@ -631,7 +739,21 @@ final class AppState: ObservableObject {
     func closeTab(_ tabID: String) {
         guard let index = tabs.firstIndex(where: { $0.tabID == tabID }) else { return }
         let tab = tabs.remove(at: index)
-        tab.terminate()
+
+        // An editor gets asked to leave before it is signalled, so it does not
+        // preserve a swap file for a session that did not crash. The row is
+        // already off screen — the wait is the editor's, not the user's. See
+        // `TerminalSession.askEditorToQuit`.
+        if tab.editing != nil {
+            tab.askEditorToQuit()
+            // `tab` captured strongly on purpose: the list no longer holds it,
+            // and it must outlive this delay or nothing gets signalled at all.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.editorQuitGrace) {
+                tab.terminate()
+            }
+        } else {
+            tab.terminate()
+        }
         daemon.send(.closeTab(tabID: tab.tabID))
 
         guard selectedTabID == tabID else { return }
@@ -739,7 +861,23 @@ final class AppState: ObservableObject {
     ///
     /// Harmless while the panel is closed, which is what lets the sidebar's tap
     /// gesture do this unconditionally instead of asking what is on screen.
+    /// Point the panel at a session, and go to its tab if it has one.
+    ///
+    /// Both halves, in this order, because they fight otherwise. Selecting a tab
+    /// clears the pinned session — that is `selectedTabID`'s whole `didSet`, and
+    /// it is right for every other caller — so pinning first and revealing
+    /// second undid the pin on the way out. The bug was invisible for sessions
+    /// running elsewhere, which have no tab to reveal and so never reached the
+    /// line that cleared it; a local session's card was quietly failing to fill
+    /// the panel this entire time.
+    ///
+    /// Ordering rather than a flag: the sequence *is* the intention. "Show me
+    /// this session" means be on its tab and be pinned to it, and a caller
+    /// should not have to know which of the two to ask for first.
     func inspect(session id: String) {
+        if let tabID = sessions[id]?.tabID {
+            selectedTabID = tabID
+        }
         inspectedSessionID = id
     }
 
@@ -915,6 +1053,18 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// How long an editor gets to act on `:qa` before it is signalled.
+    ///
+    /// It only has to parse three keystrokes and close buffers it has already
+    /// written, which is milliseconds. The margin is for a cold Neovim with a
+    /// plugin manager still settling — the case where the swap file would
+    /// otherwise be planted anyway.
+    ///
+    /// Deliberately much shorter than `TerminalSession.killGrace`: this is a
+    /// delay a user could feel on quit, and that one is a deadline nobody
+    /// waits on.
+    static let editorQuitGrace: TimeInterval = 0.25
+
     // MARK: - Shutdown
 
     /// Close every tab properly on quit.
@@ -924,6 +1074,22 @@ final class AppState: ObservableObject {
     /// `process_exited`, which is true but late and less specific than
     /// `tab_closed`.
     func shutdown() {
+        // Every editor is asked to leave first, then all of them are given the
+        // one grace period together — `n` tabs cost one wait, not `n`.
+        //
+        // This wait is **blocking**, and it is the one place that is
+        // unavoidable: `applicationWillTerminate` is the last thing that runs,
+        // so anything scheduled for later never happens and the editors are
+        // reaped mid-sentence. A quarter of a second inside a quit is not
+        // perceptible; the recovery prompt it prevents on the next open is.
+        let editors = tabs.filter { $0.editing != nil }
+        if !editors.isEmpty {
+            for tab in editors { tab.askEditorToQuit() }
+            // The run loop, not `sleep`: the PTY writes above are delivered by
+            // this thread, and sleeping would hold the bytes we just queued.
+            RunLoop.current.run(until: Date().addingTimeInterval(Self.editorQuitGrace))
+        }
+
         for tab in tabs {
             tab.terminate()
             daemon.send(.closeTab(tabID: tab.tabID))

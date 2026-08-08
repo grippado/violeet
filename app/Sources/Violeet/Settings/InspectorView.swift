@@ -67,27 +67,86 @@ struct InspectorView: View {
         .background(Color(nsColor: preferences.chrome.surfaceResolved.nsColor))
     }
 
+    /// What the files panel is currently showing, as a name and a symbol.
+    ///
+    /// One panel, three subjects. It was called "Files" for all of them, which
+    /// is true and useless: the reader already knows they are looking at files.
+    /// What they cannot tell at a glance is *which* files — everything an agent
+    /// touched, everything in a directory, or the one file open in this tab.
+    ///
+    /// The tab is a label for what is under it, so it says that instead:
+    ///
+    ///  · **Changes** — what a session wrote. The word the reader is already
+    ///    thinking in when they open this beside a working agent.
+    ///  · **Tree** — the working directory of a plain shell.
+    ///  · **File** — the single file an editor tab is on.
+    ///
+    /// The symbol moves with the word, because a label that changes under a
+    /// fixed icon reads as a glitch rather than as a different subject.
+    private var filesSubject: (title: String, symbol: String) {
+        if state.inspectedSession != nil {
+            return ("Changes", "plus.forwardslash.minus")
+        }
+        if let tab = state.inspectedTab {
+            return tab.editing != nil ? ("File", "doc") : ("Tree", "folder")
+        }
+        return (InspectorPanel.files.title, InspectorPanel.files.symbol)
+    }
+
+    private func label(for item: InspectorPanel) -> (title: String, symbol: String) {
+        item == .files ? filesSubject : (item.title, item.symbol)
+    }
+
+    /// One tab of the selector, with or without its label.
+    ///
+    /// The symbol is never dropped and the word is, which is the right way
+    /// round: the icon is what the eye finds after the first day, and the word
+    /// is what teaches it on the first.
+    private func tab(_ item: InspectorPanel, showingLabel: Bool) -> some View {
+        let label = label(for: item)
+        return QuietButton(action: { panel = item }) {
+            HStack(spacing: 4) {
+                Image(systemName: label.symbol).appFont(.caption)
+                if showingLabel {
+                    Text(label.title).appFont(.body, weight: .semibold)
+                }
+            }
+            .foregroundStyle(panel == item ? Color.primary : Color.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(panel == item && InspectorPanel.allCases.count > 1
+                        ? Color.secondary.opacity(0.15)
+                        : Color.clear)
+            )
+        }
+        // The word leaves the screen, not the meaning: a hover and a screen
+        // reader still get the full name once the label is gone.
+        .help(label.title)
+        .accessibilityLabel(label.title)
+    }
+
     private var header: some View {
         HStack(spacing: 4) {
             // With one panel this reads as a title. With two it becomes the
             // selector it already is, without the header moving.
-            ForEach(InspectorPanel.allCases) { item in
-                QuietButton(action: { panel = item }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: item.symbol).appFont(.caption)
-                        Text(item.title).appFont(.body, weight: .semibold)
-                    }
-                    .foregroundStyle(panel == item ? Color.primary : Color.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(panel == item && InspectorPanel.allCases.count > 1
-                                ? Color.secondary.opacity(0.15)
-                                : Color.clear)
-                    )
+            //
+            // Labels while they fit, icons once they do not. Dragged narrow,
+            // "Files" and "Settings" plus the hide button ran out of room and
+            // the row broke rather than shrinking — and a selector that wraps
+            // has stopped being a row of tabs. `ViewThatFits` takes the first
+            // layout with room, so the panel degrades a step at a time instead
+            // of at once.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 4) {
+                    ForEach(InspectorPanel.allCases) { tab($0, showingLabel: true) }
+                }
+                HStack(spacing: 4) {
+                    ForEach(InspectorPanel.allCases) { tab($0, showingLabel: false) }
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 0)
 
