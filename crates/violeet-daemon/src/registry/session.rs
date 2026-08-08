@@ -291,6 +291,15 @@ pub struct Session {
     pub tokens: TokenTelemetry,
     /// What this session wrote, as last published. Same source as `tokens`.
     pub files: FileTelemetry,
+    /// How many background agents the session was waiting on, **as last
+    /// published**.
+    ///
+    /// Held only to keep the patch sparse, exactly like `files`. It is never the
+    /// source of the number: that is derived afresh from the transcript on every
+    /// read (`violeet_transcript::Telemetry::pending_agents`), and nothing here
+    /// ever increments it. `None` means the daemon has not told the app anything
+    /// yet, which is not the same as having told it zero — see the wire field.
+    pub pending_agents: Option<u64>,
 }
 
 impl Session {
@@ -322,6 +331,7 @@ impl Session {
             last_event_at: now,
             tokens: TokenTelemetry::unknown(),
             files: FileTelemetry::default(),
+            pending_agents: None,
         }
     }
 
