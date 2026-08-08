@@ -1,6 +1,6 @@
 # violeet socket protocol
 
-> **Wire version `v` = 1. Document revision 6.**
+> **Wire version `v` = 1. Document revision 7.**
 >
 > These are two different numbers and conflating them has now cost time twice:
 > two separate tracks were briefed that the protocol was "v2, frozen", read
@@ -18,7 +18,12 @@
 >   revision 2 for the reason recorded below, revision 3 because adding an
 >   optional field is backward compatible by the rule in *Envelope*. Revision 6
 >   (2026-08-01) added `release_session_title`, an inbound message: a new
->   `type` is ignored by older receivers, which is the same rule.
+>   `type` is ignored by older receivers, which is the same rule. Revision 7
+>   (2026-08-08) added `answer_request` and `pending_agents`, both optional
+>   fields of `session_updated`, absorbing the Track C request — same rule
+>   again, so `v` stays `1`. (That request is `docs/tracks/C-protocol-request.md`
+>   on the `feat/write-the-answer` branch, unlinked here because this revision
+>   lands first; it is marked absorbed when that branch merges.)
 >
 > When a brief says "the protocol is at v2", it means this document's second
 > revision. The wire is still `1`.
@@ -183,6 +188,8 @@ An explicit `null` means *became unknown*.
 | `files` | array \| null | Every file the session has written. Whole list, never a delta. See below. |
 | `files_partial` | boolean \| null | `true` when that list covers only part of the session. |
 | `files_truncated` | boolean \| null | `true` when the list was cut to fit the line. |
+| `answer_request` | object \| null | The session's last message ends by asking the user something. See below. |
+| `pending_agents` | integer \| null | How many background agents this session is waiting on. **Derived every read, never counted up.** See below. |
 
 ### `files`: what the session wrote
 
@@ -369,6 +376,108 @@ anything is a real state, and in a sparse patch an absent `state` means
 There is deliberately **no `context_pct`**. A percentage is presentation derived
 from two numbers the daemon already sends, and duplicating it invites the two
 from disagreeing.
+
+### `answer_request`: the session asked the user something
+
+`state: "idle"` says the agent stopped. It does not say whether it stopped
+having finished or stopped having asked, and those are different situations for
+the person reading the sidebar. This field carries the second one.
+
+```json
+"answer_request": {
+  "signal": "question_mark",
+  "question": "Achei dois caminhos para o corte de contexto.\n\nSigo pelo primeiro?",
+  "context": [
+    { "role": "user", "text": "compara as duas rotas" },
+    { "role": "assistant", "text": "A primeira lê do fim do arquivo…" }
+  ],
+  "context_truncated": true,
+  "question_truncated": false
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `signal` | string | `question_mark` \| `lexicon`. Which rule fired. Display and telemetry only: **clients must not re-derive it.** |
+| `question` | string | The asking message, whole, up to the cap below. |
+| `context` | array | `{role, text}`, oldest first, already cut to the daemon's budget. |
+| `context_truncated` | boolean | The excerpt does not cover the whole conversation. |
+| `question_truncated` | boolean | The asking message itself was cut at the cap. |
+
+**Three states, not two.** Absent means *unchanged*, in the ordinary
+sparse-patch sense — including "this daemon never looked". An explicit `null`
+means *the session is no longer asking*, which is how a client learns to close
+the panel; without it a panel opened once would have to guess when to go away.
+An object means it is asking now. Collapsing absent and `null` into one value
+would make "I do not know" indistinguishable from "I know it is not asking",
+which is the `None`-becomes-zero mistake one level up.
+
+**Two truncation flags, because they are two different facts.** A cut excerpt
+and a cut question fail differently: the first means the reader is seeing less
+of the conversation than happened, the second means the reader is seeing less of
+*the question they are being asked*. A client that knows only "something was
+truncated" can say so but cannot say what, and a warning that cannot name its
+subject gets ignored. Same discipline as `files_partial` beside
+`files_truncated`.
+
+**`question` is capped at 128 KiB, and the cap is measured.** A line over 1 MiB
+is dropped by the rule in *Envelope*, so an uncapped question would not arrive
+cut — the whole `session_updated` would not arrive, silently, which is the
+failure `files_truncated` exists to prevent. The cap sits far above real use and
+far below the line limit: over 618 human stop points on the reference corpus the
+asking message had a **median of 1.6 KB, a p95 of 3.3 KB and a maximum of
+6.8 KB**. 128 KiB is roughly nineteen times the largest one observed and leaves
+the line about eight times of headroom with the excerpt attached. Hitting it is
+pathological, and `question_truncated` is how the client says so instead of
+presenting a fragment as the whole question.
+
+**Why the daemon cuts the excerpt and not the app.** The budget is a named,
+tested constant on the daemon side. An app re-deriving it would be a second
+definition of what leaves the machine, and the feature's whole disclosure claim
+is that what the user is shown and what was sent are the same string. One cut,
+one renderer, one place to audit.
+
+Added in document revision 7. An addition, so the wire `v` stays `1`.
+
+### `pending_agents`: waiting on an agent is not being free
+
+A session that dispatched background agents and is waiting for them reports
+`state: "idle"`, because the hook that fires at the end of a turn is the same
+one whether a person or a subagent is expected next. It is idle in the sense
+that nothing is being computed in the foreground, and it is emphatically not
+free: nobody needs to look at it. Reported as plain `idle`, it renders
+identically to a session that is genuinely waiting on its user, and it sorts
+alongside it.
+
+This is not hypothetical. Over 942 stop points on the reference corpus,
+**247 (29.6%) were not a person being handed the keyboard** — 185 of them a
+background task notification. Roughly one stop in four looked available and was
+not.
+
+`pending_agents` is the count of background agents the session is waiting on.
+`0` is a positive claim that it is waiting on none; absent or `null` is
+unchanged, in the sparse-patch sense.
+
+**It is derived on every read and never counted up.** The value is recomputed
+from the transcript each time it is read, as *tool uses of the `Task` tool with
+no matching result yet*. There is no increment and no decrement, so there is
+nothing to leak: a `SubagentStop` that never arrives, or arrives twice, costs
+one stale reading and corrects itself on the next. A counter would be wrong from
+the first missed event until the session ended, and missed events happen. A
+number whose error is unbounded in time is worse than no number, because it
+looks like the same kind of fact as a correct one.
+
+**Why a field and not a state.** `state` has four wire values and a transition
+matrix that the 2026-07-31 revision spent effort *simplifying*, removing two
+unreachable states in the process. A fifth value would reopen that matrix and
+make one hook produce two different states depending on transcript context.
+A client that wants "does a human need to look at this" reads two fields and
+combines them, which it already does — the answer is
+`state == "idle" && pending_agents == 0 && answer_request != null` for "your
+turn", and `state == "idle" && pending_agents > 0` for "busy, but not
+computing".
+
+Added in document revision 7. An addition, so the wire `v` stays `1`.
 
 ### `hitl_pending`
 
