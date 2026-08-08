@@ -76,10 +76,21 @@ impl HookEvent {
     /// started is `Starting`, which is its birth state, and nothing may
     /// transition *into* `Starting`.
     ///
-    /// `Notification` and `Stop` both mean the agent stopped and is waiting on
-    /// the human. They map to `Idle` rather than to a state of their own: the
-    /// six-state model has no "waiting for input", and inventing a wire state
-    /// nothing else can produce is what the protocol revision just removed.
+    /// `Notification` and `Stop` mean the agent stopped computing. They map to
+    /// `Idle` rather than to a state of their own: the six-state model has no
+    /// "waiting for input", and inventing a wire state nothing else can produce
+    /// is what the protocol revision just removed.
+    ///
+    /// **`Stop` does not mean "a human now has the keyboard", and this comment
+    /// used to say it did.** The same hook fires whether a person or a
+    /// background agent is expected next: measured over 866 stop points on the
+    /// reference corpus, 192 were followed by a `<task-notification>` rather
+    /// than by a human. `SubagentStop` → `Working` below covers only the *end*
+    /// of such a wait, never the window of it, and a backgrounded agent's launch
+    /// is acknowledged immediately so nothing is in flight either. That gap is
+    /// what `pending_agents` closes, from the transcript rather than from here:
+    /// the wire state stays `idle` and the count says whether anyone needs to
+    /// look. See `docs/PROTOCOL.md` § `pending_agents`.
     pub fn implied_state(self) -> Option<SessionState> {
         match self {
             Self::SessionStart => None,

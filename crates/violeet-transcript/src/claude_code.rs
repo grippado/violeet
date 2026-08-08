@@ -83,11 +83,23 @@ impl TranscriptReader for ClaudeCodeReader {
                 // than inside the content block — same line, different key.
                 let file = file_change(object.get("toolUseResult"));
                 if let Some(id) = tool_result_id(object.get("message")) {
-                    return vec![TranscriptEvent::ToolResult {
-                        tool_use_id: id,
-                        at,
+                    let mut events = vec![TranscriptEvent::ToolResult {
+                        tool_use_id: id.clone(),
+                        at: at.clone(),
                         file,
                     }];
+                    // The same line can also be a background agent's launch
+                    // acknowledgement, which is a `tool_result` like any other
+                    // and is the reason a running agent leaves nothing in
+                    // flight. See `agent_launch`.
+                    if let Some(task_id) = agent_launch(object.get("toolUseResult")) {
+                        events.push(TranscriptEvent::AgentLaunched {
+                            tool_use_id: Some(id),
+                            task_id,
+                            at,
+                        });
+                    }
+                    return events;
                 }
                 if let Some(id) = object.get("sourceToolUseID").and_then(Value::as_str) {
                     return vec![TranscriptEvent::ToolResult {
@@ -95,6 +107,20 @@ impl TranscriptReader for ClaudeCodeReader {
                         at,
                         file,
                     }];
+                }
+                // A background agent reporting in. It is a `user` line and
+                // counts as a turn like any other — the session did wake up —
+                // but it is also what closes the wait, so both events are
+                // emitted rather than one standing in for the other.
+                if let Some((tool_use_id, task_id)) = task_notification(object.get("message")) {
+                    return vec![
+                        TranscriptEvent::AgentFinished {
+                            tool_use_id,
+                            task_id,
+                            at: at.clone(),
+                        },
+                        TranscriptEvent::UserTurn { at },
+                    ];
                 }
                 vec![TranscriptEvent::UserTurn { at }]
             }
@@ -238,6 +264,74 @@ fn tool_result_id(message: Option<&Value>) -> Option<String> {
         }
     }
     None
+}
+
+/// Was this `tool_result` the acknowledgement of a **background agent launch**?
+///
+/// `Some(agent_id)` when it was, with the id the later notification will carry
+/// as its `task-id` — `Some(None)` when the launch announced no id, which is
+/// still a launch.
+///
+/// # Measured, and why it is read off the result rather than the tool name
+///
+/// `docs/PROTOCOL.md` describes the count as `Task` tool uses. There is no
+/// `Task` tool in the corpus on this machine: 8306 `Bash`, 240 **`Agent`** and
+/// 47 **`Workflow`** tool uses, and both of the latter dispatch background work
+/// that reports back through `<task-notification>`. Matching on a tool name
+/// would have counted zero, and a rule keyed to a name is a rule that breaks
+/// again the next time the name changes.
+///
+/// The structural marker is on the launch acknowledgement, in `toolUseResult`,
+/// and two spellings were observed: `isAsync: true` beside
+/// `status: "async_launched"` (the `Agent` tool) and `status: "async_launched"`
+/// alone (the `Workflow` tool). Either is accepted.
+///
+/// # What this deliberately does not count
+///
+/// A backgrounded **shell** command — `run_in_background: true`, or a `Bash`
+/// that outran its timeout — also reports back through `<task-notification>`,
+/// and its result carries `backgroundTaskId` instead. It is not an agent, and
+/// `pending_agents` is the field's name in a normative document, so it is not
+/// folded in here. Measured cost of leaving it out: of 192 `<task-notification>`
+/// stop points on this corpus, 19 are not an agent this session launched — most
+/// of them a backgrounded shell command — and those sessions still render as
+/// free. Naming the gap rather than widening a contract field on our own.
+fn agent_launch(result: Option<&Value>) -> Option<Option<String>> {
+    let o = result?.as_object()?;
+    let is_async = o.get("isAsync").and_then(Value::as_bool) == Some(true)
+        || o.get("status").and_then(Value::as_str) == Some("async_launched");
+    if !is_async {
+        return None;
+    }
+    Some(string_at(o.get("agentId")))
+}
+
+/// The `<task-notification>` a finished background agent arrives as, if this
+/// `user` line is one.
+///
+/// Returns the pair of ids it carries. Both are optional and at least one is
+/// always present in the corpus: `tool-use-id` in 218 of 227 observed
+/// notifications, `task-id` in all of them — a dynamic workflow reports only the
+/// latter, which is why the correlation accepts either.
+///
+/// Read with a substring scan rather than a parser: this is XML-ish text inside
+/// a JSON string, written by another tool, and pulling two tags out of it must
+/// not be able to fail on a shape that gains a third.
+fn task_notification(message: Option<&Value>) -> Option<(Option<String>, Option<String>)> {
+    let text = message?.as_object()?.get("content")?.as_str()?;
+    if !text.contains("<task-notification>") {
+        return None;
+    }
+    Some((tag(text, "tool-use-id"), tag(text, "task-id")))
+}
+
+/// The contents of the first `<name>…</name>` in `text`.
+fn tag(text: &str, name: &str) -> Option<String> {
+    let open = format!("<{name}>");
+    let rest = &text[text.find(&open)? + open.len()..];
+    let end = rest.find(&format!("</{name}>"))?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 /// The file a tool wrote, read out of `toolUseResult`.
@@ -852,6 +946,123 @@ mod tests {
         assert!(command_may_write("cat a|tee b"));
         assert!(command_may_write("(mkdir x)"));
         assert!(command_may_write("false; mv a b"));
+    }
+
+    // ---- background agents ------------------------------------------------
+    //
+    // Every line below is the shape found in `~/.claude/projects`, trimmed to
+    // the keys that decide anything.
+
+    /// The `Agent` tool's launch acknowledgement: `isAsync` beside
+    /// `async_launched`, with the id the notification will carry.
+    #[test]
+    fn an_async_agent_launch_is_a_tool_result_and_a_launch() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"Async agent launched successfully."}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a31daf6976cfd1298"}}"#;
+        let events = reader().parse_line(line);
+        assert!(matches!(
+            events.first(),
+            Some(TranscriptEvent::ToolResult { tool_use_id, .. }) if tool_use_id == "toolu_1"
+        ));
+        match events.get(1) {
+            Some(TranscriptEvent::AgentLaunched {
+                tool_use_id,
+                task_id,
+                ..
+            }) => {
+                assert_eq!(tool_use_id.as_deref(), Some("toolu_1"));
+                assert_eq!(task_id.as_deref(), Some("a31daf6976cfd1298"));
+            }
+            other => panic!("expected a launch, got {other:?}"),
+        }
+    }
+
+    /// The `Workflow` tool spells it with `status` alone and no `isAsync`. Read
+    /// off a real line: keying only on `isAsync` missed 47 launches on this
+    /// machine's corpus.
+    #[test]
+    fn a_workflow_launch_without_is_async_is_still_a_launch() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_2","type":"tool_result","content":"launched"}]},"toolUseResult":{"status":"async_launched"}}"#;
+        let launches = reader()
+            .parse_line(line)
+            .into_iter()
+            .filter(|e| matches!(e, TranscriptEvent::AgentLaunched { .. }))
+            .count();
+        assert_eq!(launches, 1);
+    }
+
+    /// An ordinary tool result is not a launch. The guard that keeps every
+    /// `Bash` in the session out of the count.
+    #[test]
+    fn an_ordinary_tool_result_is_not_a_launch() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_3","type":"tool_result","content":"ok"}]},"toolUseResult":{"stdout":"ok","interrupted":false}}"#;
+        let events = reader().parse_line(line);
+        assert_eq!(events.len(), 1, "a result and nothing else: {events:?}");
+    }
+
+    /// A backgrounded shell command reports back the same way an agent does, and
+    /// is deliberately not counted — see `agent_launch`. Asserted so that
+    /// widening the field's meaning is a decision someone makes on purpose.
+    #[test]
+    fn a_backgrounded_shell_command_is_not_an_agent() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_4","type":"tool_result","content":"Command running in background with ID: bwas2i7wr."}]},"toolUseResult":{"stdout":"","backgroundTaskId":"bwas2i7wr"}}"#;
+        let events = reader().parse_line(line);
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, TranscriptEvent::AgentLaunched { .. })));
+    }
+
+    /// The notification, verbatim in shape. It is a user turn *and* the end of
+    /// the wait; reporting only one of the two loses either the count or the
+    /// activity.
+    #[test]
+    fn a_task_notification_closes_the_wait_and_is_still_a_turn() {
+        let line = r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>a63cc3ed1fbc05ef6</task-id>\n<tool-use-id>toolu_01EnyHkDciDKv7S4bGeY4dii</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>"}}"#;
+        let events = reader().parse_line(line);
+        match events.first() {
+            Some(TranscriptEvent::AgentFinished {
+                tool_use_id,
+                task_id,
+                ..
+            }) => {
+                assert_eq!(
+                    tool_use_id.as_deref(),
+                    Some("toolu_01EnyHkDciDKv7S4bGeY4dii")
+                );
+                assert_eq!(task_id.as_deref(), Some("a63cc3ed1fbc05ef6"));
+            }
+            other => panic!("expected a finish, got {other:?}"),
+        }
+        assert!(matches!(
+            events.get(1),
+            Some(TranscriptEvent::UserTurn { .. })
+        ));
+    }
+
+    /// A dynamic workflow reports only `task-id`, and a missing tag must be
+    /// `None` rather than an empty string standing in for an id.
+    #[test]
+    fn a_notification_may_carry_only_a_task_id() {
+        let line = r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>w40vtbz74</task-id>\n<status>completed</status>"}}"#;
+        match reader().parse_line(line).first() {
+            Some(TranscriptEvent::AgentFinished {
+                tool_use_id,
+                task_id,
+                ..
+            }) => {
+                assert_eq!(*tool_use_id, None);
+                assert_eq!(task_id.as_deref(), Some("w40vtbz74"));
+            }
+            other => panic!("expected a finish, got {other:?}"),
+        }
+    }
+
+    /// An ordinary user message is not a notification, however much text it has.
+    #[test]
+    fn a_plain_user_message_is_only_a_turn() {
+        let line = r#"{"type":"user","message":{"role":"user","content":"segue com o próximo"}}"#;
+        let events = reader().parse_line(line);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], TranscriptEvent::UserTurn { .. }));
     }
 
     /// Only `Bash` is judged. A `Write` reports its own path and belongs in the

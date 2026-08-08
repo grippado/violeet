@@ -403,6 +403,28 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
             }
         }
 
+        // --- background agents ----------------------------------------------
+        //
+        // Derived, never counted. `pending_agents()` is a set difference over
+        // the transcript as read so far, so this is a fresh reading on every
+        // publish and there is no counter here to drift: a completion the file
+        // never recorded costs one stale reading, not a wrong number until the
+        // session ends.
+        //
+        // Sent whenever it changes, including the first `0`, because zero is the
+        // positive claim "waiting on none" and the app needs it to tell a free
+        // session from one this daemon has never looked at. The state stays
+        // `idle` on the wire — that is the contract, and the presentation
+        // decision belongs to the client.
+        {
+            let pending = telemetry.pending_agents();
+            if session.pending_agents != Some(pending) {
+                session.pending_agents = Some(pending);
+                patch.pending_agents = Some(Some(pending));
+                anything = true;
+            }
+        }
+
         // --- the name -------------------------------------------------------
         //
         // Claude Code's own title for the session, which outranks anything

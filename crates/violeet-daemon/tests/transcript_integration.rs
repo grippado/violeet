@@ -280,3 +280,127 @@ fn the_final_lines_are_read_before_the_watch_is_dropped() {
     assert!(hub.transcripts().lock().unwrap().is_empty(), "and the watch is released");
     let _ = std::fs::remove_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// Background agents: waiting on one is not being free
+// ---------------------------------------------------------------------------
+
+/// The launch of a background agent: a `tool_use`, then the acknowledgement that
+/// closes it immediately. Both lines are the shape found under
+/// `~/.claude/projects`, which is why the session ends up with nothing in flight
+/// while the agent runs.
+fn agent_launch(msg_id: &str, tool_id: &str, agent_id: &str) -> String {
+    format!(
+        r#"{{"type":"assistant","uuid":"u","sessionId":"s","timestamp":"2026-08-08T10:00:00Z","message":{{"id":"{msg_id}","model":"claude-opus-5","content":[{{"type":"tool_use","id":"{tool_id}","name":"Agent","input":{{"subagent_type":"code-reviewer"}}}}],"usage":{{"input_tokens":10,"output_tokens":5}}}}}}
+{{"type":"user","uuid":"u2","sessionId":"s","timestamp":"2026-08-08T10:00:01Z","message":{{"role":"user","content":[{{"tool_use_id":"{tool_id}","type":"tool_result","content":"Async agent launched successfully."}}]}},"toolUseResult":{{"isAsync":true,"status":"async_launched","agentId":"{agent_id}"}}}}
+"#
+    )
+}
+
+/// The agent reporting in, hours later.
+fn agent_notification(tool_id: &str, agent_id: &str) -> String {
+    format!(
+        r#"{{"type":"user","uuid":"u3","sessionId":"s","timestamp":"2026-08-08T10:30:00Z","message":{{"role":"user","content":"<task-notification>\n<task-id>{agent_id}</task-id>\n<tool-use-id>{tool_id}</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>"}}}}
+"#
+    )
+}
+
+fn pending_agents(hub: &Hub, session_id: &str) -> Option<Option<u64>> {
+    let registry = hub.registry().lock().unwrap();
+    registry.session(session_id).map(|s| s.pending_agents)
+}
+
+/// The bug, end to end: the session stopped, the hooks say `idle`, and the count
+/// is what says somebody is still working for it.
+///
+/// Note what is *not* asserted: that the state changed. `idle` is the contract —
+/// the `Stop` hook did fire and nothing is computing in the foreground. What
+/// changes is that the app can now tell this apart from a session that wants its
+/// user, which it could not do before.
+#[test]
+fn a_session_waiting_on_an_agent_reports_it_while_still_reading_idle() {
+    let path = temp("pending-agents");
+    let hub = hub_with_session("s-agents");
+    transcript::follow(&hub, "s-agents", &path);
+
+    append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
+    append(&path, &agent_launch("m2", "toolu_b", "agent_b"));
+
+    assert!(
+        eventually(|| pending_agents(&hub, "s-agents") == Some(Some(2))),
+        "expected two pending agents, got {:?}",
+        pending_agents(&hub, "s-agents")
+    );
+
+    // The `Stop` hook lands while both agents are still out. This is the exact
+    // moment the sidebar used to show the card as free.
+    let mut stop = HookObservation::new("s-agents", Harness::ClaudeCode);
+    stop.state = Some(SessionState::Idle);
+    hub.observe_hook(stop, chrono::Utc::now());
+
+    assert_eq!(state_of(&hub, "s-agents"), Some(SessionState::Idle));
+    assert_eq!(
+        pending_agents(&hub, "s-agents"),
+        Some(Some(2)),
+        "the hook says idle and the count says two: both are true"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// **No `SubagentStop` hook is delivered anywhere in this test**, and the count
+/// still comes back to zero, because the number is derived from the file rather
+/// than decremented on an event. A counter would have needed the hook and would
+/// have stayed at one for the rest of the session without it.
+#[test]
+fn a_completion_the_hooks_never_reported_still_clears_the_count() {
+    let path = temp("pending-agents-recovery");
+    let hub = hub_with_session("s-recover");
+    transcript::follow(&hub, "s-recover", &path);
+
+    append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
+    assert!(
+        eventually(|| pending_agents(&hub, "s-recover") == Some(Some(1))),
+        "the launch never landed: {:?}",
+        pending_agents(&hub, "s-recover")
+    );
+
+    append(&path, &agent_notification("toolu_a", "agent_a"));
+    assert!(
+        eventually(|| pending_agents(&hub, "s-recover") == Some(Some(0))),
+        "the next read of the transcript must be right on its own: {:?}",
+        pending_agents(&hub, "s-recover")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Zero and unknown are two different claims on the producer side too.
+///
+/// Before a transcript has been read the daemon has said nothing, and the mirror
+/// is `None`; the first read of a session with no agents publishes an explicit
+/// `0`. Collapsing the two would make "waiting on none" indistinguishable from
+/// "never looked", which is the same mistake as rendering an unknown token count
+/// as `0`.
+#[test]
+fn a_session_with_no_agents_publishes_zero_and_not_silence() {
+    let path = temp("pending-agents-zero");
+    let hub = hub_with_session("s-zero");
+
+    assert_eq!(
+        pending_agents(&hub, "s-zero"),
+        Some(None),
+        "nothing read yet: the app has not been told anything"
+    );
+
+    transcript::follow(&hub, "s-zero", &path);
+    append(&path, &tool_call("m1", "toolu_1"));
+
+    assert!(
+        eventually(|| pending_agents(&hub, "s-zero") == Some(Some(0))),
+        "a read with no agents is a positive zero, got {:?}",
+        pending_agents(&hub, "s-zero")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

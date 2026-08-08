@@ -73,6 +73,35 @@ pub enum TranscriptEvent {
         at: Option<String>,
         file: Option<FileChange>,
     },
+    /// A background agent was dispatched and will report back later.
+    ///
+    /// **This is not a tool going in flight.** The launch of a background agent
+    /// is acknowledged *immediately* by an ordinary `tool_result` — measured on
+    /// six backgrounded tasks across two sessions, the acknowledgement is the
+    /// very next line every time — and the real outcome arrives much later as a
+    /// `<task-notification>`. So `in_flight_tool` is empty while the agent runs,
+    /// which is exactly why the session looks free while it is not.
+    ///
+    /// Both ids are optional and at least one is needed to correlate: the
+    /// notification is keyed by `tool-use-id` in most cases and by `task-id`
+    /// alone for a dynamic workflow.
+    AgentLaunched {
+        tool_use_id: Option<String>,
+        /// `agentId` from the launch acknowledgement, which is the `task-id` the
+        /// notification will carry.
+        task_id: Option<String>,
+        at: Option<String>,
+    },
+    /// A background agent reported in — the `<task-notification>` user line.
+    ///
+    /// Any status closes the wait: `completed`, `failed`, `killed` and `stopped`
+    /// were all observed, and a session is no longer waiting on an agent that
+    /// died.
+    AgentFinished {
+        tool_use_id: Option<String>,
+        task_id: Option<String>,
+        at: Option<String>,
+    },
     /// The context window was compacted. Carries the daemon's best evidence
     /// that occupancy fell, straight from the file rather than inferred.
     Compaction(Compaction),
@@ -96,6 +125,8 @@ impl TranscriptEvent {
             Self::UserTurn { at } => at.as_deref(),
             Self::ToolUse(t) => t.at.as_deref(),
             Self::ToolResult { at, .. } => at.as_deref(),
+            Self::AgentLaunched { at, .. } => at.as_deref(),
+            Self::AgentFinished { at, .. } => at.as_deref(),
             Self::Compaction(c) => c.at.as_deref(),
             Self::AiTitle { at, .. } => at.as_deref(),
             Self::Other { at, .. } => at.as_deref(),
@@ -345,6 +376,18 @@ pub struct Telemetry {
     seen_tool_results: std::collections::HashSet<String>,
     /// Tool calls awaiting a result, in order.
     open_tools: Vec<(String, String)>,
+    /// Background agents launched with no `<task-notification>` yet, in launch
+    /// order: `(correlation key, agent id when the launch carried one)`.
+    ///
+    /// **A set difference, not a counter**, and the distinction is the whole
+    /// design. [`Telemetry::pending_agents`] is `self.open_agents.len()`, which
+    /// means the value is *recomputed from the transcript* on every read: a fold
+    /// over the same lines always produces the same set, re-reading a line is
+    /// idempotent, and no hook feeds it. A counter incremented on dispatch and
+    /// decremented on completion would be wrong from the first lost event until
+    /// the session ended; this is wrong for at most one read, and only when the
+    /// file itself is missing a line.
+    open_agents: Vec<(String, Option<String>)>,
 }
 
 impl Telemetry {
@@ -444,6 +487,37 @@ impl Telemetry {
                 }
             }
 
+            TranscriptEvent::AgentLaunched {
+                tool_use_id,
+                task_id,
+                ..
+            } => {
+                // The notification arrives with whichever id it has, so either
+                // one will do as the key. A launch carrying neither cannot be
+                // correlated at all, and counting it would produce a number
+                // that never comes back down.
+                let Some(key) = tool_use_id.clone().or_else(|| task_id.clone()) else {
+                    return;
+                };
+                if !self.open_agents.iter().any(|(k, _)| *k == key) {
+                    self.open_agents.push((key, task_id.clone()));
+                }
+            }
+
+            TranscriptEvent::AgentFinished {
+                tool_use_id,
+                task_id,
+                ..
+            } => {
+                self.open_agents.retain(|(key, agent_id)| {
+                    let matches = |id: &Option<String>| {
+                        id.as_deref()
+                            .is_some_and(|id| id == key || Some(id) == agent_id.as_deref())
+                    };
+                    !(matches(tool_use_id) || matches(task_id))
+                });
+            }
+
             TranscriptEvent::Compaction(compaction) => {
                 self.compaction_count += 1;
                 // The file's own number beats ours. `post_tokens` is what the
@@ -458,6 +532,20 @@ impl Telemetry {
 
             TranscriptEvent::Other { .. } => {}
         }
+    }
+
+    /// How many background agents this session is waiting on, **derived**.
+    ///
+    /// Launches seen minus notifications seen, over the transcript as read so
+    /// far. Never incremented and never stored on the wire's behalf: the daemon
+    /// asks this question again on every read, so the answer cannot drift
+    /// further than one read away from the file.
+    ///
+    /// A session stopped with this above zero is busy without computing:
+    /// `state` is `idle` because the `Stop` hook fired, and nobody needs to look
+    /// at it. See `docs/PROTOCOL.md` § `pending_agents`.
+    pub fn pending_agents(&self) -> u64 {
+        self.open_agents.len() as u64
     }
 
     fn refresh_in_flight(&mut self) {
@@ -898,5 +986,134 @@ mod tests {
             writes_untracked: false,
         }));
         assert!(t.wrote_untracked, "one shell write is not undone by a tracked one");
+    }
+
+    // ---- pending agents: a set difference, not a counter -----------------
+
+    fn launched(tool_use_id: &str, task_id: &str) -> TranscriptEvent {
+        TranscriptEvent::AgentLaunched {
+            tool_use_id: Some(tool_use_id.into()),
+            task_id: Some(task_id.into()),
+            at: Some("2026-08-08T10:00:00Z".into()),
+        }
+    }
+
+    fn finished(tool_use_id: Option<&str>, task_id: Option<&str>) -> TranscriptEvent {
+        TranscriptEvent::AgentFinished {
+            tool_use_id: tool_use_id.map(Into::into),
+            task_id: task_id.map(Into::into),
+            at: Some("2026-08-08T10:05:00Z".into()),
+        }
+    }
+
+    #[test]
+    fn a_session_waiting_on_two_agents_says_two() {
+        let mut t = Telemetry::new();
+        assert_eq!(t.pending_agents(), 0, "nothing dispatched, nothing pending");
+        t.apply(&launched("toolu_a", "agent_a"));
+        t.apply(&launched("toolu_b", "agent_b"));
+        assert_eq!(t.pending_agents(), 2);
+        t.apply(&finished(Some("toolu_a"), Some("agent_a")));
+        assert_eq!(t.pending_agents(), 1);
+    }
+
+    /// The one a launch acknowledgement leaves nothing in flight, which is the
+    /// reason this field exists at all: the tool *returned*, the work did not.
+    #[test]
+    fn a_launched_agent_is_pending_while_no_tool_is_in_flight() {
+        let mut t = Telemetry::new();
+        t.apply(&TranscriptEvent::ToolUse(ToolUse {
+            id: Some("toolu_a".into()),
+            name: "Agent".into(),
+            summary: Some("pr-reviewer".into()),
+            at: None,
+            writes_untracked: false,
+        }));
+        t.apply(&TranscriptEvent::ToolResult {
+            tool_use_id: "toolu_a".into(),
+            at: None,
+            file: None,
+        });
+        t.apply(&launched("toolu_a", "agent_a"));
+
+        assert_eq!(
+            t.in_flight_tool, None,
+            "the acknowledgement closed the call"
+        );
+        assert_eq!(t.pending_agents(), 1, "and the agent is still working");
+    }
+
+    /// **The test that proves deriving beats counting.**
+    ///
+    /// A notification that never arrives — a lost `SubagentStop`, a session
+    /// killed mid-flight — leaves a wrong reading for exactly as long as the file
+    /// is missing the line. The moment the transcript carries it, the next read
+    /// is right, with no repair step and nothing to reset. A counter would have
+    /// stayed wrong until the session ended.
+    #[test]
+    fn a_lost_completion_costs_one_read_and_corrects_itself_on_the_next() {
+        // Read 1: two launched, one reported in — and the other's notification
+        // was lost, so the file simply does not have it yet.
+        let lines_read_1 = vec![
+            launched("toolu_a", "agent_a"),
+            launched("toolu_b", "agent_b"),
+            finished(Some("toolu_a"), Some("agent_a")),
+        ];
+        let mut first = Telemetry::new();
+        for event in &lines_read_1 {
+            first.apply(event);
+        }
+        assert_eq!(first.pending_agents(), 1, "stale by one, and only by one");
+
+        // Read 2 is the same fold over the file as it now stands. Nothing
+        // decrements: the count is the set difference all over again.
+        let mut second = Telemetry::new();
+        for event in lines_read_1
+            .iter()
+            .chain(std::iter::once(&finished(Some("toolu_b"), Some("agent_b"))))
+        {
+            second.apply(event);
+        }
+        assert_eq!(second.pending_agents(), 0, "the next read is simply right");
+    }
+
+    /// Re-reading is how a tail recovers from a truncated line, so the fold has
+    /// to survive seeing the same lines twice. A counter would double.
+    #[test]
+    fn replaying_the_same_lines_does_not_move_the_count() {
+        let events = [
+            launched("toolu_a", "agent_a"),
+            launched("toolu_b", "agent_b"),
+            finished(Some("toolu_a"), Some("agent_a")),
+        ];
+        let mut t = Telemetry::new();
+        for event in events.iter().chain(events.iter()) {
+            t.apply(event);
+        }
+        assert_eq!(t.pending_agents(), 1);
+    }
+
+    /// A dynamic workflow's notification carries only `task-id`. Correlating on
+    /// `tool-use-id` alone would leave it pending forever.
+    #[test]
+    fn a_notification_with_only_a_task_id_still_closes_the_wait() {
+        let mut t = Telemetry::new();
+        t.apply(&launched("toolu_a", "agent_a"));
+        t.apply(&finished(None, Some("agent_a")));
+        assert_eq!(t.pending_agents(), 0);
+    }
+
+    /// A launch with no id at all cannot be correlated, so counting it would
+    /// produce a number that never comes back down — the exact failure the
+    /// derived design exists to avoid.
+    #[test]
+    fn a_launch_with_no_id_is_not_counted() {
+        let mut t = Telemetry::new();
+        t.apply(&TranscriptEvent::AgentLaunched {
+            tool_use_id: None,
+            task_id: None,
+            at: None,
+        });
+        assert_eq!(t.pending_agents(), 0);
     }
 }

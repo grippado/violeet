@@ -155,6 +155,53 @@ field on the line itself. Both are handled.
 In a completed session, all 324 `tool_use` ids had a matching result — zero
 orphans.
 
+### A background agent's launch is acknowledged immediately, and its outcome is not
+
+Measured on 2026-08-08 over every `.jsonl` under `~/.claude/projects` (473
+files): **281 background agent launches**, and in 277 of them the `tool_use` was
+followed by an ordinary `tool_result` on the very next line. That result is not
+the outcome; it is a receipt. The real outcome arrives much later, as a `user`
+line whose content is a `<task-notification>` block:
+
+```
+<task-notification>
+<task-id>a63cc3ed1fbc05ef6</task-id>
+<tool-use-id>toolu_01EnyHkDciDKv7S4bGeY4dii</tool-use-id>
+<status>completed</status>
+<summary>Agent "…" finished</summary>
+```
+
+The consequence is the one this format makes easy to get wrong: **while a
+background agent runs, nothing is in flight.** Every `tool_use` has its result,
+so "is a tool outstanding?" answers no, and a session waiting on five agents
+looks exactly like one waiting on its user. That is what
+`pending_agents` (see `docs/PROTOCOL.md`) is derived to say instead.
+
+The launch is recognised from `toolUseResult`, not from the tool's name, and
+these are the observed shapes:
+
+| shape | count | what launched |
+|---|---|---|
+| `{isAsync: true, status: "async_launched", agentId}` | 234 | the `Agent` tool |
+| `{status: "async_launched"}`, no `isAsync` | 47 | the `Workflow` tool |
+| `{backgroundTaskId}` | 126 | a backgrounded **shell** command: `run_in_background: true`, or a `Bash` that outran its 120s timeout. Not an agent, and not counted — see `pending_agents` |
+
+**There is no `Task` tool on this machine.** The tool-use census is 11998 `Bash`,
+2974 `Edit`, 2364 `Read`, 252 `Agent`, 47 `Workflow` and no `Task` at all; a rule
+keyed on that name would count zero. Hence keying on the result.
+
+`<status>` was observed as `completed` (206), `failed` (8), `killed` (6) and
+`stopped` (5). Any of them ends the wait.
+
+`tool-use-id` is present in 218 of 227 notifications and `task-id` in all of
+them: a dynamic workflow reports only the latter, so a reader correlating on
+`tool-use-id` alone leaves those pending forever.
+
+**Not covered, and named rather than guessed at:** `SendMessage` resuming an
+agent that had already reported in. Its result announces the resume in prose
+(`"…resumed from transcript in the background…"`) with no structural marker and
+no id outside the tool's own input. One stop point of 173 on this corpus.
+
 ### Model
 
 `message.model` on assistant lines. Observed: `claude-sonnet-5`,
