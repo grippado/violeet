@@ -774,8 +774,24 @@ final class AppState: ObservableObject {
     /// instead.
     var inspectedSession: SessionCard? {
         if let id = inspectedSessionID, let card = sessions[id] { return card }
-        if let tabID = selectedTabID,
-           let card = orderedSessions.first(where: { $0.tabID == tabID }) {
+        guard let tabID = selectedTabID else { return nil }
+        if let card = orderedSessions.first(where: { $0.tabID == tabID }) {
+            return card
+        }
+        // An editor tab keeps its session's file list on screen.
+        //
+        // Switching tabs otherwise means changing the subject, and the panel
+        // follows. Opening files from a tree is the exception: it is *reading
+        // that session*, one file at a time, and blanking the list at the first
+        // click made the panel unusable for the thing it exists for — you lost
+        // the list precisely by using it, and had to go back to the card to get
+        // it again before opening the next file.
+        //
+        // The list still goes when the subject genuinely changes: another
+        // session's card, a shell tab, a new tab.
+        if let tab = tabs.first(where: { $0.tabID == tabID }),
+           let owner = tab.editing?.sessionID,
+           let card = sessions[owner] {
             return card
         }
         return nil

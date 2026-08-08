@@ -300,8 +300,23 @@ private struct FileRow: View {
 
     private var isOpen: Bool { state.isOpenInEditor(path: entry.change.path) }
 
+    /// Whether the file is still where the session wrote it.
+    ///
+    /// Reading a transcript from the start means the list can name paths that
+    /// have since moved: a rename, a `git mv`, a directory renamed under all of
+    /// them. Clicking one used to open an editor on nothing — a blank buffer
+    /// with the old path in the status line, which reads as the editor being
+    /// broken rather than as the file being gone.
+    ///
+    /// Checked at render rather than cached, because the answer changes while
+    /// the panel is open: the agent is moving these files.
+    private var stillThere: Bool {
+        FileManager.default.fileExists(atPath: entry.change.path)
+    }
+
     var body: some View {
         QuietButton(action: {
+            guard stillThere else { return }
             state.openInEditor(path: entry.change.path, session: sessionID)
         }) {
             HStack(spacing: 6) {
@@ -326,8 +341,19 @@ private struct FileRow: View {
                     Text(entry.name)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .strikethrough(!stillThere, color: .secondary)
                 }
                 .appFont(.caption)
+                .foregroundStyle(stillThere ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+
+                // Gone. A glyph and not only the dimming, the same two-channel
+                // rule the `A` follows: a row that says "missing" in weight
+                // alone says nothing to a reader who cannot see the difference.
+                if !stillThere {
+                    Image(systemName: "questionmark.circle")
+                        .appFont(.micro)
+                        .foregroundStyle(.tertiary)
+                }
 
                 // Open in a tab. A glyph and not only the tint, because a row
                 // that says "open" in colour alone says nothing to a reader who
@@ -362,8 +388,10 @@ private struct FileRow: View {
             .contentShape(Rectangle())
         }
         .onHover { hovering = $0 }
-        .pointingHand()
-        .help(isOpen
+        .pointingHand(stillThere)
+        .help(!stillThere
+            ? "\(entry.change.path)\n\nNot there any more. The session wrote it at this path, and it has since been moved, renamed or deleted."
+            : isOpen
             ? "\(entry.change.path)\n\nOpen in a tab. Click to go to it."
             : "\(entry.change.path)\n\nClick to open in a new tab.")
         .accessibilityLabel(entry.name)
