@@ -125,6 +125,22 @@ else
   echo "==> no Resources/violeet.icns; the bundle will use the generic icon"
 fi
 
+# The menu bar mark, as a PDF. Vector on purpose: `NSImage` scales a PDF without
+# resampling, so one file serves every display instead of an @1x, an @2x and an
+# @3x that is still soft on the display nobody has yet. Same tolerance as the
+# icon above — missing artwork falls back in code, it does not fail a build.
+if [[ -f Resources/violeet-menubar.pdf ]]; then
+  cp Resources/violeet-menubar.pdf "$APP/Contents/Resources/violeet-menubar.pdf"
+else
+  echo "==> no Resources/violeet-menubar.pdf; the menu bar falls back to an SF Symbol"
+fi
+
+# Host marks for the editor panel's commit line. Same tolerance again: a missing
+# one falls back to a generic glyph in code.
+for host in Resources/host-*.png; do
+  [[ -f "$host" ]] && cp "$host" "$APP/Contents/Resources/$(basename "$host")"
+done
+
 # ---------------------------------------------------------------------------
 # The daemon travels inside the app
 # ---------------------------------------------------------------------------
