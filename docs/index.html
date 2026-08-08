@@ -83,6 +83,21 @@
      take the size and colour of the control they sit in, which is what stopped
      the theme toggle from rendering a size smaller than its neighbours. */
   .ic { width: 1.05em; height: 1.05em; flex: none; }
+  /* The header buttons drop their outline. Up there they sit alone on the
+     chrome with nothing to be told apart from, so the border was drawing a box
+     around a word for no reason. The hover fill keeps the affordance: the
+     target has to announce itself before the click, and now it does that on
+     contact instead of permanently. */
+  .nav-links .ghost, .brand .toggle {
+    border-color: transparent;
+    background: none;
+    transition: background-color .12s ease;
+  }
+  .nav-links .ghost:hover, .brand .toggle:hover,
+  .nav-links .ghost:focus-visible, .brand .toggle:focus-visible {
+    background: var(--violeeter-selection);
+  }
+
   .icon-only { padding-left: 9px; padding-right: 9px; }
   .icon-only .ic { width: 1.15em; height: 1.15em; }
   .with-icon { display: inline-flex; align-items: center; gap: 0.45em; }
