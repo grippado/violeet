@@ -29,6 +29,8 @@
 
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+
 pub mod answer_request;
 pub mod claude_code;
 pub mod tail;
@@ -82,9 +84,11 @@ pub enum TranscriptEvent {
     /// `<task-notification>`. So `in_flight_tool` is empty while the agent runs,
     /// which is exactly why the session looks free while it is not.
     ///
-    /// Both ids are optional and at least one is needed to correlate: the
-    /// notification is keyed by `tool-use-id` in most cases and by `task-id`
-    /// alone for a dynamic workflow.
+    /// Both ids are optional on the wire, and [`Telemetry`] counts a launch only
+    /// when the `task_id` is there: the notification is keyed by `tool-use-id`
+    /// in most cases and by `task-id` alone for a dynamic workflow, so a launch
+    /// that announced no `agentId` shares no key with the line that would close
+    /// it. It is read, reported, and not counted.
     AgentLaunched {
         tool_use_id: Option<String>,
         /// `agentId` from the launch acknowledgement, which is the `task-id` the
@@ -376,19 +380,67 @@ pub struct Telemetry {
     seen_tool_results: std::collections::HashSet<String>,
     /// Tool calls awaiting a result, in order.
     open_tools: Vec<(String, String)>,
-    /// Background agents launched with no `<task-notification>` yet, in launch
-    /// order: `(correlation key, agent id when the launch carried one)`.
+
+    /// Correlation keys of the background agent launches read so far.
     ///
     /// **A set difference, not a counter**, and the distinction is the whole
-    /// design. [`Telemetry::pending_agents`] is `self.open_agents.len()`, which
-    /// means the value is *recomputed from the transcript* on every read: a fold
-    /// over the same lines always produces the same set, re-reading a line is
-    /// idempotent, and no hook feeds it. A counter incremented on dispatch and
+    /// design: [`Telemetry::pending_agents`] is
+    /// `launched.difference(&finished)`, so the value is *recomputed from the
+    /// transcript* on every read. A counter incremented on dispatch and
     /// decremented on completion would be wrong from the first lost event until
-    /// the session ended; this is wrong for at most one read, and only when the
-    /// file itself is missing a line.
-    open_agents: Vec<(String, Option<String>)>,
+    /// the session ended.
+    ///
+    /// Two sets and not one list with removals, and that is not a style
+    /// preference. Removing the key on completion made the fold idempotent only
+    /// for a *suffix* replay: replaying a launch line whose completion had
+    /// already been consumed re-inserted it, and the count went back up. Sets
+    /// that only ever grow make the answer independent of the order the lines
+    /// are read in, which is the property a tail that re-reads actually needs.
+    launched: std::collections::HashSet<String>,
+    /// Keys whose `<task-notification>` has been read. Never removed either.
+    finished: std::collections::HashSet<String>,
+    /// `task-id` → the key its launch was filed under.
+    ///
+    /// A launch is keyed by its `tool-use-id` when it has one, and a dynamic
+    /// workflow's notification arrives carrying only the `task-id`. Translating
+    /// through this is what keeps both ends in one namespace, so the difference
+    /// above can be a plain set difference over strings.
+    agent_aliases: std::collections::HashMap<String, String>,
+    /// When each launch was read, for the age limit. RFC 3339, as written.
+    launched_at: std::collections::HashMap<String, String>,
 }
+
+/// How long a launch may stay open with no notification before it stops being
+/// counted.
+///
+/// **Measured, not chosen for roundness.** Latency from a launch to its first
+/// notification, over the 227 correlated pairs on the reference corpus that this
+/// field actually counts — launches carrying an `agentId`, first notification
+/// only:
+///
+/// | p50 | p75 | p90 | p95 | p98 | p99 | max |
+/// |---|---|---|---|---|---|---|
+/// | 157 s | 280 s | 635 s | 1006 s | 1563 s | 2524 s | 2543 s |
+///
+/// Thirty minutes sits above p98 with about 15% of headroom, and 4 of 227 waits
+/// (1.8%) ran longer — the longest at 42 minutes, which is what the margin is
+/// measured against rather than against a round number.
+///
+/// Giving up early is the deliberate direction. An expired launch under-reports,
+/// and under-reporting reads as an idle card that is actually busy — recoverable
+/// the moment anything else moves. Over-reporting is a card that says "3 agents
+/// running" forever, which is the failure this whole field was rewritten to
+/// avoid: with this limit the error is bounded at thirty minutes instead of
+/// being unbounded in time.
+///
+/// What it is worth is honestly small and it is still required. On the corpus,
+/// where every stop point is followed by more file, the limit removes **no**
+/// stale reading that the other two closures did not already remove: correlating
+/// the `attachment` notifications and refusing the uncorrelatable launches
+/// account for all of it. Its case is the one a replay cannot show — the session
+/// that stops writing altogether, where "the next read is simply right" never
+/// arrives because there is no next line.
+pub const AGENT_WAIT_MAX_SECS: i64 = 30 * 60;
 
 impl Telemetry {
     pub fn new() -> Self {
@@ -490,18 +542,27 @@ impl Telemetry {
             TranscriptEvent::AgentLaunched {
                 tool_use_id,
                 task_id,
-                ..
+                at,
             } => {
-                // The notification arrives with whichever id it has, so either
-                // one will do as the key. A launch carrying neither cannot be
-                // correlated at all, and counting it would produce a number
-                // that never comes back down.
-                let Some(key) = tool_use_id.clone().or_else(|| task_id.clone()) else {
+                // **Both ends have to share a key, and a launch with no
+                // `agentId` cannot promise that.** Measured: every `Workflow`
+                // launch on the corpus announces none — 47 of 282, no
+                // exceptions — while part of its notifications carry only the
+                // `task-id`, which is precisely the id such a launch never gave
+                // us. Opening a wait nothing can close is the one error that
+                // never corrects itself, so those 47 are given up on
+                // deliberately.
+                let Some(alias) = task_id.clone() else {
                     return;
                 };
-                if !self.open_agents.iter().any(|(k, _)| *k == key) {
-                    self.open_agents.push((key, task_id.clone()));
+                let key = tool_use_id.clone().unwrap_or_else(|| alias.clone());
+                if alias != key {
+                    self.agent_aliases.insert(alias, key.clone());
                 }
+                if let Some(at) = at {
+                    self.launched_at.entry(key.clone()).or_insert(at.clone());
+                }
+                self.launched.insert(key);
             }
 
             TranscriptEvent::AgentFinished {
@@ -509,13 +570,16 @@ impl Telemetry {
                 task_id,
                 ..
             } => {
-                self.open_agents.retain(|(key, agent_id)| {
-                    let matches = |id: &Option<String>| {
-                        id.as_deref()
-                            .is_some_and(|id| id == key || Some(id) == agent_id.as_deref())
-                    };
-                    !(matches(tool_use_id) || matches(task_id))
-                });
+                // Both ids are recorded, each also translated through the alias
+                // table: the notification may name the launch's own key, or the
+                // `task-id` the launch was acknowledged with, and either one
+                // closes the same wait.
+                for id in [tool_use_id, task_id].into_iter().flatten() {
+                    if let Some(key) = self.agent_aliases.get(id) {
+                        self.finished.insert(key.clone());
+                    }
+                    self.finished.insert(id.clone());
+                }
             }
 
             TranscriptEvent::Compaction(compaction) => {
@@ -537,15 +601,44 @@ impl Telemetry {
     /// How many background agents this session is waiting on, **derived**.
     ///
     /// Launches seen minus notifications seen, over the transcript as read so
-    /// far. Never incremented and never stored on the wire's behalf: the daemon
-    /// asks this question again on every read, so the answer cannot drift
-    /// further than one read away from the file.
+    /// far, minus the ones that have been open longer than
+    /// [`AGENT_WAIT_MAX_SECS`]. Never incremented and never stored on the wire's
+    /// behalf: the daemon asks this question again on every read, so the answer
+    /// cannot drift further than one read away from the file.
+    ///
+    /// `now` is wall-clock time and comes from the caller, deliberately. The
+    /// last line of the transcript will not do: a session that stopped with an
+    /// agent that never reports writes **nothing more**, so an age measured
+    /// against the file's own last timestamp would freeze at the very moment the
+    /// backstop is needed.
     ///
     /// A session stopped with this above zero is busy without computing:
     /// `state` is `idle` because the `Stop` hook fired, and nobody needs to look
     /// at it. See `docs/PROTOCOL.md` § `pending_agents`.
-    pub fn pending_agents(&self) -> u64 {
-        self.open_agents.len() as u64
+    pub fn pending_agents(&self, now: DateTime<Utc>) -> u64 {
+        self.launched
+            .difference(&self.finished)
+            .filter(|key| !self.expired(key, now))
+            .count() as u64
+    }
+
+    /// Has this launch been open long enough to stop believing in it?
+    ///
+    /// A launch whose line carried no timestamp, or one this build cannot parse,
+    /// counts as expired rather than as ageless. It is the same asymmetry as
+    /// everywhere else in this field: an under-count corrects itself, and a
+    /// launch that can never age out is exactly the permanent lie the age limit
+    /// exists to prevent.
+    fn expired(&self, key: &str, now: DateTime<Utc>) -> bool {
+        let Some(at) = self.launched_at.get(key) else {
+            return true;
+        };
+        let Ok(at) = DateTime::parse_from_rfc3339(at) else {
+            return true;
+        };
+        now.signed_duration_since(at.with_timezone(&Utc))
+            .num_seconds()
+            > AGENT_WAIT_MAX_SECS
     }
 
     fn refresh_in_flight(&mut self) {
@@ -998,6 +1091,22 @@ mod tests {
         }
     }
 
+    /// The moment the count is asked for. Five minutes after the launches
+    /// above, which is inside [`AGENT_WAIT_MAX_SECS`] and just above the
+    /// measured p50.
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-08-08T10:05:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn later(secs: i64) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-08-08T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+            + chrono::Duration::seconds(secs)
+    }
+
     fn finished(tool_use_id: Option<&str>, task_id: Option<&str>) -> TranscriptEvent {
         TranscriptEvent::AgentFinished {
             tool_use_id: tool_use_id.map(Into::into),
@@ -1009,12 +1118,16 @@ mod tests {
     #[test]
     fn a_session_waiting_on_two_agents_says_two() {
         let mut t = Telemetry::new();
-        assert_eq!(t.pending_agents(), 0, "nothing dispatched, nothing pending");
+        assert_eq!(
+            t.pending_agents(now()),
+            0,
+            "nothing dispatched, nothing pending"
+        );
         t.apply(&launched("toolu_a", "agent_a"));
         t.apply(&launched("toolu_b", "agent_b"));
-        assert_eq!(t.pending_agents(), 2);
+        assert_eq!(t.pending_agents(now()), 2);
         t.apply(&finished(Some("toolu_a"), Some("agent_a")));
-        assert_eq!(t.pending_agents(), 1);
+        assert_eq!(t.pending_agents(now()), 1);
     }
 
     /// The one a launch acknowledgement leaves nothing in flight, which is the
@@ -1040,7 +1153,7 @@ mod tests {
             t.in_flight_tool, None,
             "the acknowledgement closed the call"
         );
-        assert_eq!(t.pending_agents(), 1, "and the agent is still working");
+        assert_eq!(t.pending_agents(now()), 1, "and the agent is still working");
     }
 
     /// **The test that proves deriving beats counting.**
@@ -1063,7 +1176,11 @@ mod tests {
         for event in &lines_read_1 {
             first.apply(event);
         }
-        assert_eq!(first.pending_agents(), 1, "stale by one, and only by one");
+        assert_eq!(
+            first.pending_agents(now()),
+            1,
+            "stale by one, and only by one"
+        );
 
         // Read 2 is the same fold over the file as it now stands. Nothing
         // decrements: the count is the set difference all over again.
@@ -1074,7 +1191,11 @@ mod tests {
         {
             second.apply(event);
         }
-        assert_eq!(second.pending_agents(), 0, "the next read is simply right");
+        assert_eq!(
+            second.pending_agents(now()),
+            0,
+            "the next read is simply right"
+        );
     }
 
     /// Re-reading is how a tail recovers from a truncated line, so the fold has
@@ -1090,7 +1211,7 @@ mod tests {
         for event in events.iter().chain(events.iter()) {
             t.apply(event);
         }
-        assert_eq!(t.pending_agents(), 1);
+        assert_eq!(t.pending_agents(now()), 1);
     }
 
     /// A dynamic workflow's notification carries only `task-id`. Correlating on
@@ -1100,7 +1221,7 @@ mod tests {
         let mut t = Telemetry::new();
         t.apply(&launched("toolu_a", "agent_a"));
         t.apply(&finished(None, Some("agent_a")));
-        assert_eq!(t.pending_agents(), 0);
+        assert_eq!(t.pending_agents(now()), 0);
     }
 
     /// A launch with no id at all cannot be correlated, so counting it would
@@ -1114,6 +1235,92 @@ mod tests {
             task_id: None,
             at: None,
         });
-        assert_eq!(t.pending_agents(), 0);
+        assert_eq!(t.pending_agents(now()), 0);
+    }
+
+    /// The `Workflow` shape, and the 47 launches given up on by decision.
+    ///
+    /// The launch has a `tool-use-id` and no `agentId`; part of its
+    /// notifications carry only a `task-id`. Keyed on the `tool-use-id` it would
+    /// be opened by the launch and closed by nothing.
+    #[test]
+    fn a_launch_with_no_agent_id_is_not_counted_even_though_it_has_a_tool_use_id() {
+        let mut t = Telemetry::new();
+        t.apply(&TranscriptEvent::AgentLaunched {
+            tool_use_id: Some("toolu_w".into()),
+            task_id: None,
+            at: Some("2026-08-08T10:00:00Z".into()),
+        });
+        assert_eq!(
+            t.pending_agents(now()),
+            0,
+            "the two ends share no key, so this wait could never be closed"
+        );
+
+        // And the notification that only names the task id changes nothing,
+        // which is the whole reason the launch was refused.
+        t.apply(&finished(None, Some("wf_1")));
+        assert_eq!(t.pending_agents(now()), 0);
+    }
+
+    /// The backstop. An agent that never reports — user interrupt, killed
+    /// process, session ended mid-flight — stops counting once it is older than
+    /// [`AGENT_WAIT_MAX_SECS`], instead of poisoning the card for good.
+    #[test]
+    fn a_launch_that_never_reports_stops_counting_once_it_is_too_old() {
+        let mut t = Telemetry::new();
+        t.apply(&launched("toolu_a", "agent_a"));
+
+        assert_eq!(
+            t.pending_agents(later(60)),
+            1,
+            "a minute in, still believed"
+        );
+        assert_eq!(
+            t.pending_agents(later(AGENT_WAIT_MAX_SECS)),
+            1,
+            "the limit itself is still inside it"
+        );
+        assert_eq!(
+            t.pending_agents(later(AGENT_WAIT_MAX_SECS + 1)),
+            0,
+            "past the limit the card stops claiming an agent is running"
+        );
+    }
+
+    /// A launch whose line carried no timestamp cannot be aged out, so it is not
+    /// counted at all. The alternative is an entry that lives forever, which is
+    /// the failure the age limit was added to close.
+    #[test]
+    fn a_launch_with_no_timestamp_is_not_counted() {
+        let mut t = Telemetry::new();
+        t.apply(&TranscriptEvent::AgentLaunched {
+            tool_use_id: Some("toolu_a".into()),
+            task_id: Some("agent_a".into()),
+            at: None,
+        });
+        assert_eq!(t.pending_agents(now()), 0);
+    }
+
+    /// The property two `Vec`s with `retain` did not have.
+    ///
+    /// A tail re-reads to recover from a truncated line, and a re-read is not
+    /// guaranteed to start before the completion it already consumed. With
+    /// removal, replaying the *launch* after its notification put the agent back:
+    /// the count went up and stayed up. As a set difference the answer does not
+    /// depend on the order at all.
+    #[test]
+    fn replaying_a_launch_after_its_completion_does_not_reopen_the_wait() {
+        let mut t = Telemetry::new();
+        t.apply(&launched("toolu_a", "agent_a"));
+        t.apply(&finished(Some("toolu_a"), Some("agent_a")));
+        assert_eq!(t.pending_agents(now()), 0);
+
+        t.apply(&launched("toolu_a", "agent_a"));
+        assert_eq!(
+            t.pending_agents(now()),
+            0,
+            "the launch was already answered, whatever order it is read in"
+        );
     }
 }

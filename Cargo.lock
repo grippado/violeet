@@ -884,6 +884,7 @@ dependencies = [
 name = "violeet-transcript"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "notify",
  "serde",
  "serde_json",

@@ -12,6 +12,11 @@ repository.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# Timestamps. The age limit on an open agent launch is a comparison between a
+# line's RFC 3339 timestamp and wall clock, and hand-rolling that parser here
+# would be a second definition of a thing the daemon already depends on.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
 # Filesystem watching, and the only dependency here. It earns its place: the
 # alternative is polling every open transcript on a timer, which is the thing
 # `notify` exists to avoid.
