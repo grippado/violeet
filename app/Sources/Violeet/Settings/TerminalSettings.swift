@@ -34,6 +34,7 @@ struct TerminalSettings: Equatable {
     var cursor = CursorSettings()
     var window = WindowSettings()
     var behaviour = BehaviourSettings()
+    var editor = EditorSettings()
 
     // MARK: Appearance
 
@@ -43,12 +44,41 @@ struct TerminalSettings: Equatable {
         /// a preset that still claims to be selected after being altered is
         /// lying about what is on screen.
         var themeName: String? = TerminalTheme.builtins[0].name
+
+        /// The file these colours came from, when they came from one.
+        ///
+        /// `nil` for a built-in, which has no file until somebody edits it. It
+        /// is what tells the app which theme to keep watching across a relaunch,
+        /// and what the picker ticks so a custom theme can be told from the
+        /// built-in it was copied out of.
+        ///
+        /// Carried beside `themeName` rather than encoded into it — a name is
+        /// what the theme is called and a path is where it lives, and one string
+        /// meaning either depending on whether it contains a slash is a string
+        /// that eventually gets parsed wrong.
+        var themeFile: String?
+
         var background: RGB = TerminalTheme.builtins[0].background
         var foreground: RGB = TerminalTheme.builtins[0].foreground
         var cursorColor: RGB = TerminalTheme.builtins[0].cursor
         /// The 16 ANSI colours, in the standard order: eight normal, eight
         /// bright.
         var ansi: [RGB] = TerminalTheme.builtins[0].ansi
+    }
+
+    /// Every colour a theme sets, in one fixed order.
+    ///
+    /// Exists so "did the palette change?" is one comparison rather than
+    /// nineteen, and so the panel can ask that question without asking the
+    /// different question `matchesNamedTheme` answers.
+    ///
+    /// The two are not interchangeable, and conflating them was a bug: the panel
+    /// cleared the theme name whenever the colours failed to match a **built-in**,
+    /// which is always true for a theme loaded from a file. Nudging the font size
+    /// with a custom theme active would therefore have thrown its name away, and
+    /// with it the file the app was watching.
+    var palette: [RGB] {
+        [appearance.background, appearance.foreground, appearance.cursorColor] + appearance.ansi
     }
 
     // MARK: Font
@@ -154,6 +184,64 @@ struct TerminalSettings: Equatable {
         var wrapLines: Bool = true
 
         static let scrollbackChoices = [1_000, 5_000, 10_000, 50_000, 100_000]
+    }
+
+    // MARK: Editor
+
+    /// How a file opens when the Files panel hands it to the user's editor.
+    ///
+    /// Its own group rather than a field on `BehaviourSettings`: everything
+    /// there is about the terminal this app draws, and this is about a program
+    /// it launches. The two happen to be configured on the same panel and are
+    /// not the same subject.
+    ///
+    /// Only vim and Neovim read any of this — see `AppState.editorCommand` for
+    /// why `-c` is not handed to an `$EDITOR` of `code` or `emacs`.
+    struct EditorSettings: Equatable {
+        var diffMode: DiffMode = .inline
+        /// Switch on a minimap, when the user's config has one.
+        ///
+        /// Off by default and useless without a plugin, which this app does not
+        /// install: editing the rc files of another program is the surface
+        /// ADR-003 already declined for tab binding, and a terminal that
+        /// rewrites your Neovim config to draw a sidebar has overstepped by a
+        /// wide margin. So this is detection, on the same `pcall` pattern the
+        /// gitsigns calls use: present means switch it on, absent means carry
+        /// on quietly.
+        var showMinimap: Bool = false
+
+        /// How the uncommitted change is put on screen.
+        ///
+        /// Neither is more correct. Inline keeps one buffer, which is the whole
+        /// file with the change marked in it — right when the change is small
+        /// and the surrounding code is what you need. Side by side spends half
+        /// the width on what the line used to be, which is right when the
+        /// change is a rewrite and wrong when the tab is 80 columns.
+        ///
+        /// Inline is the default because it is the one that cannot be too
+        /// narrow to read.
+        enum DiffMode: String, CaseIterable, Equatable, Identifiable {
+            /// Jump to the first hunk, with the gitsigns displays switched on.
+            case inline
+            /// `Gitsigns diffthis`: a vertical split against the index.
+            case sideBySide
+
+            var id: String { rawValue }
+
+            var label: String {
+                switch self {
+                case .inline: return "Inline"
+                case .sideBySide: return "Side by side"
+                }
+            }
+
+            var detail: String {
+                switch self {
+                case .inline: return "Marks the change in the file itself."
+                case .sideBySide: return "Splits the window against the last commit."
+                }
+            }
+        }
     }
 }
 
@@ -393,6 +481,29 @@ struct TerminalTheme: Equatable {
                 RGB(0x4C, 0x56, 0x6A), RGB(0xBF, 0x61, 0x6A), RGB(0xA3, 0xBE, 0x8C),
                 RGB(0xEB, 0xCB, 0x8B), RGB(0x81, 0xA1, 0xC1), RGB(0xB4, 0x8E, 0xAD),
                 RGB(0x8F, 0xBC, 0xBB), RGB(0xEC, 0xEF, 0xF4),
+            ]
+        ),
+        // Dracula, transcribed from the published specification rather than
+        // from any one port. The spec fixes all twenty values, which is why the
+        // theme looks the same in fifty editors — approximating it here would
+        // make this the one place it does not.
+        //
+        // `black` is `#21222C` and sits *below* the `#282A36` background, which
+        // is the opposite of the rule the house palette follows. Kept as
+        // published: Dracula puts the readable dark tone in `brightBlack`
+        // (`#6272A4`, its comment colour), so nothing legible lands on colour 0.
+        TerminalTheme(
+            name: "Dracula",
+            background: RGB(0x28, 0x2A, 0x36),
+            foreground: RGB(0xF8, 0xF8, 0xF2),
+            cursor: RGB(0xF8, 0xF8, 0xF2),
+            ansi: [
+                RGB(0x21, 0x22, 0x2C), RGB(0xFF, 0x55, 0x55), RGB(0x50, 0xFA, 0x7B),
+                RGB(0xF1, 0xFA, 0x8C), RGB(0xBD, 0x93, 0xF9), RGB(0xFF, 0x79, 0xC6),
+                RGB(0x8B, 0xE9, 0xFD), RGB(0xF8, 0xF8, 0xF2),
+                RGB(0x62, 0x72, 0xA4), RGB(0xFF, 0x6E, 0x6E), RGB(0x69, 0xFF, 0x94),
+                RGB(0xFF, 0xFF, 0xA5), RGB(0xD6, 0xAC, 0xFF), RGB(0xFF, 0x92, 0xDF),
+                RGB(0xA4, 0xFF, 0xFF), RGB(0xFF, 0xFF, 0xFF),
             ]
         ),
         TerminalTheme(

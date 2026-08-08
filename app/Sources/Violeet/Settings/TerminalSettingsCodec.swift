@@ -26,6 +26,17 @@ extension TerminalSettings {
 
         if let appearance = json["appearance"] as? [String: Any] {
             self.appearance.themeName = appearance["theme"] as? String
+            // Checked for existence rather than trusted. A theme file lives in
+            // the user's home and can be deleted, renamed or left behind on
+            // another machine by a synced preferences file — and a path that no
+            // longer resolves would put the app in a state where it is watching
+            // nothing while the picker insists a custom theme is selected. The
+            // colours are already stored here, so dropping the path costs the
+            // live-reload link and nothing on screen.
+            if let file = appearance["themeFile"] as? String,
+               FileManager.default.fileExists(atPath: file) {
+                self.appearance.themeFile = file
+            }
             self.appearance.background =
                 RGB(hexOrNil: appearance["background"]) ?? self.appearance.background
             self.appearance.foreground =
@@ -89,6 +100,14 @@ extension TerminalSettings {
             if let shell = behaviour["shell"] as? String { self.behaviour.shellOverride = shell }
             if let wrap = behaviour["wrapLines"] as? Bool { self.behaviour.wrapLines = wrap }
         }
+
+        if let editor = json["editor"] as? [String: Any] {
+            if let mode = editor["diffMode"] as? String,
+               let parsed = EditorSettings.DiffMode(rawValue: mode) {
+                self.editor.diffMode = parsed
+            }
+            if let minimap = flag(editor["minimap"]) { self.editor.showMinimap = minimap }
+        }
     }
 
     /// Write to a plain JSON object, preserving anything `previous` carried
@@ -106,10 +125,14 @@ extension TerminalSettings {
         appearanceOut["foreground"] = appearance.foreground.hex
         appearanceOut["cursor"] = appearance.cursorColor.hex
         appearanceOut["ansi"] = appearance.ansi.map(\.hex)
+        appearanceOut["themeFile"] = appearance.themeFile as Any?
         // `themeName` is genuinely optional and `nil` means "edited by hand".
         // Writing `NSNull` would come back as a non-String and read as absent,
         // which happens to be the same thing — but removing the key says it.
         if appearance.themeName == nil { appearanceOut.removeValue(forKey: "theme") }
+        // Same for the file, where `nil` means "a built-in, with no file behind
+        // it". Left in, the stale key would outlive the theme it described.
+        if appearance.themeFile == nil { appearanceOut.removeValue(forKey: "themeFile") }
         out["appearance"] = appearanceOut
 
         var fontOut = previous["font"] as? [String: Any] ?? [:]
@@ -140,12 +163,23 @@ extension TerminalSettings {
         behaviourOut["wrapLines"] = behaviour.wrapLines
         out["behaviour"] = behaviourOut
 
+        var editorOut = previous["editor"] as? [String: Any] ?? [:]
+        editorOut["diffMode"] = editor.diffMode.rawValue
+        editorOut["minimap"] = editor.showMinimap
+        out["editor"] = editorOut
+
         return out
     }
 
     /// Adopt a theme wholesale, and remember which one it was.
-    mutating func apply(theme: TerminalTheme) {
+    ///
+    /// `file` is the path it was read from, and `nil` for a built-in. Passing it
+    /// here rather than setting it afterwards keeps the two from drifting: there
+    /// is no moment at which the colours are one theme's and the recorded source
+    /// is another's.
+    mutating func apply(theme: TerminalTheme, from file: String? = nil) {
         appearance.themeName = theme.name
+        appearance.themeFile = file
         appearance.background = theme.background
         appearance.foreground = theme.foreground
         appearance.cursorColor = theme.cursor
@@ -170,6 +204,36 @@ extension TerminalSettings {
 
 private func clamp<T: Comparable>(_ value: T, to range: ClosedRange<T>) -> T {
     min(max(value, range.lowerBound), range.upperBound)
+}
+
+/// A boolean, however it was written down.
+///
+/// The app always writes a real boolean, so this exists for the file the app
+/// did not write: `defaults write -dict-add` stores `1` as the **string**
+/// `"1"`, and a hand-edited plist can carry `1`, `"true"` or `"yes"`. A strict
+/// `as? Bool` reads all of those as absent and silently keeps the default,
+/// which is the failure this file's opening rule is about — a setting that is
+/// there, is legible to a human, and does nothing.
+///
+/// Found the hard way: the minimap was switched on in the plist and stayed off
+/// in the app, and the reason was a pair of quotes.
+///
+/// Anything genuinely unreadable still returns `nil` and still falls back.
+private func flag(_ value: Any?) -> Bool? {
+    switch value {
+    case let bool as Bool:
+        return bool
+    case let number as NSNumber:
+        return number.boolValue
+    case let text as String:
+        switch text.lowercased() {
+        case "1", "true", "yes", "on": return true
+        case "0", "false", "no", "off": return false
+        default: return nil
+        }
+    default:
+        return nil
+    }
 }
 
 private extension RGB {
