@@ -529,9 +529,12 @@ mod tests {
         let mut s = session();
         s.transition_to(SessionState::Dead, t(10)).unwrap();
 
-        let err = s.transition_to(SessionState::Working, t(99)).unwrap_err();
+        // `dead -> done` rather than `dead -> working`: the latter is legal now,
+        // because a hook is evidence the session is alive. Ending something
+        // already ended is the move that still carries no information.
+        let err = s.transition_to(SessionState::Done, t(99)).unwrap_err();
         assert_eq!(err.from, SessionState::Dead);
-        assert_eq!(err.to, SessionState::Working);
+        assert_eq!(err.to, SessionState::Done);
         assert_eq!(s.state(), SessionState::Dead);
         // and crucially, it did not keep the session alive
         assert_eq!(s.last_event_at, t(10));

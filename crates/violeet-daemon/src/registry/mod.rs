@@ -555,11 +555,14 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let out = r.observe_hook(hook("s1").with_state(SessionState::Working), t(2));
+        // `Done` and not `Working`: a hook claiming work is evidence of life and
+        // is honoured now. A hook claiming the session ended, on one already
+        // ended, is what stays refused.
+        let out = r.observe_hook(hook("s1").with_state(SessionState::Done), t(2));
         assert!(!out.state_changed);
         let rejected = out.rejected_transition.expect("should report the refusal");
         assert_eq!(rejected.from, SessionState::Dead);
-        assert_eq!(rejected.to, SessionState::Working);
+        assert_eq!(rejected.to, SessionState::Done);
         assert_eq!(r.session("s1").unwrap().state(), SessionState::Dead);
     }
 
@@ -763,18 +766,24 @@ mod tests {
     }
 
     #[test]
-    fn a_dead_session_stays_dead_when_a_hook_arrives() {
-        // `Dead` is what a resume genuinely cannot undo: the tab closed, or the
-        // session expired. It must keep refusing.
+    fn a_dead_session_comes_back_when_a_hook_arrives() {
+        // Measured on a real machine: the daemon marked a session `Dead` while
+        // the agent was still working in a terminal outside violeet, then
+        // refused `dead -> working` once per hook, in a loop. `/health` counted
+        // the session and `live_sessions` filtered it out, so the board stayed
+        // empty while it spent tokens.
+        //
+        // `Dead` is decided from absence, which is exactly the conclusion a
+        // hook can disprove. This used to assert the opposite.
         let mut r = registry();
         r.observe_hook(hook("s1"), t(0));
         r.set_state("s1", SessionState::Dead, t(1)).unwrap().unwrap();
 
         let out = r.observe_hook(hook("s1").with_state(SessionState::Working), t(2));
-        assert!(out.rejected_transition.is_some(), "dead -> working stays illegal");
-        assert!(!out.resurrected);
-        assert_eq!(r.session("s1").unwrap().state(), SessionState::Dead);
-        assert_eq!(r.live_sessions().count(), 0);
+        assert!(out.rejected_transition.is_none(), "a hook is evidence of life");
+        assert!(out.resurrected, "the board has to learn it is back");
+        assert_eq!(r.session("s1").unwrap().state(), SessionState::Working);
+        assert_eq!(r.live_sessions().count(), 1);
     }
 
     #[test]

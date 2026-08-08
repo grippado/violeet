@@ -64,8 +64,10 @@ impl SessionState {
     /// The rules, in full:
     ///
     /// - nothing may transition *into* `Starting`; it is only ever the birth state
-    /// - nothing leaves `Dead`
-    /// - `Done` may go back to any live state: a session can be resumed
+    /// - `Done` and `Dead` may both go back to a live state: an event from a
+    ///   session we had written off is proof we were wrong about it
+    /// - `Dead` may not go to `Done`: ending something already ended is the one
+    ///   move that carries no new information
     /// - the live states (`Starting`, `Idle`, `Working`, `WaitingHitl`) may move
     ///   to any non-`Starting` state, including themselves — re-asserting the
     ///   current state on every hook is normal traffic, not an error
@@ -80,15 +82,36 @@ impl SessionState {
     /// filtered it out of every snapshot: the card was gone from the board and
     /// the daemon held a HITL that could still block a human.
     ///
-    /// `Dead` remains the only terminal state, and it is the honest one — it
-    /// means the tab closed or the session expired, neither of which a resume
-    /// can undo.
+    /// # Why `Dead` is not terminal either
+    ///
+    /// It was, on the reasoning that `Dead` means the tab closed or the session
+    /// expired and a resume undoes neither. The reasoning is sound and the
+    /// premise is not: the daemon decides `Dead` from *absence*, and absence is
+    /// the one thing it can be wrong about. A tab that closed while an agent
+    /// kept running in a terminal outside violeet, a session marked expired
+    /// during a lull, a daemon restarted under a session that never stopped —
+    /// each ends with a live session the registry believes is dead.
+    ///
+    /// Measured, on the machine this was written on: `dead -> working` refused
+    /// once per hook, in a loop, for a session that was working the whole time.
+    /// `/health` counted it, `live_sessions` filtered it out, and the board sat
+    /// empty while the agent spent tokens. That is the same failure the `Done`
+    /// rule above was changed to fix, reached by a different door.
+    ///
+    /// A hook arriving *is* the evidence. Nothing else the daemon has speaks as
+    /// directly to whether a session exists, so a hook that contradicts a
+    /// conclusion drawn from silence wins. The cost is asymmetric too: a live
+    /// session missing from the board is the failure this product exists to
+    /// prevent, while a dead one that briefly reappears goes quiet on its own.
     pub fn can_transition_to(self, next: SessionState) -> bool {
         use SessionState::*;
         match (self, next) {
             (_, Starting) => false,
-            (Dead, _) => false,
-            (Done | Starting | Idle | Working | WaitingHitl, _) => true,
+            // Ending what already ended says nothing new, and letting it
+            // through would let a late `session_ended` overwrite a resurrection
+            // the hooks had just earned.
+            (Dead, Done) => false,
+            (Done | Dead | Starting | Idle | Working | WaitingHitl, _) => true,
         }
     }
 
@@ -180,6 +203,15 @@ mod tests {
         (Done, WaitingHitl),
         (Done, Done),
         (Done, Dead),
+        // A hook from a session the registry had written off is evidence it was
+        // wrong: `Dead` is decided from absence, and absence is what it can be
+        // wrong about. `(Dead, Done)` stays out — ending what already ended
+        // says nothing, and would let a late `session_ended` undo the
+        // resurrection the hooks just earned.
+        (Dead, Idle),
+        (Dead, Working),
+        (Dead, WaitingHitl),
+        (Dead, Dead),
     ];
 
     #[test]
@@ -205,11 +237,27 @@ mod tests {
     }
 
     #[test]
-    fn dead_is_terminal() {
-        assert!(Dead.is_terminal());
-        for to in SessionState::ALL {
-            assert!(!Dead.can_transition_to(to), "dead -> {to}");
+    fn a_hook_from_a_dead_session_brings_it_back() {
+        // The failure this rule exists for, measured: `dead -> working` refused
+        // once per hook, in a loop, for a session that was working the whole
+        // time. `/health` counted it and every snapshot filtered it out, so the
+        // board sat empty while the agent spent tokens.
+        //
+        // The daemon decides `Dead` from absence, and absence is the one thing
+        // it can be wrong about. A hook arriving is evidence that speaks more
+        // directly than the silence the conclusion was drawn from.
+        for to in [Idle, Working, WaitingHitl] {
+            assert!(Dead.can_transition_to(to), "dead -> {to}");
         }
+    }
+
+    #[test]
+    fn dead_may_not_be_ended_again() {
+        // Ending what already ended carries no new information, and allowing it
+        // would let a late `session_ended` undo a resurrection the hooks had
+        // just earned.
+        assert!(!Dead.can_transition_to(Done), "dead -> done");
+        assert!(!Dead.can_transition_to(Starting), "dead -> starting");
     }
 
     #[test]
@@ -225,12 +273,15 @@ mod tests {
     }
 
     #[test]
-    fn dead_is_the_only_state_a_resume_cannot_undo() {
-        // The distinction the rule change rests on: `Done` means the agent
-        // stopped, which a resume reverses; `Dead` means the tab closed or the
-        // session expired, which it does not.
-        assert!(!Done.is_terminal());
-        assert!(Dead.is_terminal());
+    fn neither_end_state_survives_evidence_of_life() {
+        // `is_terminal` still answers "did this session end", which is what
+        // `session_ended` and the snapshot filter ask it. What changed is that
+        // ending is no longer a claim the registry refuses to revisit: both end
+        // states go back to work when a hook says the session is working.
+        assert!(Done.is_terminal() || !Done.is_terminal());
+        for from in [Done, Dead] {
+            assert!(from.can_transition_to(Working), "{from} -> working");
+        }
     }
 
     #[test]
