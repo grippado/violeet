@@ -214,7 +214,53 @@ final class ThemeStore: ObservableObject {
     }
 
     /// Write `theme` under a new name, in the next free file.
+    /// Send a custom theme to the Trash.
+    ///
+    /// # Why the Trash and not `removeItem`
+    ///
+    /// A theme is somebody's afternoon of picking colours, and this is a
+    /// right-click away in a list where the row above it is the one they are
+    /// using. `rm` makes that mistake final; the Trash makes it an undo. macOS
+    /// has a place for "I think I am done with this" and it is not oblivion.
+    ///
+    /// It also means there is no confirmation dialog, which would be the other
+    /// way to make this safe and a worse one: a sheet takes key status from the
+    /// terminal, and this panel refuses to do that for anything.
+    ///
+    /// # When the deleted theme is the one in use
+    ///
+    /// The colours stay exactly as they are. They are already stored in
+    /// settings, so nothing on screen changes, and the app stops watching a
+    /// file that is no longer there. The alternative — snapping back to a
+    /// built-in — would repaint the terminal as a side effect of tidying up a
+    /// list, which is a surprise nobody asked for.
+    @discardableResult
+    func deleteTheme(_ entry: Entry) -> Bool {
+        var trashed: NSURL?
+        do {
+            try FileManager.default.trashItem(
+                at: URL(fileURLWithPath: entry.path),
+                resultingItemURL: &trashed
+            )
+        } catch {
+            lastError = "Could not delete \(entry.name)."
+            return false
+        }
+
+        if preferences.terminal.appearance.themeFile == entry.path {
+            // Keep the colours, drop the link. See above.
+            preferences.terminal.appearance.themeFile = nil
+            watcher = nil
+        }
+        lastError = nil
+        refresh()
+        return true
+    }
+
     private func write(_ theme: TerminalTheme, called name: String) -> String? {
+        // Both strings need uniqueness, and only the slug had it. See
+        // `ThemeFile.uniqueName`.
+        let name = ThemeFile.uniqueName(name, taken: Set(custom.map(\.name)))
         let renamed = TerminalTheme(
             name: name,
             background: theme.background,

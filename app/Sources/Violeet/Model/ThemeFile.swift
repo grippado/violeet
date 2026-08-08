@@ -270,4 +270,22 @@ enum ThemeFile {
         while taken.contains("\(base)-\(index)") { index += 1 }
         return "\(base)-\(index)"
     }
+
+    /// The same idea for the name a human reads, which is a separate string
+    /// from the slug and needs the same guarantee.
+    ///
+    /// Only the filename was made unique, so a second copy landed in
+    /// `...-copy-2.json` carrying the name "Violeeter Dark (edited) copy" —
+    /// the same name the first one had. The picker then drew two identical
+    /// rows, and the only way to tell which was which was to pick one and see
+    /// what happened. Seen on screen with three of them.
+    ///
+    /// Numbered in words rather than by slug, because this string is read:
+    /// "... copy 2" is what the Finder does and what a person expects.
+    static func uniqueName(_ base: String, taken: Set<String>) -> String {
+        guard taken.contains(base) else { return base }
+        var index = 2
+        while taken.contains("\(base) \(index)") { index += 1 }
+        return "\(base) \(index)"
+    }
 }

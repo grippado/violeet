@@ -367,4 +367,40 @@ struct ThemeFileTests {
         }
         return condition()
     }
+
+    // MARK: - Unique names
+
+    /// Only the slug was made unique, so a second copy landed in a different
+    /// file carrying the same name, and the picker drew two identical rows. The
+    /// only way to tell them apart was to pick one and see what happened.
+    @Test("a second copy does not reuse the first one's name")
+    func namesAreMadeUnique() {
+        let taken: Set<String> = ["Violeeter Dark (edited) copy"]
+        #expect(ThemeFile.uniqueName("Violeeter Dark (edited) copy", taken: taken)
+            == "Violeeter Dark (edited) copy 2")
+    }
+
+    /// A name nobody has is left exactly as it is. Numbering the first one
+    /// would put a "1" on a theme that has no sibling.
+    @Test("a free name is not decorated")
+    func freeNameIsUntouched() {
+        #expect(ThemeFile.uniqueName("Midnight", taken: []) == "Midnight")
+        #expect(ThemeFile.uniqueName("Midnight", taken: ["Other"]) == "Midnight")
+    }
+
+    /// Keeps counting rather than colliding again at 2.
+    @Test("the counter climbs past an occupied number")
+    func counterClimbs() {
+        let taken: Set<String> = ["Base", "Base 2", "Base 3"]
+        #expect(ThemeFile.uniqueName("Base", taken: taken) == "Base 4")
+    }
+
+    /// Spaces, not hyphens. This string is read by a person; the slug is the
+    /// one that has to survive a filesystem.
+    @Test("a read name is numbered the way the Finder numbers one")
+    func namesUseSpacesNotSlugPunctuation() {
+        let name = ThemeFile.uniqueName("Base", taken: ["Base"])
+        #expect(name == "Base 2")
+        #expect(!name.contains("-"))
+    }
 }

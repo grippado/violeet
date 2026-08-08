@@ -24,6 +24,7 @@
 // Every change applies as it is made, so there is no moment at which the screen
 // and the stored value disagree — which is the only thing a save button is for.
 
+import AppKit
 import SwiftUI
 
 struct SettingsPanel: View {
@@ -259,6 +260,24 @@ struct SettingsPanel: View {
             state.themes.apply(path: entry.path)
             editingAnsi = nil
             applyAndReturnFocus()
+        }
+        // Only a custom theme gets a menu. A built-in has no file to open, no
+        // folder to reveal and nothing to delete, so a menu on one would be
+        // three items that all decline — worse than no menu, because the reader
+        // has to open it to learn that.
+        .contextMenu {
+            Button("Edit") { openTheme(entry.path) }
+            Divider()
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([
+                    URL(fileURLWithPath: entry.path)
+                ])
+            }
+            Divider()
+            // No confirmation, because it goes to the Trash rather than away.
+            // A sheet here would take key status from the terminal, which this
+            // panel refuses to do for anything. See `ThemeStore.deleteTheme`.
+            Button("Move to Trash") { state.themes.deleteTheme(entry) }
         }
     }
 
