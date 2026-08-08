@@ -2,9 +2,19 @@
 
 Raised against `docs/PROTOCOL.md` **revision 6, wire `v` = 1**.
 
-**Status: open. Nothing here is on the wire.** Per the *Changing this protocol*
-rule, this file exists instead of an edit to `PROTOCOL.md`, and the work that
-does not depend on it was done anyway:
+> **Status: ABSORBED by document revision 7 (2026-08-08). Nothing here is
+> pending.** Item 1 was granted as written: `answer_request` and
+> `pending_agents`, both optional fields of `session_updated`, wire `v` still
+> `1`. The open decision on `.question` was settled by capping it, and the cap
+> lives in the contract as `violeet_proto::MAX_QUESTION_BYTES`.
+>
+> [`../PROTOCOL.md`](../PROTOCOL.md) is now the authority for all of it. **This
+> file is history: it records what was asked and why, not what is true.** Where
+> the two disagree, the protocol document is right — including in section 2,
+> whose parameters were superseded and are marked inline below.
+
+Per the *Changing this protocol* rule, this file existed instead of an edit to
+`PROTOCOL.md`, and the work that did not depend on it was done anyway:
 
 | Landed | Where |
 |---|---|
@@ -106,9 +116,31 @@ risk. The conservative reading is to cap it.
 **No protocol change requested here.** Recorded so the decision is not made
 twice, and so the two cuts below are not quietly undone by a later pass.
 
+> **Superseded, 2026-08-08.** Two parameters below were decided differently
+> after they were measured, and the measurement inverted the reasoning behind
+> both. They are corrected here rather than quietly left wrong:
+>
+> - **Default model is Sonnet 5, not Haiku.** Haiku was the default for being
+>   fast, and on `claude -p` it is the *slowest* of the three: median 12.8s
+>   against Sonnet's 7.6s, with one run at 19.5s over six runs each on the same
+>   prompt. About 7s of every call is CLI startup, identical whichever model is
+>   named, so the choice moves two or three seconds on a fixed floor and draft
+>   quality becomes the only criterion left. Haiku and Opus stay in the picker.
+> - **The timeout is per model, and the numbers come out inverted:** Haiku 40s,
+>   Opus 35s, Sonnet 30s, each roughly twice the slowest run observed. The flat
+>   20s written below would have killed Haiku's own happy path.
+>
+> Also decided: the model is selectable **in the draft panel**, not only in
+> settings, because you learn you needed Opus after reading Haiku's draft; and
+> the model used is shown in the panel, discreetly, so a regenerated draft is
+> not anonymous.
+>
+> Sample size was six runs per model on one machine and one prompt, sequential.
+> The ordering is measured; the mechanism behind Haiku's outlier is not.
+
 **The only provider is `claude -p`**, spawned by the app with a configurable
-`--model`, default `claude-haiku-4-5-20251001`. It runs under the user's existing
-Claude Code subscription: zero added cost, zero configuration, no key.
+`--model`. It runs under the user's existing Claude Code subscription: zero
+added cost, zero configuration, no key.
 
 - **Cut 1: no provider abstraction, no second backend.** The Anthropic Messages
   API, OpenAI and a generic compatible endpoint were designed and then removed
@@ -132,10 +164,13 @@ Claude Code subscription: zero added cost, zero configuration, no key.
   highlighting, no dedicated view. It has to be the literal payload rather than a
   rendering of it, because a rendering cannot be checked against anything, and
   being checkable is the disclosure's only job.
-- **What survives in settings:** the `--model` value, and a switch to turn the
-  feature off.
-- **Timeout 20 s, and failure is quiet.** On timeout or error the panel says it
-  could not and disappears. No spinner without an end, no retry loop.
+- **What survives in settings:** the default model, and a switch to turn the
+  feature off. The model is also selectable in the draft panel itself — see the
+  superseding note above.
+- **Timeout per model, and failure is quiet.** On timeout or error the panel says
+  it could not and disappears. No spinner without an end, no retry loop. The flat
+  20s originally written here was replaced by measured per-model values; see the
+  superseding note above.
 
 None of this needs a socket message: the app spawns the process itself. The
 daemon never sees a credential and never talks to a third party, and after cut 1
@@ -201,20 +236,24 @@ exist, and the module note says so rather than implying they were load-bearing.
 
 ---
 
-## What is blocked
+## What was blocked, and is not any more
 
-Until item 1 is decided, these cannot be built without either extending the
-protocol unilaterally or duplicating the transcript reader in Swift:
+Item 1 was granted in document revision 7, so none of this is waiting on a
+decision. It is waiting on being written:
 
-1. The sidebar draft panel: editable text, the raw-payload disclosure, regenerate.
-2. The `claude -p` call behind its single extension point, with the 20 s timeout
-   and the quiet failure.
+1. The sidebar draft panel: editable text, the raw-payload disclosure, regenerate,
+   the model picker, and the model shown discreetly.
+2. The `claude -p` call behind its single extension point, with the per-model
+   timeout and the quiet failure.
 3. Wiring `DraftInsertion.insertDraft` to a button, and handing first responder
    back to the terminal after it.
 
-Item 3's *safety* property is already landed and tested independently, which was
-the point of landing it early: the invariant that automation never presses Enter
-should not be waiting on a protocol decision.
+Item 3's *safety* property landed and was tested independently, which was the
+point of landing it early: the invariant that automation never presses Enter
+should not have been waiting on a protocol decision, and it did not.
 
-After the two cuts in section 2, this is the whole remaining surface. It is small
-enough to be one follow-up PR once the field is decided.
+After the two cuts in section 2, this is the whole remaining surface, and it is
+one follow-up PR. It is deliberately **not** the next one: the `.idle` bug this
+work uncovered — a session waiting on background agents rendering as free — is
+fixed first, because the panel would otherwise be built on top of a sidebar that
+misreports the state it depends on.
