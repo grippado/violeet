@@ -46,6 +46,17 @@ brew install xcodegen
 cd app && xcodegen generate && open Violeet.xcodeproj
 ```
 
+There is a `Makefile` for the loop you run all day. `make` on its own lists
+every target; `make reinstall` is the one worth knowing, because it quits the
+app, packages it, installs it, restarts the daemon and reopens, in that order.
+The order is the point: the daemon ships inside the bundle, so an install that
+does not restart it leaves the board being served by the binary you just
+replaced.
+
+The Makefile adds no build logic. `app/scripts/package.sh` and
+`app/scripts/install.sh` remain the only things that know how to produce and
+place a bundle, and CI runs those.
+
 ## License
 
 MIT © Gabriel Gripp
