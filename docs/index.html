@@ -25,11 +25,23 @@
   .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
   .mark {
     width: 40px; height: 40px; border-radius: 10px; flex: none;
-    /* The app's own icon, not an approximation of it in CSS. A gradient that
-       merely resembles the icon is a second copy to keep in sync, and it drifts
-       the first time the artwork changes. */
     display: block;
   }
+  /* The icon comes in two cuts, and which one shows follows the theme by the
+     same rules the colours do. Doing it in CSS rather than by swapping `src`
+     in the toggle means the right one is already painted on first render,
+     including for a visitor whose system is dark and who never touches the
+     button. */
+  .only-dark { display: none; }
+  .only-light { display: block; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .only-dark { display: block; }
+    :root:not([data-theme="light"]) .only-light { display: none; }
+  }
+  :root[data-theme="dark"] .only-dark { display: block; }
+  :root[data-theme="dark"] .only-light { display: none; }
+  :root[data-theme="light"] .only-dark { display: none; }
+  :root[data-theme="light"] .only-light { display: block; }
   .brand-name { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
   h1 { font-size: clamp(2rem, 6vw, 3.1rem); font-weight: 700; letter-spacing: -0.03em; max-width: 16ch; }
   .lede { font-size: 1.12rem; margin: 20px 0 0; max-width: 58ch; opacity: 0.85; }
@@ -116,7 +128,8 @@
 
 <header>
   <div class="brand">
-    <img class="mark" src="violeet.png" alt="Violeet">
+    <img class="mark only-dark" src="violeet-dark.png" alt="Violeet">
+    <img class="mark only-light" src="violeet-light.png" alt="Violeet">
     <span class="brand-name">Violeet</span>
     <button class="toggle" id="toggle" type="button">Light</button>
   </div>
