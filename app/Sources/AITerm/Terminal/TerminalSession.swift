@@ -87,14 +87,23 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     /// `shellOverride` empty means the account's own shell. A configured shell
     /// that has since been uninstalled falls back rather than failing: a tab
     /// that opens to nothing is worse than a tab that opens to zsh.
-    func start(inDirectory directory: String, socketPath: String, shell shellOverride: String = "") {
+    /// `command`, when given, is run by that shell instead of a prompt. Still
+    /// the login shell, and for the same reason: the command needs the user's
+    /// `PATH` to find `nvim` at all, and `-c` on a login shell reads
+    /// `.zprofile`, which is where that `PATH` comes from.
+    func start(
+        inDirectory directory: String,
+        socketPath: String,
+        shell shellOverride: String = "",
+        command: String? = nil
+    ) {
         let shell = Self.resolveShell(shellOverride)
         let name = (shell as NSString).lastPathComponent
 
         currentDirectory = directory
         view.startProcess(
             executable: shell,
-            args: [],
+            args: command.map { ["-c", $0] } ?? [],
             environment: Self.environment(tabID: tabID, socketPath: socketPath),
             // A leading dash in argv[0] is how Unix says "login shell". The
             // shell reads it off its own name; there is no flag for it here

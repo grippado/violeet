@@ -25,6 +25,12 @@ final class AppState: ObservableObject {
             // The tab you are looking at is the one whose name being a second
             // stale is worth a syscall to avoid.
             selectedTab?.session.pollNow()
+            // Switching tabs is a change of subject, so the Files panel stops
+            // being pinned to whatever card was clicked last. Without this the
+            // panel keeps showing one session's files while the window is
+            // plainly on something else — a list that outlives its subject
+            // reads as a list *about* the new one.
+            inspectedSessionID = nil
         }
     }
 
@@ -393,7 +399,7 @@ final class AppState: ObservableObject {
     /// `register_tab` to reach the daemon **before** the child exists, so the
     /// daemon can never receive a hook naming a tab it has not heard of.
     @discardableResult
-    func newTab(directory: String? = nil) -> TabModel {
+    func newTab(directory: String? = nil, command: String? = nil) -> TabModel {
         let cwd = directory ?? defaultDirectory()
         let tab = TabModel(font: preferences.terminalFont, directory: cwd)
 
@@ -416,12 +422,190 @@ final class AppState: ObservableObject {
         }
         tab.start(
             socketPath: Discovery.socketPath(),
-            shell: preferences.terminal.behaviour.shellOverride
+            shell: preferences.terminal.behaviour.shellOverride,
+            command: command
         )
 
         tabs.append(tab)
         selectedTabID = tab.tabID
         return tab
+    }
+
+    /// Open a file the Files panel is showing, in a tab of its own.
+    ///
+    /// # Why a new tab and not the session's own
+    ///
+    /// The obvious version writes `:e <path>` into the tab the session is
+    /// running in. That tab is almost always running the agent — it is a
+    /// session card, that is what a session is — so the obvious version types a
+    /// vim command into Claude Code's prompt. A file opened in a new tab cannot
+    /// do that to anything.
+    ///
+    /// # Why the editor and not `open`
+    ///
+    /// `open` hands the file to whatever the Finder has bound to the extension,
+    /// which for a `.swift` is an IDE and for a `.md` may be a note-taking app.
+    /// This is a terminal; the editor the user configured is the one they meant.
+    ///
+    /// The tab closes when the editor exits, which is the same rule tabs
+    /// already follow for a shell that exits.
+    /// Clicking a row a second time goes back to the tab rather than opening a
+    /// rival one. Two editors on one file is how a buffer gets overwritten by an
+    /// older copy of itself, and a panel that answers every click with a new tab
+    /// buries the terminal under editors within a morning — which is what
+    /// happened before this check existed.
+    func openInEditor(path: String, session sessionID: String?) {
+        if let open = tabs.first(where: { $0.editing?.path == path }) {
+            selectedTabID = open.tabID
+            return
+        }
+        let directory = (path as NSString).deletingLastPathComponent
+        let tab = newTab(
+            directory: directory.isEmpty ? nil : directory,
+            command: Self.editorCommand(forFileAt: path)
+        )
+        tab.editing = EditorTab(path: path, sessionID: sessionID)
+        // `editing` is not `@Published` — it is set once, here, before anything
+        // has drawn this tab. The sidebar reads it through `tabs`, which did
+        // change, so the grouping lands on the same pass that adds the row.
+        objectWillChange.send()
+    }
+
+    /// The editor tabs a session owns, in the order they were opened.
+    func editorTabs(forSession sessionID: String) -> [TabModel] {
+        tabs.filter { $0.editing?.sessionID == sessionID }
+    }
+
+    /// Whether a path is already open in some tab. Drives the mark in the Files
+    /// panel, which is the other half of "this row opened that tab".
+    func isOpenInEditor(path: String) -> Bool {
+        tabs.contains { $0.editing?.path == path }
+    }
+
+    /// The shell command that opens one file for editing.
+    ///
+    /// `$VISUAL` then `$EDITOR` first, because a user who set either has said
+    /// what they want. Neither is set on a stock macOS account, though, and
+    /// falling straight to `vi` there would open the system vim on a machine
+    /// with Neovim installed — the honoured convention producing the least
+    /// wanted answer. So the fallback searches, and only reaches `vi` when it
+    /// is genuinely all there is.
+    ///
+    /// The search runs in the shell rather than here because *this* process
+    /// does not have the user's `PATH` — an app launched from Finder inherits
+    /// almost none of it, which is why tabs spawn login shells at all. Asking
+    /// `command -v` from inside that shell asks the environment that will run
+    /// the editor, not the one that built the string.
+    ///
+    /// `exec` so the editor replaces the shell: no shell survives it, so
+    /// quitting the editor exits the tab's process and the tab closes, which is
+    /// the rule tabs already follow.
+    /// # Showing the diff, not just marking it
+    ///
+    /// A vim-family editor opens on the first uncommitted hunk, with three
+    /// gitsigns displays switched on. All of it is gitsigns' — there is nothing
+    /// here that draws.
+    ///
+    /// The sign column alone marks *that* a line changed and never what it
+    /// replaced, so a rewritten line and a brand new one look identical and a
+    /// deleted block leaves no trace at all. The three fill exactly those gaps:
+    ///
+    ///  · `toggle_deleted` puts the removed lines back, as virtual text. This is
+    ///    the one that matters — without it a deletion is invisible, and the
+    ///    file reads as if nothing was ever there.
+    ///  · `toggle_word_diff` narrows a changed line to the words that changed,
+    ///    which is the difference between "this line is different" and "this
+    ///    identifier was renamed".
+    ///  · `toggle_linehl` tints the changed lines themselves, so the shape of
+    ///    the change survives scrolling past the sign column.
+    ///
+    /// Set with an explicit `true` rather than toggled. A toggle assumes it
+    /// knows the current value, and would switch these *off* for a user whose
+    /// config already turns them on.
+    ///
+    /// Only when there are hunks, so a clean file opens as a plain file rather
+    /// than one dressed for a review that has nothing to show.
+    ///
+    /// **The jump goes first.** Switching a display on makes gitsigns recompute,
+    /// and during that recompute the hunk list is empty — so a `nav_hunk` issued
+    /// after the toggles finds nothing and says `No hunks`, on a file with six
+    /// of them. Measured both orders on the same file: toggles first leaves the
+    /// cursor on line 1, jump first reports `Hunk 1 of 6`.
+    ///
+    /// # Which diff this is
+    ///
+    /// The **git** diff, not the session's: it shows what has not been
+    /// committed, so it is exactly right while reviewing an agent's work and
+    /// empty once that work is committed. The session's own line ranges exist
+    /// in `structuredPatch` but the daemon sums them away, and carrying them
+    /// would mean rebasing every earlier hunk's position past every later edit.
+    ///
+    /// # Waiting for the hunks, and giving up on purpose
+    ///
+    /// The jump polls for hunks rather than firing on `User GitSignsUpdate`,
+    /// which was the first attempt and is wrong twice. That event fires more
+    /// than once, and the first fire is before the hunks are computed — so a
+    /// `++once` handler burns on the empty one and never runs again. Measured:
+    /// the event fires, `nav_hunk` returns cleanly, and the cursor stays on
+    /// line 1.
+    ///
+    /// The obvious repair — an autocmd that stays until it finds hunks — is
+    /// worse. It would still be armed later, so the first edit that made
+    /// gitsigns recompute would yank the cursor to the top of the file while
+    /// the user was typing somewhere else. Opening a file is a moment, not a
+    /// mode.
+    ///
+    /// So: twenty tries, 100ms apart, then it stops caring. Two seconds is far
+    /// past a local attach, and the failure mode is a file that opens at the
+    /// top — which is what it did before any of this.
+    ///
+    /// Only for `nvim` and `vim`. `-c` is theirs; handing it to an `$EDITOR` of
+    /// `code` or `emacs` would be passing a flag that means something else.
+    nonisolated static func editorCommand(forFileAt path: String) -> String {
+        let showTheDiff = """
+            lua local t=0 local function go() t=t+1 \
+            local ok,gs=pcall(require,"gitsigns") \
+            if ok then local h=gs.get_hunks() \
+            if h and #h>0 then \
+            gs.nav_hunk("first") \
+            pcall(gs.toggle_deleted,true) \
+            pcall(gs.toggle_word_diff,true) \
+            pcall(gs.toggle_linehl,true) \
+            return end end \
+            if t<20 then vim.defer_fn(go,100) end end vim.defer_fn(go,100)
+            """
+
+        return """
+        editor=${VISUAL:-${EDITOR:-}}
+        if [ -z "$editor" ]; then
+          for candidate in nvim vim vi; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              editor=$candidate
+              break
+            fi
+          done
+        fi
+        case "${editor##*/}" in
+          nvim|nvim\\ *|vim|vim\\ *)
+            exec $editor -c \(shellQuoted(showTheDiff)) \(shellQuoted(path))
+            ;;
+          *)
+            exec $editor \(shellQuoted(path))
+            ;;
+        esac
+        """
+    }
+
+    /// A string the shell will read back as exactly these bytes.
+    ///
+    /// Single quotes disable every expansion the shell has, so the only case to
+    /// handle is a single quote in the path itself — closed, escaped, reopened.
+    /// A path is user data and reaches a shell here; nothing else in it may be
+    /// interpreted.
+    /// `nonisolated` because it is a function of its argument and nothing else
+    /// — it touches no state, so it has no reason to be on the main actor.
+    nonisolated static func shellQuoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Close a tab: kill the shell, tell the daemon, pick a neighbour.
@@ -504,6 +688,95 @@ final class AppState: ObservableObject {
         focusTerminal()
     }
 
+    /// Show a specific panel, or hide the inspector if it is already showing it.
+    ///
+    /// A plain toggle was fine with one panel and is a bug with two: ⌘, means
+    /// "Settings", and with the Files panel open a toggle would close the
+    /// inspector instead of switching to what the user asked for.
+    func toggleInspector(showing panel: InspectorPanel) {
+        if preferences.inspectorVisible && preferences.inspectorPanel == panel {
+            preferences.inspectorVisible = false
+        } else {
+            preferences.inspectorPanel = panel
+            preferences.inspectorVisible = true
+        }
+        focusTerminal()
+    }
+
+    /// Point the Files panel at a session.
+    ///
+    /// Harmless while the panel is closed, which is what lets the sidebar's tap
+    /// gesture do this unconditionally instead of asking what is on screen.
+    func inspect(session id: String) {
+        inspectedSessionID = id
+    }
+
+    // MARK: - What sessions wrote
+
+    /// The files each session has written, keyed by session id.
+    ///
+    /// Held beside `sessions` rather than inside the card on purpose. The card
+    /// is `Equatable` and compared in bulk on every patch — `attachPendingHitl`
+    /// and `uniqueTitles` both walk the whole table — and a session that
+    /// rewrote a monorepo would make each of those comparisons walk hundreds of
+    /// paths for a list no card ever renders.
+    @Published private(set) var sessionFiles: [String: SessionFileList] = [:]
+
+    /// Which session the Files panel is showing.
+    ///
+    /// A UI selection and not a fact about the world, which is why it lives
+    /// here and not on a card: the daemon has no opinion about what you are
+    /// looking at.
+    @Published var inspectedSessionID: String?
+
+    /// The session the Files panel should show: the one clicked, else the
+    /// selected tab's, else none.
+    ///
+    /// It used to fall back to the first session in the list, on the reasoning
+    /// that a panel showing nothing is a dead end. That was wrong, and worse
+    /// than a dead end: selecting a tab with no session left the panel showing
+    /// *some other* session's files, under a header naming that session, while
+    /// the window was plainly on something else. A file list is a claim about
+    /// whose files these are, and a claim that follows the wrong subject is not
+    /// a fallback — it is a wrong answer. Now it says which tab you are on
+    /// instead.
+    var inspectedSession: SessionCard? {
+        if let id = inspectedSessionID, let card = sessions[id] { return card }
+        if let tabID = selectedTabID,
+           let card = orderedSessions.first(where: { $0.tabID == tabID }) {
+            return card
+        }
+        return nil
+    }
+
+    /// The selected tab, when it is not an agent session — what the Files panel
+    /// names instead of a file list.
+    var inspectedTab: TabModel? {
+        guard inspectedSession == nil, let tabID = selectedTabID else { return nil }
+        return tabs.first { $0.tabID == tabID }
+    }
+
+    /// Fold a patch's file fields into the list we hold for that session.
+    ///
+    /// Each field moves on its own, because the patch is sparse: the daemon
+    /// re-sends the list only when it changes, while the two flags can change
+    /// without it — a session becomes non-partial the moment a read catches up,
+    /// with the same files in hand.
+    private func applyFiles(_ patch: SessionUpdated) {
+        guard patch.files != .unchanged
+            || patch.filesPartial != .unchanged
+            || patch.filesTruncated != .unchanged
+        else { return }
+
+        var list = sessionFiles[patch.sessionID] ?? SessionFileList()
+        // `.set(nil)` means the daemon explicitly knows nothing, which is an
+        // empty list rather than a stale one left on screen.
+        list.files = patch.files.applied(to: list.files) ?? []
+        list.isPartial = patch.filesPartial.applied(to: list.isPartial)
+        list.isTruncated = patch.filesTruncated.applied(to: list.isTruncated)
+        sessionFiles[patch.sessionID] = list
+    }
+
     // MARK: - Daemon messages
 
     /// Every daemon message is an idempotent upsert.
@@ -545,6 +818,7 @@ final class AppState: ObservableObject {
             }
             card.apply(patch)
             sessions[patch.sessionID] = card
+            applyFiles(patch)
             // The daemon has spoken about this session's name, so whatever we
             // were holding for it has either landed or been superseded. Kept
             // narrow on purpose: a patch that carries no title says nothing
@@ -568,6 +842,10 @@ final class AppState: ObservableObject {
 
         case .sessionEnded(let ended):
             sessions.removeValue(forKey: ended.sessionID)
+            // The tree goes with the card. Leaving it would keep a dead
+            // session's files addressable by an id nothing else knows about.
+            sessionFiles.removeValue(forKey: ended.sessionID)
+            if inspectedSessionID == ended.sessionID { inspectedSessionID = nil }
             pendingHitl = pendingHitl.filter { $0.value.sessionID != ended.sessionID }
             attachPendingHitl()
         }

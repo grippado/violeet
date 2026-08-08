@@ -173,6 +173,52 @@ pub struct SessionUpdated {
     pub last_event_at: Patch<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tab_id: Patch<String>,
+
+    // What this session wrote. A whole list rather than a delta: every other
+    // message here is an idempotent upsert keyed by `session_id`, which is what
+    // makes snapshot replay work without a second code path, and a delta would
+    // be the one field that breaks that.
+    /// Every file this session has written, ordered by path.
+    ///
+    /// Sent only when the set changes, like every other field in this patch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Patch<Vec<FileChange>>,
+    /// `true` when the list covers only part of the session.
+    ///
+    /// Same cause as `cumulative_tokens_partial` — a transcript read from its
+    /// end — and the same rule: a list with three files for a session that
+    /// touched forty is not approximately right, it is wrong by an unknown
+    /// amount, and nothing in the list itself says so.
+    ///
+    /// It is also `true` for a reason the token flag does not have: files
+    /// written by `Bash` (`sed -i`, `mv`, a heredoc) leave no tool result
+    /// naming a path and cannot appear here at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_partial: Patch<bool>,
+    /// `true` when the list was cut to fit the wire.
+    ///
+    /// A client reads whole lines and drops one that is too long, so an
+    /// unbounded list would not arrive truncated — it would not arrive at all,
+    /// and the panel would simply stop updating with nothing to explain why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_truncated: Patch<bool>,
+}
+
+/// One file a session wrote, and by how much.
+///
+/// The counts are measured, not estimated: Claude Code writes the diff into the
+/// transcript and the daemon adds up its `+` and `-` lines. A created file has
+/// no diff to read, so its `added` is the length of what was written.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileChange {
+    /// Absolute. Relativising needs to know what the path is relative *to*,
+    /// which is a question about how it will be displayed and not about what
+    /// happened.
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+    /// The session created this file rather than editing an existing one.
+    pub created: bool,
 }
 
 impl SessionUpdated {
@@ -211,6 +257,9 @@ impl SessionUpdated {
             && self.last_action.is_none()
             && self.last_event_at.is_none()
             && self.tab_id.is_none()
+            && self.files.is_none()
+            && self.files_partial.is_none()
+            && self.files_truncated.is_none()
     }
 }
 

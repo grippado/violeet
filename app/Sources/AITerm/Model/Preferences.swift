@@ -23,6 +23,7 @@ final class Preferences: ObservableObject {
         static let elsewhereExpanded = "sidebar.elsewhere.expanded"
         static let inspectorWidth = "inspector.width"
         static let inspectorVisible = "inspector.visible"
+        static let inspectorPanel = "inspector.panel"
         static let terminalSettings = "terminal.settings"
     }
 
@@ -34,6 +35,63 @@ final class Preferences: ObservableObject {
 
     static let minimumFontSize: CGFloat = 8
     static let maximumFontSize: CGFloat = 32
+
+    /// Three sidebar widths, as fractions of the widest one allowed.
+    ///
+    /// The drag handle is precise and slow; this is the opposite trade. Widening
+    /// the sidebar to read a card and narrowing it again is a round trip that
+    /// happens many times an hour, and doing it by dragging means aiming at a
+    /// 9pt target twice.
+    ///
+    /// Fractions of `maximumSidebarWidth` rather than of the window: the card is
+    /// what the sidebar is sized for, and the card does not get more readable
+    /// because the display is wider. A fraction of the window would also make
+    /// the same setting mean different widths on a laptop and on a monitor.
+    ///
+    /// `third` lands on `minimumSidebarWidth` once clamped, which is deliberate
+    /// — the narrow rung is the narrowest the sidebar goes, not a fourth width
+    /// between the two.
+    enum SidebarSpan: Double, CaseIterable, Identifiable {
+        case third = 0.33
+        case twoThirds = 0.66
+        case full = 1.0
+
+        var id: Double { rawValue }
+
+        var width: CGFloat {
+            Preferences.clampWidth(Preferences.maximumSidebarWidth * CGFloat(rawValue))
+        }
+
+        /// `33%`, `66%`, `100%`. What the control shows it is at.
+        var label: String {
+            "\(Int((rawValue * 100).rounded()))%"
+        }
+
+        /// The menu has room to say what each rung is for, and a percentage on
+        /// its own does not.
+        var menuLabel: String {
+            switch self {
+            case .third: return "\(label) — narrow"
+            case .twoThirds: return "\(label) — medium"
+            case .full: return "\(label) — wide"
+            }
+        }
+
+        var next: SidebarSpan {
+            let all = Self.allCases
+            let index = all.firstIndex(of: self) ?? 0
+            return all[(index + 1) % all.count]
+        }
+
+        /// Which rung a given width counts as.
+        ///
+        /// The handle can leave the sidebar between two rungs, and the button
+        /// still has to say something. Nearest rather than next-lowest, so a
+        /// width one point under `full` does not read as `66%`.
+        static func nearest(to width: CGFloat) -> SidebarSpan {
+            allCases.min(by: { abs($0.width - width) < abs($1.width - width) }) ?? .third
+        }
+    }
 
     private let defaults: UserDefaults
 
@@ -82,6 +140,15 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(inspectorVisible, forKey: Key.inspectorVisible) }
     }
 
+    /// Which inspector panel is showing.
+    ///
+    /// Persisted rather than held in the view, because the inspector's view is
+    /// destroyed when it is hidden: local state would reset the choice on every
+    /// close, which with one panel was invisible and with two is a bug.
+    @Published var inspectorPanel: InspectorPanel {
+        didSet { defaults.set(inspectorPanel.rawValue, forKey: Key.inspectorPanel) }
+    }
+
     /// How the terminal looks and behaves. Global for every tab in v0 — see
     /// `TerminalSettings` for why, and for what keeps that cheap to revisit.
     ///
@@ -126,6 +193,11 @@ final class Preferences: ObservableObject {
         // Hidden until asked for. The left sidebar is what the window is about;
         // this one is a tool you open, use and close.
         inspectorVisible = defaults.object(forKey: Key.inspectorVisible) as? Bool ?? false
+        // Files, not Settings: opening the inspector is nearly always a
+        // question about the session, and settings are a place you go once. A
+        // stored choice still wins — this is the default, not an override.
+        inspectorPanel = (defaults.string(forKey: Key.inspectorPanel))
+            .flatMap(InspectorPanel.init(rawValue:)) ?? .files
 
         let storedSettings = defaults.dictionary(forKey: Key.terminalSettings) ?? [:]
         unknownTerminalKeys = storedSettings

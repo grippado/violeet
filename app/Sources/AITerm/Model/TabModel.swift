@@ -11,9 +11,34 @@
 import AppKit
 import Foundation
 
+/// What a tab is editing, when the Files panel opened it.
+///
+/// A tab opened this way is not a loose tab that happens to be running an
+/// editor. It exists because of one row of one session's file tree, and both
+/// halves of that sentence are shown: the sidebar puts the tab beside its
+/// session rather than in the list of tabs nothing claimed, and the panel marks
+/// the row as open.
+///
+/// Set once, at spawn. The tab does not follow the editor if the user opens
+/// another file inside it — that is the editor's buffer list, which this app has
+/// no window into and should not pretend to.
+struct EditorTab: Equatable {
+    let path: String
+    /// The session whose file this is. `nil` only if the panel somehow had no
+    /// session selected, in which case the tab falls back to the loose list.
+    let sessionID: String?
+
+    var name: String {
+        (path as NSString).lastPathComponent
+    }
+}
+
 final class TabModel: ObservableObject, Identifiable {
     let tabID: String
     let session: TerminalSession
+
+    /// Set when this tab was opened to edit a file. See `EditorTab`.
+    var editing: EditorTab?
 
     /// Where the shell is right now. Seeded with where it was spawned so a row
     /// is never blank, then kept current by the session's poller.
@@ -92,8 +117,14 @@ final class TabModel: ObservableObject, Identifiable {
     }
 
     /// `shell` empty means the account's own shell, resolved at spawn.
-    func start(socketPath: String, shell: String = "") {
-        session.start(inDirectory: currentDirectory, socketPath: socketPath, shell: shell)
+    /// `command`, when given, is what the tab runs instead of a prompt.
+    func start(socketPath: String, shell: String = "", command: String? = nil) {
+        session.start(
+            inDirectory: currentDirectory,
+            socketPath: socketPath,
+            shell: shell,
+            command: command
+        )
     }
 
     func terminate() {

@@ -117,6 +117,22 @@ pub struct TokenTelemetry {
     pub cumulative_tokens_partial: Option<bool>,
 }
 
+/// What a session wrote, as last published.
+///
+/// Held so the daemon can tell a changed list from an unchanged one and keep
+/// the patch sparse: a session working in one file emits a tool result every
+/// few seconds, and re-sending the whole list each time would be the noisiest
+/// field on the wire by a wide margin.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileTelemetry {
+    /// Ordered by path, as it goes on the wire.
+    pub files: Vec<aiterm_proto::wire::FileChange>,
+    /// The list covers only part of the session. See the wire field.
+    pub partial: Option<bool>,
+    /// The list was cut to fit a line the client will accept.
+    pub truncated: Option<bool>,
+}
+
 impl TokenTelemetry {
     /// Everything unknown. Written out field by field rather than derived, so
     /// that adding a field forces a decision here instead of silently
@@ -273,6 +289,8 @@ pub struct Session {
     /// Filled by `aiterm-transcript` via `crate::transcript`. Every field stays
     /// `None` until a real reading arrives — never `0`.
     pub tokens: TokenTelemetry,
+    /// What this session wrote, as last published. Same source as `tokens`.
+    pub files: FileTelemetry,
 }
 
 impl Session {
@@ -303,6 +321,7 @@ impl Session {
             created_at: now,
             last_event_at: now,
             tokens: TokenTelemetry::unknown(),
+            files: FileTelemetry::default(),
         }
     }
 

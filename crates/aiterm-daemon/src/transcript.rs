@@ -46,7 +46,7 @@ use chrono::Utc;
 
 use crate::registry::{SessionState, TitleSource};
 use crate::socket::Hub;
-use crate::wire::{self, DaemonToApp, SessionUpdated};
+use crate::wire::{self, DaemonToApp, FileChange as WireFileChange, SessionUpdated};
 
 /// How long to sit on updates before publishing. One reply's worth of appends
 /// arrives well inside this.
@@ -274,6 +274,36 @@ pub fn name_from_head(hub: &Hub, session_id: &str, path: &Path) {
     }
 }
 
+/// How many files one message may carry.
+///
+/// The client reads whole lines and **drops** one longer than its limit rather
+/// than buffering it, so an unbounded list does not arrive truncated — it does
+/// not arrive, and the panel stops updating with nothing on screen to say why.
+/// At roughly 120 bytes an entry this leaves the line an order of magnitude
+/// inside that limit even for a session that rewrote a monorepo.
+const MAX_FILES_ON_WIRE: usize = 500;
+
+/// The file list as it goes on the wire, and whether it had to be cut.
+///
+/// Cutting keeps the first N by path rather than by size or recency: the panel
+/// renders a tree, and a tree missing a random half is harder to read than one
+/// that stops. The flag is what keeps it honest either way.
+fn wire_files(telemetry: &Telemetry) -> (Vec<WireFileChange>, bool) {
+    let truncated = telemetry.files.len() > MAX_FILES_ON_WIRE;
+    let files = telemetry
+        .files
+        .iter()
+        .take(MAX_FILES_ON_WIRE)
+        .map(|(path, stat)| WireFileChange {
+            path: path.clone(),
+            added: stat.added,
+            removed: stat.removed,
+            created: stat.created,
+        })
+        .collect();
+    (files, truncated)
+}
+
 fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
     let now = Utc::now();
 
@@ -326,6 +356,33 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
         }
         copy_token_field!(context_window_used_tokens);
         copy_token_field!(context_window_size_tokens);
+
+        // --- what the session wrote -----------------------------------------
+        //
+        // Compared against the last published list, not sent every read: a
+        // session working in one file produces a tool result every few seconds
+        // and this is the largest field on the wire.
+        {
+            let (files, truncated) = wire_files(telemetry);
+            if session.files.files != files {
+                session.files.files = files.clone();
+                patch.files = Some(Some(files));
+                anything = true;
+            }
+            // The same read that makes the token totals partial makes this list
+            // partial, and for a second reason besides: a file written by
+            // `Bash` never appears here at all.
+            if session.files.partial != Some(partial) {
+                session.files.partial = Some(partial);
+                patch.files_partial = Some(Some(partial));
+                anything = true;
+            }
+            if session.files.truncated != Some(truncated) {
+                session.files.truncated = Some(truncated);
+                patch.files_truncated = Some(Some(truncated));
+                anything = true;
+            }
+        }
 
         // --- the name -------------------------------------------------------
         //
@@ -415,5 +472,53 @@ mod tests {
         // the end-to-end path is covered in tests/transcript_integration.rs.
         s.forget("s1");
         assert_eq!(s.len(), 0);
+    }
+
+    // ---- the file list on the wire --------------------------------------
+
+    fn telemetry_with(count: usize) -> Telemetry {
+        let mut t = Telemetry::new();
+        for i in 0..count {
+            t.apply(&aiterm_transcript::TranscriptEvent::ToolResult {
+                tool_use_id: format!("t{i}"),
+                at: None,
+                file: Some(aiterm_transcript::FileChange {
+                    // Zero-padded so lexical order is numeric order, and the
+                    // assertion below says what it means.
+                    path: format!("/repo/f{i:04}.rs"),
+                    added: 1,
+                    removed: 0,
+                    created: false,
+                }),
+            });
+        }
+        t
+    }
+
+    #[test]
+    fn a_short_list_travels_whole_and_says_it_was_not_cut() {
+        let (files, truncated) = wire_files(&telemetry_with(3));
+        assert_eq!(files.len(), 3);
+        assert!(!truncated);
+        // Ordered by path: the tree renders in a stable order, and an
+        // unordered set would make every publish look like a change.
+        assert_eq!(files[0].path, "/repo/f0000.rs");
+        assert_eq!(files[2].path, "/repo/f0002.rs");
+    }
+
+    /// The failure this prevents is silent: a line over the client's limit is
+    /// dropped, not truncated, so the panel would simply stop updating.
+    #[test]
+    fn an_oversized_list_is_cut_and_says_so() {
+        let (files, truncated) = wire_files(&telemetry_with(MAX_FILES_ON_WIRE + 40));
+        assert_eq!(files.len(), MAX_FILES_ON_WIRE);
+        assert!(truncated, "a cut list that does not say so is a lie");
+    }
+
+    #[test]
+    fn a_session_that_wrote_nothing_has_an_empty_list_and_not_a_cut_one() {
+        let (files, truncated) = wire_files(&Telemetry::new());
+        assert!(files.is_empty());
+        assert!(!truncated);
     }
 }

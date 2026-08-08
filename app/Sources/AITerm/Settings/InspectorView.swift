@@ -16,9 +16,15 @@ import SwiftUI
 
 /// What the right sidebar can show.
 ///
-/// One case today. The enum is the seam: adding a panel is a case, a title, a
-/// symbol and a view, with nothing else to touch.
+/// The enum is the seam: adding a panel is a case, a title, a symbol and a
+/// view, with nothing else to touch.
+///
+/// Declaration order is tab order, and `files` comes first on purpose. The
+/// inspector is open while an agent works, and what the agent is writing is a
+/// thing to watch; a colour scheme is a thing to set once. Settings earned the
+/// first slot only by being the panel that existed first.
 enum InspectorPanel: String, CaseIterable, Identifiable {
+    case files
     case settings
 
     var id: String { rawValue }
@@ -26,12 +32,14 @@ enum InspectorPanel: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .settings: return "Settings"
+        case .files: return "Files"
         }
     }
 
     var symbol: String {
         switch self {
         case .settings: return "slider.horizontal.3"
+        case .files: return "doc.on.doc"
         }
     }
 }
@@ -40,7 +48,14 @@ struct InspectorView: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject var preferences: Preferences
 
-    @State private var panel: InspectorPanel = .settings
+    /// Which panel is showing. Held in `Preferences` and not in `@State`,
+    /// because `ContentView` removes this view from the hierarchy when the
+    /// inspector is hidden — local state would die with it and the panel would
+    /// silently snap back to Settings every time the inspector was reopened.
+    private var panel: InspectorPanel {
+        get { preferences.inspectorPanel }
+        nonmutating set { preferences.inspectorPanel = newValue }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -95,6 +110,8 @@ struct InspectorView: View {
         switch panel {
         case .settings:
             SettingsPanel(preferences: preferences)
+        case .files:
+            FilesPanel()
         }
     }
 }

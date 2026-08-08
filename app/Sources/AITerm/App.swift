@@ -67,7 +67,7 @@ private struct AITermCommands: Commands {
         // so replacing it swaps the behaviour without leaving a dead menu entry
         // that opens an empty window beside the working one.
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { state.toggleInspector() }
+            Button("Settings…") { state.toggleInspector(showing: .settings) }
                 .keyboardShortcut(",", modifiers: .command)
         }
 
@@ -100,10 +100,15 @@ private struct AITermCommands: Commands {
             // `Ctrl-C`, which never reaches the menu bar.
             .keyboardShortcut(".", modifiers: .command)
 
-            Button(state.preferences.inspectorVisible ? "Hide Settings" : "Show Settings") {
+            Button(state.preferences.inspectorVisible ? "Hide Inspector" : "Show Inspector") {
                 state.toggleInspector()
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
+
+            // Its own shortcut, so the panel is reachable without going through
+            // Settings and clicking across.
+            Button("Files") { state.toggleInspector(showing: .files) }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
 
             Divider()
 
