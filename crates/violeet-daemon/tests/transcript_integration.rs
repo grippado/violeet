@@ -289,18 +289,40 @@ fn the_final_lines_are_read_before_the_watch_is_dropped() {
 /// closes it immediately. Both lines are the shape found under
 /// `~/.claude/projects`, which is why the session ends up with nothing in flight
 /// while the agent runs.
-fn agent_launch(msg_id: &str, tool_id: &str, agent_id: &str) -> String {
+///
+/// **Timestamped relative to now, and that is not cosmetic.** The count applies
+/// an age limit against wall clock, so a launch pinned to a literal date is an
+/// abandoned launch the day after it is written, and this test would have started
+/// failing on its own. `minutes_ago` is what each case is actually about.
+fn agent_launch_aged(msg_id: &str, tool_id: &str, agent_id: &str, minutes_ago: i64) -> String {
+    let at = (chrono::Utc::now() - chrono::Duration::minutes(minutes_ago)).to_rfc3339();
     format!(
-        r#"{{"type":"assistant","uuid":"u","sessionId":"s","timestamp":"2026-08-08T10:00:00Z","message":{{"id":"{msg_id}","model":"claude-opus-5","content":[{{"type":"tool_use","id":"{tool_id}","name":"Agent","input":{{"subagent_type":"code-reviewer"}}}}],"usage":{{"input_tokens":10,"output_tokens":5}}}}}}
-{{"type":"user","uuid":"u2","sessionId":"s","timestamp":"2026-08-08T10:00:01Z","message":{{"role":"user","content":[{{"tool_use_id":"{tool_id}","type":"tool_result","content":"Async agent launched successfully."}}]}},"toolUseResult":{{"isAsync":true,"status":"async_launched","agentId":"{agent_id}"}}}}
+        r#"{{"type":"assistant","uuid":"u","sessionId":"s","timestamp":"{at}","message":{{"id":"{msg_id}","model":"claude-opus-5","content":[{{"type":"tool_use","id":"{tool_id}","name":"Agent","input":{{"subagent_type":"code-reviewer"}}}}],"usage":{{"input_tokens":10,"output_tokens":5}}}}}}
+{{"type":"user","uuid":"u2","sessionId":"s","timestamp":"{at}","message":{{"role":"user","content":[{{"tool_use_id":"{tool_id}","type":"tool_result","content":"Async agent launched successfully."}}]}},"toolUseResult":{{"isAsync":true,"status":"async_launched","agentId":"{agent_id}"}}}}
 "#
     )
 }
 
-/// The agent reporting in, hours later.
+/// A launch that happened a moment ago: the ordinary case.
+fn agent_launch(msg_id: &str, tool_id: &str, agent_id: &str) -> String {
+    agent_launch_aged(msg_id, tool_id, agent_id, 0)
+}
+
+/// The agent reporting in.
 fn agent_notification(tool_id: &str, agent_id: &str) -> String {
+    let at = chrono::Utc::now().to_rfc3339();
     format!(
-        r#"{{"type":"user","uuid":"u3","sessionId":"s","timestamp":"2026-08-08T10:30:00Z","message":{{"role":"user","content":"<task-notification>\n<task-id>{agent_id}</task-id>\n<tool-use-id>{tool_id}</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>"}}}}
+        r#"{{"type":"user","uuid":"u3","sessionId":"s","timestamp":"{at}","message":{{"role":"user","content":"<task-notification>\n<task-id>{agent_id}</task-id>\n<tool-use-id>{tool_id}</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>"}}}}
+"#
+    )
+}
+
+/// The same notification, delivered as a queued command on an `attachment` line.
+/// 130 of 358 deliveries measured on the reference corpus arrive this way.
+fn agent_notification_as_attachment(tool_id: &str, agent_id: &str) -> String {
+    let at = chrono::Utc::now().to_rfc3339();
+    format!(
+        r#"{{"type":"attachment","uuid":"u4","sessionId":"s","timestamp":"{at}","attachment":{{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>{agent_id}</task-id>\n<tool-use-id>{tool_id}</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>\n</task-notification>"}}}}
 "#
     )
 }
@@ -400,6 +422,91 @@ fn a_session_with_no_agents_publishes_zero_and_not_silence() {
         eventually(|| pending_agents(&hub, "s-zero") == Some(Some(0))),
         "a read with no agents is a positive zero, got {:?}",
         pending_agents(&hub, "s-zero")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The delivery the reader could not see. 130 of 358 notifications on the
+/// reference corpus arrive on an `attachment` line, and before this branch every
+/// one of them left its wait open until the age limit expired it.
+#[test]
+fn a_notification_delivered_as_an_attachment_clears_the_count() {
+    let path = temp("pending-agents-attachment");
+    let hub = hub_with_session("s-attach");
+    transcript::follow(&hub, "s-attach", &path);
+
+    append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
+    assert!(
+        eventually(|| pending_agents(&hub, "s-attach") == Some(Some(1))),
+        "the launch never landed: {:?}",
+        pending_agents(&hub, "s-attach")
+    );
+
+    append(
+        &path,
+        &agent_notification_as_attachment("toolu_a", "agent_a"),
+    );
+    assert!(
+        eventually(|| pending_agents(&hub, "s-attach") == Some(Some(0))),
+        "a notification is a notification whichever line carries it: {:?}",
+        pending_agents(&hub, "s-attach")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The backstop, end to end. An agent launched three quarters of an hour ago that
+/// never reported is not counted — and the point is what that buys: the card's
+/// error is bounded in time instead of lasting as long as the session does.
+#[test]
+fn an_agent_that_never_reported_stops_being_counted_once_it_is_too_old() {
+    let path = temp("pending-agents-abandoned");
+    let hub = hub_with_session("s-old");
+    transcript::follow(&hub, "s-old", &path);
+
+    // Two launches, one recent and one abandoned 45 minutes ago.
+    append(
+        &path,
+        &agent_launch_aged("m1", "toolu_old", "agent_old", 45),
+    );
+    append(&path, &agent_launch_aged("m2", "toolu_new", "agent_new", 1));
+
+    assert!(
+        eventually(|| pending_agents(&hub, "s-old") == Some(Some(1))),
+        "expected only the recent launch to count, got {:?}",
+        pending_agents(&hub, "s-old")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The second of the three ways a wait ends: the session goes away.
+///
+/// `forget_transcript` is the `SessionEnd` path. Whatever is still open on the
+/// last line belongs to a session that no longer exists, so the count is closed
+/// rather than left on a card that will keep saying "1 agent running" for as long
+/// as it is on screen.
+#[test]
+fn a_session_that_ends_stops_waiting_on_whatever_was_still_out() {
+    let path = temp("pending-agents-sessionend");
+    let hub = hub_with_session("s-end");
+    transcript::follow(&hub, "s-end", &path);
+
+    append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
+    assert!(
+        eventually(|| pending_agents(&hub, "s-end") == Some(Some(1))),
+        "the launch never landed: {:?}",
+        pending_agents(&hub, "s-end")
+    );
+
+    // No notification ever arrives. The session simply ends.
+    hub.forget_transcript("s-end");
+
+    assert_eq!(
+        pending_agents(&hub, "s-end"),
+        Some(Some(0)),
+        "a session that is gone is waiting on nothing"
     );
 
     let _ = std::fs::remove_file(&path);
