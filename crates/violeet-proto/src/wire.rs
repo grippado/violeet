@@ -202,6 +202,89 @@ pub struct SessionUpdated {
     /// and the panel would simply stop updating with nothing to explain why.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_truncated: Patch<bool>,
+
+    /// The session's last message ends by asking the user something.
+    ///
+    /// Three states and not two, which is why this is a [`Patch`] like every
+    /// other field here and not an `Option`: absent means *unchanged*,
+    /// including "this daemon never looked"; an explicit `null` means *the
+    /// session is no longer asking*, which is how a client learns to close the
+    /// panel; an object means it is asking now. Collapsing the first two would
+    /// make "I do not know" indistinguishable from "I know it is not asking".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub answer_request: Patch<AnswerRequest>,
+    /// How many background agents this session is waiting on.
+    ///
+    /// **Derived on every read, never counted up**: recomputed from the
+    /// transcript as `Task` tool uses with no matching result yet. There is no
+    /// increment, so there is nothing to leak — a `SubagentStop` that never
+    /// arrives costs one stale reading instead of lying until the session ends.
+    ///
+    /// `0` is a positive claim that the session is waiting on none, and is not
+    /// the same as absent or `null`. That distinction is the whole point of the
+    /// type: a client asking "does a human need to look at this" reads
+    /// `state == "idle" && pending_agents == Some(Some(0))`, and a fabricated
+    /// zero would answer yes for a session that is busy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_agents: Patch<u32>,
+}
+
+/// The cap on `answer_request.question`, in bytes.
+///
+/// The cap belongs to the contract rather than to whoever applies it: a
+/// receiver needs the same number to know that `question_truncated` is telling
+/// the truth about a length it can check.
+///
+/// Measured, not picked. A line over 1 MiB is dropped whole by the rule in
+/// *Envelope*, so an uncapped question would not arrive cut — the whole
+/// `session_updated` would not arrive, silently. Over 618 human stop points on
+/// the reference corpus the asking message had a median of 1.6 KB, a p95 of
+/// 3.3 KB and a maximum of 6.8 KB, so this sits roughly nineteen times above
+/// the largest one observed and about eight times below the line limit with an
+/// excerpt attached.
+pub const MAX_QUESTION_BYTES: usize = 128 * 1024;
+
+/// The session stopped having *asked*, rather than having finished.
+///
+/// `state: "idle"` cannot tell those apart, because the hook that fires at the
+/// end of a turn is the same one either way. This carries the difference.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnswerRequest {
+    /// Which rule fired: `question_mark` | `lexicon`.
+    ///
+    /// A `String` and not an enum, for the same reason `state` and
+    /// `title_source` are: it is display and telemetry only, **clients must not
+    /// re-derive it**, and a signal name added later must not turn into a
+    /// decode failure on the receiving side.
+    pub signal: String,
+    /// The asking message, whole, up to [`MAX_QUESTION_BYTES`].
+    pub question: String,
+    /// The conversation leading to it, oldest first, already cut to the
+    /// daemon's budget. The daemon cuts and not the app: the feature's
+    /// disclosure claim is that what the user is shown and what was sent are
+    /// the same string, which needs one cut in one place.
+    pub context: Vec<AnswerContextMessage>,
+    /// The excerpt does not cover the whole conversation.
+    ///
+    /// Separate from `question_truncated` because the two are different facts:
+    /// this one means the reader is seeing less of the conversation than
+    /// happened. Same discipline as `files_partial` beside `files_truncated`.
+    pub context_truncated: bool,
+    /// The asking message itself was cut at [`MAX_QUESTION_BYTES`].
+    ///
+    /// This one means the reader is seeing less of *the question they are being
+    /// asked*, which fails differently: a client that knows only "something was
+    /// truncated" can say so but cannot say what, and a warning that cannot
+    /// name its subject gets ignored.
+    pub question_truncated: bool,
+}
+
+/// One message of an [`AnswerRequest`] excerpt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnswerContextMessage {
+    /// `user` | `assistant`, as the transcript spells it.
+    pub role: String,
+    pub text: String,
 }
 
 /// One file a session wrote, and by how much.
@@ -260,6 +343,8 @@ impl SessionUpdated {
             && self.files.is_none()
             && self.files_partial.is_none()
             && self.files_truncated.is_none()
+            && self.answer_request.is_none()
+            && self.pending_agents.is_none()
     }
 }
 
@@ -593,6 +678,191 @@ mod tests {
             "collapsing these means the sidebar can only infer quietness from \
              the absence of messages, which the protocol forbids"
         );
+    }
+
+    // ---- answer_request and pending_agents (document revision 7) ---------
+
+    fn asking() -> AnswerRequest {
+        AnswerRequest {
+            signal: "question_mark".into(),
+            question: "Achei dois caminhos para o corte de contexto. Sigo pelo primeiro?".into(),
+            context: vec![
+                AnswerContextMessage {
+                    role: "user".into(),
+                    text: "compara as duas rotas".into(),
+                },
+                AnswerContextMessage {
+                    role: "assistant".into(),
+                    text: "A primeira lê do fim do arquivo…".into(),
+                },
+            ],
+            context_truncated: true,
+            question_truncated: false,
+        }
+    }
+
+    /// Read a patch field back the way a receiver must: three outcomes, not two.
+    ///
+    /// This is the Rust half of what `Patch.decode` does in the Swift decoder,
+    /// and it exists so the round-trip test below asserts on the *distinction*
+    /// rather than on the shape of the JSON. `SessionUpdated` itself is
+    /// serialize-only, so this is where "the receiver got all three" is checked.
+    fn read_patch<T: for<'de> Deserialize<'de>>(j: &serde_json::Value, key: &str) -> Patch<T> {
+        match j.get(key) {
+            None => None,
+            Some(serde_json::Value::Null) => Some(None),
+            Some(v) => Some(Some(
+                serde_json::from_value(v.clone()).expect("field decodes"),
+            )),
+        }
+    }
+
+    /// Absent, `null` and an object are three different messages about asking,
+    /// and they survive the trip in both directions.
+    ///
+    /// Absent is *unchanged*, including "this daemon never looked". `null` is
+    /// *no longer asking*, which is the only thing that tells a panel to close.
+    /// An object is asking now. Collapse the first two and a client cannot tell
+    /// "I do not know" from "I know it is not asking".
+    #[test]
+    fn answer_request_round_trips_absent_null_and_object_as_three_states() {
+        // Absent: the field must not appear on the wire at all.
+        let unchanged = SessionUpdated::new("s1", now());
+        let j = json_of(&DaemonToApp::SessionUpdated(unchanged));
+        assert!(
+            j.get("answer_request").is_none(),
+            "unchanged must be absent, not null — null means the session stopped asking"
+        );
+        assert_eq!(read_patch::<AnswerRequest>(&j, "answer_request"), None);
+
+        // Explicit null: the session is no longer asking.
+        let mut cleared = SessionUpdated::new("s1", now());
+        cleared.answer_request = Some(None);
+        let j = json_of(&DaemonToApp::SessionUpdated(cleared));
+        assert!(j["answer_request"].is_null());
+        assert_eq!(
+            read_patch::<AnswerRequest>(&j, "answer_request"),
+            Some(None),
+            "an explicit null must read back as 'became unknown', not as absent"
+        );
+
+        // An object: asking now, field for field.
+        let mut patch = SessionUpdated::new("s1", now());
+        patch.answer_request = Some(Some(asking()));
+        let j = json_of(&DaemonToApp::SessionUpdated(patch));
+        assert_eq!(j["answer_request"]["signal"], "question_mark");
+        assert_eq!(j["answer_request"]["context"][0]["role"], "user");
+        assert_eq!(
+            read_patch::<AnswerRequest>(&j, "answer_request"),
+            Some(Some(asking())),
+            "the object must survive the wire unchanged, nesting included"
+        );
+    }
+
+    /// The two truncation flags are two different facts and move independently.
+    ///
+    /// A cut excerpt means the reader is seeing less of the conversation than
+    /// happened; a cut question means they are seeing less of the question they
+    /// are being asked. A client that can only say "something was truncated"
+    /// cannot name its subject, and a warning that cannot do that gets ignored.
+    #[test]
+    fn the_two_truncation_flags_are_independent() {
+        for (context_truncated, question_truncated) in [(true, false), (false, true)] {
+            let mut patch = SessionUpdated::new("s1", now());
+            patch.answer_request = Some(Some(AnswerRequest {
+                context_truncated,
+                question_truncated,
+                ..asking()
+            }));
+
+            let j = json_of(&DaemonToApp::SessionUpdated(patch));
+            assert_eq!(j["answer_request"]["context_truncated"], context_truncated);
+            assert_eq!(
+                j["answer_request"]["question_truncated"],
+                question_truncated
+            );
+
+            let back = read_patch::<AnswerRequest>(&j, "answer_request")
+                .flatten()
+                .expect("an object was sent");
+            assert_eq!(back.context_truncated, context_truncated);
+            assert_eq!(back.question_truncated, question_truncated);
+            assert_ne!(
+                back.context_truncated, back.question_truncated,
+                "one flag must never be readable as the other"
+            );
+        }
+    }
+
+    /// The cap is part of the contract, so the number is asserted here.
+    ///
+    /// Applying it is the producer's job; agreeing on it is not. A receiver that
+    /// wants to check `question_truncated` against a length needs the same
+    /// number, and a second copy of it is a second thing to drift.
+    #[test]
+    fn the_question_cap_is_128_kib() {
+        assert_eq!(MAX_QUESTION_BYTES, 131_072);
+    }
+
+    /// `pending_agents: 0` is a positive claim, not an absence.
+    ///
+    /// It says "waiting on none", which is one of the two halves of "your turn".
+    /// If zero serialized as absent, or read back as unknown, a session waiting
+    /// on four subagents and one waiting on nobody would look the same — which
+    /// is the measured failure this field exists for: 29.6% of stop points on
+    /// the reference corpus were not a person being handed the keyboard.
+    #[test]
+    fn pending_agents_zero_is_a_reading_and_not_an_absence() {
+        let mut patch = SessionUpdated::new("s1", now());
+        patch.pending_agents = Some(Some(0));
+        assert!(!patch.is_empty(), "a zero reading is worth broadcasting");
+
+        let j = json_of(&DaemonToApp::SessionUpdated(patch));
+        assert_eq!(j["pending_agents"], 0);
+        assert!(
+            !j["pending_agents"].is_null(),
+            "zero must not serialize as null — null means 'became unknown'"
+        );
+        assert!(
+            j.get("pending_agents").is_some(),
+            "zero must not be omitted"
+        );
+        assert_eq!(
+            read_patch::<u32>(&j, "pending_agents"),
+            Some(Some(0)),
+            "zero must read back as zero, distinct from absent and from null"
+        );
+
+        // And the two ways of saying nothing stay distinct from it.
+        let mut cleared = SessionUpdated::new("s1", now());
+        cleared.pending_agents = Some(None);
+        let j = json_of(&DaemonToApp::SessionUpdated(cleared));
+        assert_eq!(read_patch::<u32>(&j, "pending_agents"), Some(None));
+
+        let j = json_of(&DaemonToApp::SessionUpdated(SessionUpdated::new(
+            "s1",
+            now(),
+        )));
+        assert_eq!(read_patch::<u32>(&j, "pending_agents"), None);
+    }
+
+    /// A patch that says only "asking" must still be worth sending.
+    ///
+    /// `is_empty` gates the broadcast, so a field missing from it is a field
+    /// that silently never reaches a client.
+    #[test]
+    fn a_patch_carrying_only_revision_7_fields_is_not_empty() {
+        let mut only_asking = SessionUpdated::new("s1", now());
+        only_asking.answer_request = Some(Some(asking()));
+        assert!(!only_asking.is_empty());
+
+        let mut only_cleared = SessionUpdated::new("s1", now());
+        only_cleared.answer_request = Some(None);
+        assert!(!only_cleared.is_empty());
+
+        let mut only_agents = SessionUpdated::new("s1", now());
+        only_agents.pending_agents = Some(Some(2));
+        assert!(!only_agents.is_empty());
     }
 
     // ---- inbound ---------------------------------------------------------
