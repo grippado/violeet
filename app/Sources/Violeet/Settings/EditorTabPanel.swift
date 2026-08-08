@@ -290,14 +290,14 @@ struct EditorTabPanel: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up.forward.app")
-                        .appFont(.micro)
+                        .appFont(.caption)
                     Text("Open in")
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.down")
-                        .appFont(.micro)
+                        .appFont(.caption)
                         .foregroundStyle(.tertiary)
                 }
-                .appFont(.caption)
+                .appFont(.body)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
@@ -324,18 +324,28 @@ struct EditorTabPanel: View {
         action: @escaping () -> Void
     ) -> some View {
         QuietButton(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: symbol)
-                    .appFont(.micro)
+                    .appFont(.caption)
                 Text(title)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
             }
-            .appFont(.caption)
+            // A rung up from where these started.
+            //
+            // They were `caption`, which is the size this panel uses for values
+            // and hints, and these are not either of those: they are the things
+            // you came here to press. Still a step below the filename above
+            // them, so the heading stays the heading.
+            //
+            // Sized in rungs rather than points, so this follows the interface
+            // size in Settings. Somebody who set 14 because of their eyes gets
+            // 14 here too.
+            .appFont(.body)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
             .background(Self.buttonBackground)
             .contentShape(Rectangle())
         }
