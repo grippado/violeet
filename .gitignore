@@ -34,3 +34,7 @@ app/.swiftpm/
 /*.log
 /crates/**/*.log
 /app/**/*.log
+
+# Python
+__pycache__/
+*.pyc
