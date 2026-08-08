@@ -226,7 +226,7 @@ pub struct SessionUpdated {
     /// `state == "idle" && pending_agents == Some(Some(0))`, and a fabricated
     /// zero would answer yes for a session that is busy.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_agents: Patch<u32>,
+    pub pending_agents: Patch<u64>,
 }
 
 /// The cap on `answer_request.question`, in bytes.
@@ -828,7 +828,7 @@ mod tests {
             "zero must not be omitted"
         );
         assert_eq!(
-            read_patch::<u32>(&j, "pending_agents"),
+            read_patch::<u64>(&j, "pending_agents"),
             Some(Some(0)),
             "zero must read back as zero, distinct from absent and from null"
         );
@@ -837,13 +837,13 @@ mod tests {
         let mut cleared = SessionUpdated::new("s1", now());
         cleared.pending_agents = Some(None);
         let j = json_of(&DaemonToApp::SessionUpdated(cleared));
-        assert_eq!(read_patch::<u32>(&j, "pending_agents"), Some(None));
+        assert_eq!(read_patch::<u64>(&j, "pending_agents"), Some(None));
 
         let j = json_of(&DaemonToApp::SessionUpdated(SessionUpdated::new(
             "s1",
             now(),
         )));
-        assert_eq!(read_patch::<u32>(&j, "pending_agents"), None);
+        assert_eq!(read_patch::<u64>(&j, "pending_agents"), None);
     }
 
     /// A patch that says only "asking" must still be worth sending.

@@ -472,10 +472,20 @@ matrix that the 2026-07-31 revision spent effort *simplifying*, removing two
 unreachable states in the process. A fifth value would reopen that matrix and
 make one hook produce two different states depending on transcript context.
 A client that wants "does a human need to look at this" reads two fields and
-combines them, which it already does — the answer is
-`state == "idle" && pending_agents == 0 && answer_request != null` for "your
-turn", and `state == "idle" && pending_agents > 0` for "busy, but not
-computing".
+combines them, which it already does:
+
+| reading | means |
+|---|---|
+| `state == "idle"` and `pending_agents > 0` | busy, but not computing. Nobody needs to look. |
+| `state == "idle"` and `pending_agents == 0` and `answer_request` **is an object** | your turn, and there is a question to answer. |
+| `state == "idle"` and `pending_agents == 0` and `answer_request` is absent or `null` | stopped, with nothing asked. |
+
+**"Is an object" and not "is not null."** `answer_request` has three states, so
+`!= null` is also true when the field is *absent* — which means unchanged, and
+includes "this daemon never looked". A client testing for non-null would claim
+"your turn, here is the question" for a session it knows nothing about. The test
+is presence of the object, and this paragraph exists because the first draft of
+this section got it wrong.
 
 Added in document revision 7. An addition, so the wire `v` stays `1`.
 
