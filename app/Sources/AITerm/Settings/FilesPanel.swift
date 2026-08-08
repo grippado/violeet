@@ -50,11 +50,81 @@ struct FilesPanel: View {
                 header(for: session)
                 Divider()
                 body(for: list ?? SessionFileList())
+            } else if let tab = state.inspectedTab {
+                notASession(tab)
             } else {
                 hint("No session selected", detail: "Run an agent in a tab, then click its card.")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// What the panel says when the selected tab is not an agent.
+    ///
+    /// It names the tab rather than going blank, because "no files" and "this is
+    /// not a thing that has files" are different facts — the same distinction
+    /// the two empties below are built around, one level up. A blank panel here
+    /// would read as a session that wrote nothing.
+    ///
+    /// An editor tab knows which session sent it, and says so: it is the one
+    /// tab that can point back at a file list, and a dead end that knows the way
+    /// out should offer it.
+    @ViewBuilder
+    private func notASession(_ tab: TabModel) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let editing = tab.editing {
+                Text(editing.name)
+                    .appFont(.body, weight: .semibold)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(ProcessDirectory.abbreviated(editing.path))
+                    .appFont(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.head)
+                    .help(editing.path)
+
+                if let owner = editing.sessionID, let card = state.sessions[owner] {
+                    Divider().padding(.vertical, 4)
+                    QuietButton(action: { state.inspect(session: owner) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .appFont(.micro)
+                            Text("Files of \(state.displayTitle(for: card))")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .appFont(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .pointingHand()
+                    .help("Show what that session wrote.")
+                } else {
+                    Text("Opened from a session that has since ended.")
+                        .appFont(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
+                }
+            } else {
+                Text(state.name(for: tab).text)
+                    .appFont(.body, weight: .semibold)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(ProcessDirectory.abbreviated(tab.currentDirectory))
+                    .appFont(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.head)
+                    .help(tab.currentDirectory)
+                Text("No agent is running in this tab, so there are no files to list.")
+                    .appFont(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
     }
 
     // MARK: - Header

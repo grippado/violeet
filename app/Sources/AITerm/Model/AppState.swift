@@ -25,6 +25,12 @@ final class AppState: ObservableObject {
             // The tab you are looking at is the one whose name being a second
             // stale is worth a syscall to avoid.
             selectedTab?.session.pollNow()
+            // Switching tabs is a change of subject, so the Files panel stops
+            // being pinned to whatever card was clicked last. Without this the
+            // panel keeps showing one session's files while the window is
+            // plainly on something else — a list that outlives its subject
+            // reads as a list *about* the new one.
+            inspectedSessionID = nil
         }
     }
 
@@ -723,16 +729,31 @@ final class AppState: ObservableObject {
     /// looking at.
     @Published var inspectedSessionID: String?
 
-    /// The session the Files panel should show: the one clicked, or the
-    /// selected tab's, or the first in the list. Falling back rather than
-    /// showing nothing means opening the panel is never a dead end.
+    /// The session the Files panel should show: the one clicked, else the
+    /// selected tab's, else none.
+    ///
+    /// It used to fall back to the first session in the list, on the reasoning
+    /// that a panel showing nothing is a dead end. That was wrong, and worse
+    /// than a dead end: selecting a tab with no session left the panel showing
+    /// *some other* session's files, under a header naming that session, while
+    /// the window was plainly on something else. A file list is a claim about
+    /// whose files these are, and a claim that follows the wrong subject is not
+    /// a fallback — it is a wrong answer. Now it says which tab you are on
+    /// instead.
     var inspectedSession: SessionCard? {
         if let id = inspectedSessionID, let card = sessions[id] { return card }
         if let tabID = selectedTabID,
            let card = orderedSessions.first(where: { $0.tabID == tabID }) {
             return card
         }
-        return orderedSessions.first
+        return nil
+    }
+
+    /// The selected tab, when it is not an agent session — what the Files panel
+    /// names instead of a file list.
+    var inspectedTab: TabModel? {
+        guard inspectedSession == nil, let tabID = selectedTabID else { return nil }
+        return tabs.first { $0.tabID == tabID }
     }
 
     /// Fold a patch's file fields into the list we hold for that session.
