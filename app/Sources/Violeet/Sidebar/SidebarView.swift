@@ -433,19 +433,27 @@ private struct TabRow: View {
             // plain shell. See `FileIcons`; the same icon is on the panel row
             // and on an editor tab under a card, and this was the third place
             // that had to agree and did not.
-            if let editing = tab.editing {
-                let icon = FileIcons.icon(for: editing.name, isDirectory: false)
-                Image(systemName: icon.symbol)
-                    .appFont(.micro)
-                    .foregroundStyle(tab.hasExited
-                        ? AnyShapeStyle(.tertiary)
-                        : (icon.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary)))
-                    .frame(width: 5)
-            } else {
-                Circle()
-                    .fill(tab.hasExited ? Color.secondary.opacity(0.4) : Color.secondary)
-                    .frame(width: 5, height: 5)
+            // One column, wide enough for the larger of the two.
+            //
+            // The icon was given the dot's own 5pt, which it overflows: it
+            // spilled into the gap and sat against the name. Sizing the column
+            // for the icon and centring the dot inside it keeps the names
+            // aligned down the list whichever marker a row has.
+            Group {
+                if let editing = tab.editing {
+                    let icon = FileIcons.icon(for: editing.name, isDirectory: false)
+                    Image(systemName: icon.symbol)
+                        .appFont(.micro)
+                        .foregroundStyle(tab.hasExited
+                            ? AnyShapeStyle(.tertiary)
+                            : (icon.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary)))
+                } else {
+                    Circle()
+                        .fill(tab.hasExited ? Color.secondary.opacity(0.4) : Color.secondary)
+                        .frame(width: 5, height: 5)
+                }
             }
+            .frame(width: 13)
             EditableName(
                 name: name,
                 display: name.text,

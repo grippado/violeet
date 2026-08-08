@@ -43,10 +43,19 @@ struct EditorTabPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(editing.name)
-                .appFont(.body, weight: .semibold)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            HStack(spacing: 6) {
+                // The same icon the header, the tab and the panel row carry.
+                // The name was the last place in the chain still bare, and it
+                // is the largest rendering of it.
+                let icon = FileIcons.icon(for: editing.name, isDirectory: false)
+                Image(systemName: icon.symbol)
+                    .appFont(.caption)
+                    .foregroundStyle(icon.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
+                Text(editing.name)
+                    .appFont(.body, weight: .semibold)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Text(ProcessDirectory.abbreviated(editing.path))
                 .appFont(.caption)
                 .foregroundStyle(.secondary)
