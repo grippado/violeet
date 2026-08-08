@@ -499,11 +499,26 @@ hole the other two cover:
 1. **The task notification** closes the normal case.
 2. **`SessionEnd`** closes whatever is still open when the session goes away.
    Without it, a card left with an orphan launch lies for the rest of the session.
-3. **An age limit** is the backstop for launches that never report at all —
-   measured at 61 of 235 `Agent` launches (user interrupt, killed agent, session
-   ended mid-flight). Without it, one abandoned agent poisons the card forever,
-   and the self-correction the derivation promises never fires, because it depends
-   on a line that never arrives.
+3. **An age limit** is the backstop for launches that never report at all: user
+   interrupt, killed agent, session ended mid-flight. Measured at **25 of 283
+   launches never closed in their file, 9 of them countable** (the rest are the
+   keyless ones excluded above anyway). An earlier draft of this revision said
+   "61 of 235" — that figure came from a review estimate and did not survive
+   measurement; the decision is unchanged, only its magnitude.
+
+   The limit is **not** carried by a benefit it can demonstrate on this corpus:
+   with it and without it the corpus yields the same positives, because the two
+   fixes above are what clear the staleness. It stays because its case is the one
+   replay cannot show — a session that simply stops being written to — and
+   because without it one abandoned launch poisons the card until the session
+   ends, with the self-correction the derivation promises never firing, since it
+   waits on a line that never arrives.
+
+   Threshold: **1800s (30 min)**, chosen against the measured distribution of
+   launch-to-notification latency over 227 correlatable pairs — p50 157s, p95
+   1006s, p98 1563s, maximum 2543s (42 min). It sits above p98 with roughly 15%
+   headroom and gives up 4 pairs in 227 (1.8%). It is a choice **over** data, not
+   a datum: a longer-running agent than any yet observed would be cut off.
 
 `SubagentStop` is **not** in that list on purpose: it is a hook, and the whole
 point of deriving from the transcript is not to depend on hook delivery.
