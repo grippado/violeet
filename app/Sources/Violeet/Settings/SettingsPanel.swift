@@ -24,6 +24,7 @@
 // Every change applies as it is made, so there is no moment at which the screen
 // and the stored value disagree — which is the only thing a save button is for.
 
+import AppKit
 import SwiftUI
 
 struct SettingsPanel: View {
@@ -37,7 +38,7 @@ struct SettingsPanel: View {
     @State private var editingAnsi: Int?
 
     enum Section: String, CaseIterable, Identifiable {
-        case appearance, palette, font, cursor, window, terminal
+        case appearance, palette, font, cursor, window, terminal, editor
 
         var id: String { rawValue }
 
@@ -49,6 +50,7 @@ struct SettingsPanel: View {
             case .cursor: return "CURSOR"
             case .window: return "WINDOW"
             case .terminal: return "TERMINAL"
+            case .editor: return "EDITOR"
             }
         }
     }
@@ -106,6 +108,8 @@ struct SettingsPanel: View {
             return "\(opacity), \(Int(settings.window.interfaceFontSize)) pt"
         case .terminal:
             return "\(settings.behaviour.scrollbackLines / 1000)k lines"
+        case .editor:
+            return settings.editor.diffMode.label.lowercased()
         }
     }
 
@@ -118,60 +122,201 @@ struct SettingsPanel: View {
         case .cursor: cursorSection
         case .window: windowSection
         case .terminal: terminalSection
+        case .editor: editorSection
         }
     }
 
     // MARK: Appearance
 
+    /// The theme list, and the two ways into a text editor.
+    ///
+    /// # What was removed and why
+    ///
+    /// Three colour editors — background, text, cursor — used to sit under this
+    /// list and take more height than everything else in Settings combined.
+    /// They were also the wrong instrument. A palette is twenty colours judged
+    /// *against each other*, and three of them edited one at a time down a 280pt
+    /// column is the one way that judgement cannot be made. The file below shows
+    /// all twenty at once. See `ThemeFile`.
+    ///
+    /// The ANSI palette section is untouched: sixteen swatches in a grid is a
+    /// picker, not three round trips, and it is useful for changing exactly one
+    /// colour without opening anything.
     private var appearanceSection: some View {
         VStack(alignment: .leading, spacing: 9) {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(TerminalTheme.builtins, id: \.name) { theme in
                     themeRow(theme)
                 }
+                ForEach(state.themes.custom) { entry in
+                    customThemeRow(entry)
+                }
             }
 
-            ColorField(
-                label: "Background",
-                value: settings.appearance.background,
-                choices: themeChoices,
-                onChange: { color in editing { $0.appearance.background = color } },
-                onCommit: state.focusTerminal
-            )
-            ColorField(
-                label: "Text",
-                value: settings.appearance.foreground,
-                choices: themeChoices,
-                onChange: { color in editing { $0.appearance.foreground = color } },
-                onCommit: state.focusTerminal
-            )
-            ColorField(
-                label: "Cursor",
-                value: settings.appearance.cursorColor,
-                choices: themeChoices,
-                onChange: { color in editing { $0.appearance.cursorColor = color } },
-                onCommit: state.focusTerminal
-            )
+            if let error = state.themes.lastError {
+                themeErrorRow(error)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                themeAction("Edit current theme", symbol: "pencil") {
+                    openTheme(state.themes.fileForCurrentTheme())
+                }
+                themeAction("Create your own theme", symbol: "plus.square.on.square") {
+                    openTheme(state.themes.createTheme())
+                }
+                Text("Opens in your editor, in a new tab. Saving applies it straight away.")
+                    .appFont(.small)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 1)
+            }
         }
     }
 
+    /// Open a theme file in the editor, in a tab of its own.
+    ///
+    /// The same `openInEditor` the Files panel uses, so a theme opens with
+    /// whatever `$VISUAL` or `$EDITOR` says and lands beside the terminal it is
+    /// about — which is the point. Editing colours in a window that covers the
+    /// output you are matching them to is editing them blind.
+    private func openTheme(_ path: String?) {
+        guard let path else { return }
+        state.openInEditor(path: path, session: nil)
+        state.focusTerminal()
+    }
+
+    private func themeAction(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
+        QuietButton(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol).appFont(.caption)
+                Text(title).appFont(.caption)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.secondary.opacity(0.14))
+            )
+            .contentShape(Rectangle())
+        }
+    }
+
+    /// What is wrong with the file being edited.
+    ///
+    /// Stated here and not only in a log, because the reader is in an editor two
+    /// panes away and an error they cannot see is one they will discover by
+    /// wondering why saving did nothing. The colours on screen are untouched
+    /// while this shows: see `ThemeStore` on why a broken file is the normal
+    /// state of a file being edited.
+    private func themeErrorRow(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: "exclamationmark.triangle")
+                .appFont(.caption)
+            Text(message)
+                .appFont(.small)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color.orange.opacity(0.12)))
+    }
+
     private func themeRow(_ theme: TerminalTheme) -> some View {
-        let isSelected = settings.appearance.themeName == theme.name && settings.matchesNamedTheme
-        return QuietButton(action: {
+        // A built-in is selected only when no file is driving the colours: a
+        // custom theme copied out of Dracula has Dracula's palette on the day it
+        // is made, and ticking the built-in would say the file is not in use
+        // when it is.
+        let isSelected = settings.appearance.themeFile == nil
+            && settings.appearance.themeName == theme.name
+            && settings.matchesNamedTheme
+        return themeRowBody(name: theme.name, swatches: theme.ansi, isSelected: isSelected) {
             preferences.terminal.apply(theme: theme)
+            // The file stops being the source, so it stops being watched —
+            // otherwise saving it later would silently pull the terminal off the
+            // built-in the user just chose.
+            state.themes.stopWatching()
             editingAnsi = nil
             applyAndReturnFocus()
-        }) {
+        }
+    }
+
+    /// A theme from `~/.violeet/themes`.
+    ///
+    /// Listed beside the built-ins rather than in a section of its own. They are
+    /// the same kind of thing to the person choosing one, and the only asymmetry
+    /// — that these can be edited — is what the buttons below are for.
+    private func customThemeRow(_ entry: ThemeStore.Entry) -> some View {
+        let isSelected = settings.appearance.themeFile == entry.path
+        // Read from disk for the swatches, because the row is showing what the
+        // file says rather than what is in use. The alternative is a row that
+        // draws the current palette for every theme in the list.
+        let swatches = previewSwatches(for: entry, isSelected: isSelected)
+        return themeRowBody(name: entry.name, swatches: swatches, isSelected: isSelected) {
+            state.themes.apply(path: entry.path)
+            editingAnsi = nil
+            applyAndReturnFocus()
+        }
+        // Only a custom theme gets a menu. A built-in has no file to open, no
+        // folder to reveal and nothing to delete, so a menu on one would be
+        // three items that all decline — worse than no menu, because the reader
+        // has to open it to learn that.
+        .contextMenu {
+            Button("Edit") { openTheme(entry.path) }
+            Divider()
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([
+                    URL(fileURLWithPath: entry.path)
+                ])
+            }
+            Divider()
+            // No confirmation, because it goes to the Trash rather than away.
+            // A sheet here would take key status from the terminal, which this
+            // panel refuses to do for anything. See `ThemeStore.deleteTheme`.
+            Button("Move to Trash") { state.themes.deleteTheme(entry) }
+        }
+    }
+
+    private func previewSwatches(for entry: ThemeStore.Entry, isSelected: Bool) -> [RGB] {
+        if isSelected { return settings.appearance.ansi }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: entry.path)),
+              case .success(let theme) = ThemeFile.parse(data, fallbackName: entry.name)
+        else {
+            // A theme that will not parse still gets a row, because the row is
+            // how you get back to it after fixing it. It simply has nothing to
+            // preview.
+            return []
+        }
+        return theme.ansi
+    }
+
+    private func themeRowBody(
+        name: String,
+        swatches: [RGB],
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        QuietButton(action: action) {
             HStack(spacing: 7) {
                 HStack(spacing: 1) {
-                    ForEach(Array(theme.ansi.prefix(8).enumerated()), id: \.offset) { _, color in
+                    ForEach(Array(swatches.prefix(8).enumerated()), id: \.offset) { _, color in
                         Rectangle()
                             .fill(Color(nsColor: color.nsColor))
                             .frame(width: 5, height: 13)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 2))
-                Text(theme.name).appFont(.caption)
+                // Held at the width eight swatches occupy, so a theme with no
+                // preview does not shunt its own name left out of the column.
+                .frame(width: 47, alignment: .leading)
+                Text(name)
+                    .appFont(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer(minLength: 0)
                 if isSelected {
                     Image(systemName: "checkmark").appFont(.small, weight: .bold)
@@ -434,6 +579,117 @@ struct SettingsPanel: View {
         }
     }
 
+    // MARK: Editor
+
+    /// What happens in the tab the Files panel opens.
+    ///
+    /// Its own section rather than two more rows under TERMINAL, because these
+    /// configure a program this app launches and everything there configures
+    /// the terminal this app draws.
+    private var editorSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingRow(
+                label: "Diff",
+                hint: "\(settings.editor.diffMode.detail) Only vim and Neovim; a new file opens plain either way, having nothing to compare against."
+            ) {
+                QuietMenu(
+                    title: "Diff",
+                    options: TerminalSettings.EditorSettings.DiffMode.allCases.map(\.label),
+                    selection: settings.editor.diffMode.label,
+                    onSelect: { label in
+                        guard let mode = TerminalSettings.EditorSettings.DiffMode.allCases
+                            .first(where: { $0.label == label }) else { return }
+                        editing { $0.editor.diffMode = mode }
+                    },
+                    onCommit: state.focusTerminal
+                )
+            }
+            SettingRow(
+                label: "Open with",
+                hint: "Applications offered when a file is open. Choose one and the panel shows a button naming it; choose several and it shows a menu. With none chosen it asks the system, which is what it did before."
+            ) {
+                EmptyView()
+            }
+            openWithList
+
+            SettingRow(
+                label: "Minimap",
+                hint: "Needs a minimap plugin in your Neovim config — mini.map. Violeet switches it on when it is there and stays quiet when it is not."
+            ) {
+                QuietToggle(
+                    isOn: settings.editor.showMinimap,
+                    onChange: { on in editing { $0.editor.showMinimap = on } },
+                    onCommit: state.focusTerminal
+                )
+            }
+        }
+    }
+
+    /// The applications to offer, as a list of toggles.
+    ///
+    /// Every candidate is an application this machine has, asked for rather
+    /// than guessed. See `ExternalApps.editorCandidates` for what counts as a
+    /// candidate and why the net is cast loosely.
+    ///
+    /// Chosen ones sort to the top and keep the order they were added in, which
+    /// is what decides the single-app button's label. Re-sorting them
+    /// alphabetically would move that label out from under somebody who had
+    /// just set it.
+    @ViewBuilder
+    private var openWithList: some View {
+        let chosen = settings.editor.openWith
+        let candidates = ExternalApps.editorCandidates()
+        let chosenFirst = ExternalApps.resolve(chosen).map(\.url.path)
+            + candidates.map(\.url.path).filter { !chosen.contains($0) }
+
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(chosenFirst, id: \.self) { path in
+                let name = FileManager.default.displayName(atPath: path)
+                    .replacingOccurrences(of: ".app", with: "")
+                let isOn = chosen.contains(path)
+                QuietButton(action: { toggleOpenWith(path) }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                            .appFont(.caption)
+                            .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
+                        Text(name)
+                            .appFont(.caption)
+                            .foregroundStyle(isOn ? Color.primary : Color.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                }
+            }
+
+            if candidates.isEmpty {
+                Text("No applications on this machine claim a text file.")
+                    .appFont(.small)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    /// Add or remove one application.
+    ///
+    /// Appended rather than inserted in list order, because the list the user
+    /// is building is theirs: the first one they tick is the one the button
+    /// names while there is only one.
+    private func toggleOpenWith(_ path: String) {
+        editing { settings in
+            if let index = settings.editor.openWith.firstIndex(of: path) {
+                settings.editor.openWith.remove(at: index)
+            } else {
+                settings.editor.openWith.append(path)
+            }
+        }
+        state.focusTerminal()
+    }
+
     /// Shells worth offering, filtered to the ones actually installed. A menu
     /// listing a shell this machine does not have is a menu with a broken entry.
     private static let shellChoices: [String] = {
@@ -479,14 +735,29 @@ struct SettingsPanel: View {
     /// One funnel, so no control can change a setting without pushing it to the
     /// terminals, and none can change one without returning focus.
     private func editing(_ change: (inout TerminalSettings) -> Void) {
+        let before = preferences.terminal.palette
+
         var next = preferences.terminal
         change(&next)
         preferences.terminal = next
+
         // A hand-edited colour stops claiming to be a preset: a theme row still
         // showing a tick after its colours changed asserts something about the
         // screen that is not true.
-        if !preferences.terminal.matchesNamedTheme {
+        //
+        // The test is whether *the palette moved*, and it used to be whether the
+        // palette still matched a built-in. Those are the same question only
+        // while every theme is a built-in. With themes in files they diverge and
+        // the old test was wrong in the worst direction: it is false for every
+        // custom theme, so changing the font size — a setting with no colour in
+        // it — threw away the theme's name and the path the app was watching,
+        // and the live-reload loop went quiet for no visible reason.
+        if preferences.terminal.palette != before {
             preferences.terminal.appearance.themeName = nil
+            // The colours are the user's now, not the file's. Left pointing at
+            // it, the next save would overwrite what they just did by hand.
+            preferences.terminal.appearance.themeFile = nil
+            state.themes.stopWatching()
         }
         applyAndReturnFocus()
     }

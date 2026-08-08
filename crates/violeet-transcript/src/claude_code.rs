@@ -211,11 +211,20 @@ fn tool_uses(content: Option<&Value>, at: Option<String>) -> Vec<ToolUse> {
             // A tool_use with no name is not a tool call we can show or
             // correlate; dropping it beats inventing a name for it.
             let name = o.get("name").and_then(Value::as_str)?.to_string();
+            // Decided here, with the untruncated input in hand. `summary` is
+            // cut to 80 characters and one line, so a redirect at the end of a
+            // long command would be gone by the time anyone downstream looked.
+            let writes_untracked = name == "Bash"
+                && o.get("input")
+                    .and_then(|i| i.get("command"))
+                    .and_then(Value::as_str)
+                    .is_some_and(command_may_write);
             Some(ToolUse {
                 id: string_at(o.get("id")),
                 summary: summarize_input(o.get("input")),
                 name,
                 at: at.clone(),
+                writes_untracked,
             })
         })
         .collect()
@@ -320,6 +329,72 @@ fn line_count(content: Option<&Value>) -> u64 {
 /// Prefers the fields that identify *what* the call is about, in the order a
 /// person would read them. Falls back to nothing rather than to a JSON blob:
 /// an unreadable summary is worse than no summary in a one-line sidebar row.
+/// Whether a shell command looks like it writes files.
+///
+/// # Why this exists
+///
+/// The file list is built from `Edit` and `Write` tool results, which carry the
+/// path they touched. A `Bash` that redirects into a file carries no path
+/// anywhere, so those edits are invisible — and the panel, seeing an empty
+/// list, used to say "nothing written yet". That is the one thing it must not
+/// say: *wrote nothing* and *we did not see what it wrote* are different facts,
+/// and the app already has a separate screen for the second. This is what tells
+/// it which one is true.
+///
+/// # Why a heuristic, and why not every `Bash`
+///
+/// Marking the list partial on *any* `Bash` is defensible — technically any
+/// command can write — and it is the wrong trade. Nearly every session runs a
+/// test or a `git status`, so the caveat would be permanently on, and a caveat
+/// that is always on is one nobody reads. Narrowing it to commands that look
+/// like they write keeps the warning meaning something on the sessions where it
+/// appears.
+///
+/// It errs in both directions and that is understood: `awk '$1 > 2'` trips it
+/// with no write, and a script whose name gives nothing away slips past. The
+/// costs are asymmetric, which is what makes the trade acceptable — a false
+/// positive is a caveat on a session that did not need one, a false negative is
+/// the state we are already in today.
+///
+/// Run on the **whole** command, before `summarize_input` truncates it to 80
+/// characters and one line. A redirect at the end of a long pipeline is exactly
+/// the case that matters, and it lives past the cut.
+fn command_may_write(command: &str) -> bool {
+    // `>` and `>>` cover redirection, including `2>` and `&>`. `<` is not here:
+    // reading from a file writes nothing.
+    if command.contains('>') {
+        return true;
+    }
+
+    // Programs whose job is to put bytes somewhere. Matched as whole words so
+    // `remove` does not match on `mv` and a path containing `cp` does not
+    // count.
+    const WRITERS: &[&str] = &[
+        "tee", "mv", "cp", "rm", "mkdir", "touch", "install", "rsync", "ln",
+        "dd", "truncate", "patch", "tar", "unzip", "curl", "wget",
+    ];
+
+    // `sed -i`, `perl -i` and friends edit in place; the same programs without
+    // the flag only print, so the flag is the whole signal.
+    if command.contains("-i") {
+        for editor in ["sed", "perl", "ruby"] {
+            if words(command).any(|w| w == editor) {
+                return true;
+            }
+        }
+    }
+
+    words(command).any(|w| WRITERS.contains(&w))
+}
+
+/// Split on shell punctuation as well as whitespace, so `foo|tee` and
+/// `(mkdir x)` are seen as the words they are rather than as one token.
+fn words(command: &str) -> impl Iterator<Item = &str> {
+    command
+        .split(|c: char| c.is_whitespace() || "|;&()`$\"'".contains(c))
+        .filter(|w| !w.is_empty())
+}
+
 fn summarize_input(input: Option<&Value>) -> Option<String> {
     let o = input?.as_object()?;
 
@@ -688,5 +763,110 @@ mod tests {
 
         let file = file_of(line).expect("there is a plus line");
         assert_eq!((file.added, file.removed), (1, 0));
+    }
+
+    // ---- shell writes ---------------------------------------------------
+
+    /// The command that exposed the bug, verbatim from the session that found
+    /// it: a hundred files appended to through a redirect, none of which could
+    /// ever reach the file list.
+    #[test]
+    fn the_command_that_found_this_bug_is_caught() {
+        let line = r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"while IFS= read -r f; do printf '\\n' >> \"$f\"; done < /tmp/list"}}]}}"#;
+        let events = reader().parse_line(line);
+        let tool = events
+            .iter()
+            .find_map(|e| match e {
+                TranscriptEvent::ToolUse(t) => Some(t),
+                _ => None,
+            })
+            .expect("a tool use");
+        assert!(tool.writes_untracked);
+    }
+
+    /// The redirect can sit past the 80-character cut that `summary` makes,
+    /// which is why the verdict is taken from the untruncated input.
+    #[test]
+    fn a_redirect_beyond_the_summary_cut_still_counts() {
+        let long = format!("echo {} > out.txt", "a".repeat(200));
+        assert!(command_may_write(&long));
+        assert!(truncate(&long, SUMMARY_MAX).chars().count() <= SUMMARY_MAX + 1);
+        assert!(!truncate(&long, SUMMARY_MAX).contains('>'), "the cut hides it");
+    }
+
+    /// The commands a session runs constantly. If these tripped it, the caveat
+    /// would be permanently on, and a caveat that is always on is one nobody
+    /// reads.
+    #[test]
+    fn ordinary_commands_do_not_count_as_writes() {
+        for command in [
+            "cargo test --all",
+            "git status --porcelain",
+            "ls -la",
+            "grep -rn foo src/",
+            "swift build",
+            "cat README.md",
+            "git diff HEAD",
+        ] {
+            assert!(!command_may_write(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn writing_commands_count() {
+        for command in [
+            "echo hi > file.txt",
+            "printf x >> log",
+            "cat a | tee b",
+            "mv old new",
+            "cp -r src dst",
+            "mkdir -p a/b",
+            "sed -i '' 's/a/b/' file",
+            "curl -o out.zip https://example.com",
+        ] {
+            assert!(command_may_write(command), "{command}");
+        }
+    }
+
+    /// Whole words only. A path that merely contains a writer's name is not a
+    /// call to it — this is what keeps `grep` over a directory called `cp/`
+    /// from marking the session.
+    #[test]
+    fn a_writers_name_inside_a_word_is_not_a_write() {
+        assert!(!command_may_write("grep -rn foo src/cpp/"));
+        assert!(!command_may_write("cargo test --lib remove_stale"));
+        assert!(!command_may_write("./scripts/movies.sh"));
+    }
+
+    /// `sed` without `-i` prints and writes nothing; the flag is the signal.
+    #[test]
+    fn sed_only_counts_in_place() {
+        assert!(!command_may_write("sed 's/a/b/' file"));
+        assert!(command_may_write("sed -i.bak 's/a/b/' file"));
+    }
+
+    /// Shell punctuation separates words, so a writer glued to a pipe is still
+    /// found.
+    #[test]
+    fn punctuation_separates_words() {
+        assert!(command_may_write("cat a|tee b"));
+        assert!(command_may_write("(mkdir x)"));
+        assert!(command_may_write("false; mv a b"));
+    }
+
+    /// Only `Bash` is judged. A `Write` reports its own path and belongs in the
+    /// list, so flagging it would caveat a session whose writes are all visible.
+    #[test]
+    fn only_bash_is_judged() {
+        let line = r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/a > b"}}]}}"#;
+        let tool = reader()
+            .parse_line(line)
+            .iter()
+            .find_map(|e| match e {
+                TranscriptEvent::ToolUse(t) => Some(t.clone()),
+                _ => None,
+            })
+            .expect("a tool use");
+        assert!(!tool.writes_untracked);
     }
 }

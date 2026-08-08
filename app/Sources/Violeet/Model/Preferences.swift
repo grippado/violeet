@@ -25,6 +25,7 @@ final class Preferences: ObservableObject {
         static let inspectorVisible = "inspector.visible"
         static let inspectorPanel = "inspector.panel"
         static let terminalSettings = "terminal.settings"
+        static let showHiddenFiles = "files.hidden.shown"
     }
 
     /// Bounds for the drag handle. The lower one is where the cwd column stops
@@ -149,6 +150,20 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(inspectorPanel.rawValue, forKey: Key.inspectorPanel) }
     }
 
+    /// Whether the directory tree shows dotfiles.
+    ///
+    /// Persisted, and deliberately not per-tab: this is a way of reading, not a
+    /// property of a directory. Someone who works in dotfiles wants them in
+    /// every tab, and having to press the eye again after each `cd` would make
+    /// the button a chore rather than a setting.
+    ///
+    /// Off by default, which is what `ls` does — a repo whose tree opens on
+    /// `.git` has spent its first screen on the one directory nobody clicked
+    /// for.
+    @Published var showHiddenFiles: Bool {
+        didSet { defaults.set(showHiddenFiles, forKey: Key.showHiddenFiles) }
+    }
+
     /// How the terminal looks and behaves. Global for every tab in v0 — see
     /// `TerminalSettings` for why, and for what keeps that cheap to revisit.
     ///
@@ -198,6 +213,8 @@ final class Preferences: ObservableObject {
         // stored choice still wins — this is the default, not an override.
         inspectorPanel = (defaults.string(forKey: Key.inspectorPanel))
             .flatMap(InspectorPanel.init(rawValue:)) ?? .files
+
+        showHiddenFiles = defaults.object(forKey: Key.showHiddenFiles) as? Bool ?? false
 
         let storedSettings = defaults.dictionary(forKey: Key.terminalSettings) ?? [:]
         unknownTerminalKeys = storedSettings

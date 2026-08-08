@@ -169,6 +169,97 @@ struct ThemeTests {
         #expect(!settings.matchesNamedTheme)
     }
 
+    /// Dracula is fixed by a published specification, which is why it looks the
+    /// same in fifty editors. Approximating it here would make this the one
+    /// place it does not.
+    @Test func dracula_matches_its_published_values() {
+        let dracula = try! #require(TerminalTheme.named("Dracula"))
+        #expect(dracula.background == RGB(0x28, 0x2A, 0x36))
+        #expect(dracula.foreground == RGB(0xF8, 0xF8, 0xF2))
+        #expect(dracula.ansi.count == 16)
+        #expect(dracula.ansi[1] == RGB(0xFF, 0x55, 0x55), "red")
+        #expect(dracula.ansi[2] == RGB(0x50, 0xFA, 0x7B), "green")
+        #expect(dracula.ansi[8] == RGB(0x62, 0x72, 0xA4), "brightBlack, its comment colour")
+    }
+
+    /// Every theme in the picker must be reachable by name, since that is how
+    /// the stored preference finds it again after a relaunch.
+    @Test func every_builtin_is_reachable_by_name() {
+        for theme in TerminalTheme.builtins {
+            #expect(TerminalTheme.named(theme.name) != nil, "\(theme.name)")
+        }
+    }
+
+    // MARK: - Palette identity
+
+    /// The question the panel actually needs answered, and the one it used to
+    /// get wrong by asking `matchesNamedTheme` instead.
+    ///
+    /// The two agree only while every theme is a built-in. A theme loaded from a
+    /// file never matches a built-in, so the old test was false for it always —
+    /// and changing the font size, a setting with no colour in it, would throw
+    /// away the theme's name and the file the app was watching.
+    @Test func the_palette_only_moves_when_a_colour_moves() {
+        var settings = TerminalSettings()
+        settings.apply(theme: TerminalTheme.builtins[0])
+        let before = settings.palette
+
+        settings.font.size = 20
+        settings.window.opacity = 0.8
+        settings.behaviour.scrollbackLines = 500
+        #expect(settings.palette == before, "no colour was touched")
+
+        settings.appearance.ansi[3] = RGB(0x12, 0x34, 0x56)
+        #expect(settings.palette != before)
+    }
+
+    /// All twenty, so a change to any one of them is caught.
+    @Test func the_palette_covers_every_colour_a_theme_sets() {
+        let settings = TerminalSettings()
+        #expect(settings.palette.count == 19, "background, foreground, cursor and sixteen ANSI")
+    }
+
+    // MARK: - Theme files
+
+    /// The path is what lets the app keep watching the file across a relaunch,
+    /// so it has to survive the round trip through preferences.
+    @Test func a_theme_file_path_is_remembered() {
+        var settings = TerminalSettings()
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("violeet-theme-test-\(UUID().uuidString).json")
+        try? Data("{}".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        settings.apply(theme: TerminalTheme.builtins[0], from: file.path)
+        #expect(settings.appearance.themeFile == file.path)
+
+        let restored = TerminalSettings(json: settings.json())
+        #expect(restored.appearance.themeFile == file.path)
+    }
+
+    /// A path that no longer resolves is dropped rather than restored. Kept, it
+    /// would leave the app watching nothing while the picker insists a custom
+    /// theme is selected — and a synced preferences file carries paths from
+    /// machines this one has never seen.
+    @Test func a_theme_file_that_is_gone_is_forgotten() {
+        var settings = TerminalSettings()
+        settings.apply(theme: TerminalTheme.builtins[0], from: "/nowhere/at/all/theme.json")
+
+        let restored = TerminalSettings(json: settings.json())
+        #expect(restored.appearance.themeFile == nil)
+        #expect(restored.appearance.background == settings.appearance.background,
+                "the colours are stored here too, so nothing on screen changes")
+    }
+
+    /// Choosing a built-in lets go of the file, so a later save to it cannot
+    /// silently pull the terminal back off the built-in.
+    @Test func applying_a_builtin_releases_the_file() {
+        var settings = TerminalSettings()
+        settings.apply(theme: TerminalTheme.builtins[0], from: "/tmp/whatever.json")
+        settings.apply(theme: TerminalTheme.builtins[1])
+        #expect(settings.appearance.themeFile == nil)
+    }
+
     @Test func the_default_theme_is_dark() {
         let settings = TerminalSettings()
         #expect(!settings.appearance.background.isLight)

@@ -105,4 +105,33 @@ struct SessionFileListTests {
     func emptyGroupsToNothing() {
         #expect(SessionFileList().grouped(homeDirectory: "/Users/nobody").isEmpty)
     }
+
+    // MARK: - Marks
+
+    /// Every row carries a letter. A blank used to mean "modified", which is a
+    /// fact the panel was leaving the reader to infer from the absence of
+    /// another one.
+    @Test("a file is added, updated or gone, and never blank")
+    func everyFileHasAMark() {
+        #expect(FileMark.of(change("/repo/new.rs", created: true), stillThere: true) == .added)
+        #expect(FileMark.of(change("/repo/old.rs", created: false), stillThere: true) == .updated)
+    }
+
+    /// Gone wins over created. A file the session made and then moved is, to a
+    /// reader about to click the row, gone — and that it was also once new is
+    /// history the row has no width for.
+    @Test("gone outranks the rest")
+    func goneWins() {
+        #expect(FileMark.of(change("/repo/new.rs", created: true), stillThere: false) == .gone)
+        #expect(FileMark.of(change("/repo/old.rs", created: false), stillThere: false) == .gone)
+    }
+
+    /// The letters are the whole signal for a reader who cannot separate the
+    /// colours, so no two may share one.
+    @Test("the three marks are distinguishable without colour")
+    func marksAreDistinct() {
+        let letters = [FileMark.added, .updated, .gone].map(\.rawValue)
+        #expect(Set(letters).count == 3)
+        #expect(letters == ["A", "U", "D"])
+    }
 }

@@ -101,12 +101,28 @@ struct ShellQuotingTests {
 
     /// The jump waits for hunks to exist, because the attach is asynchronous and
     /// gitsigns' own `GitSignsUpdate` fires once before they are computed.
+    ///
+    /// It then places the cursor from the hunk it was handed, rather than
+    /// asking gitsigns to navigate. `nav_hunk("first")` reads a cursor already
+    /// inside the first hunk as a reason to move to its far edge, and a new
+    /// file is one hunk covering every line — so `nav_hunk` opened a 114-line
+    /// new file on line 114. Measured before and after.
     @Test("a vim-family editor opens on the first uncommitted hunk")
     func jumpsToFirstHunk() {
         let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
-        #expect(command.contains("nav_hunk"))
+        #expect(command.contains("nvim_win_set_cursor"))
+        #expect(command.contains("h[1].added.start"), "the position comes from the hunk, not from a navigator")
+        #expect(!command.contains("nav_hunk"), "nav_hunk lands on the wrong end of a whole-file hunk")
         #expect(command.contains("get_hunks"), "it must wait for hunks, not fire blind")
         #expect(command.contains("pcall(require,\"gitsigns\")"), "a missing gitsigns must not raise")
+    }
+
+    /// A hunk that only deletes reports `added.start` as 0, meaning "after this
+    /// line". Passing it straight through is an invalid cursor position.
+    @Test("a pure deletion does not ask for line zero")
+    func deletionOnlyHunkClamps() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        #expect(command.contains("math.max(1,h[1].added.start)"))
     }
 
     /// The sign column marks *that* a line changed and never what it replaced.
@@ -120,22 +136,32 @@ struct ShellQuotingTests {
         #expect(command.contains("toggle_linehl"))
     }
 
-    /// Order matters and is invisible. Switching a display on makes gitsigns
-    /// recompute, and the hunk list is empty while it does — so toggling first
-    /// makes the jump report `No hunks` on a file with six of them. Measured
-    /// both ways on the same file.
-    @Test("the jump happens before the displays are switched on")
+    /// Order used to matter and was invisible. Switching a display on makes
+    /// gitsigns recompute, and the hunk list is empty while it does — so a
+    /// `nav_hunk` issued after the toggles reported `No hunks` on a file with
+    /// six of them. Measured both ways on the same file.
+    ///
+    /// The position now comes from `h`, a table read once before any toggle
+    /// runs, so a recompute underneath it cannot take the answer away. The
+    /// order is kept anyway — it costs nothing and the failure it prevented was
+    /// silent — but this test asserts the property that actually protects it
+    /// now, which is that the cursor never re-reads the hunk list.
+    @Test("the position is taken before the displays can disturb it")
     func jumpPrecedesTheDisplays() {
         let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
-        guard let jump = command.range(of: "nav_hunk"),
+        guard let jump = command.range(of: "nvim_win_set_cursor"),
               let firstToggle = command.range(of: "toggle_deleted")
         else {
-            Issue.record("the command no longer both jumps and toggles")
+            Issue.record("the command no longer both places the cursor and toggles")
             return
         }
         #expect(
             jump.lowerBound < firstToggle.lowerBound,
-            "a toggle before the jump empties the hunk list under it"
+            "the cursor is placed before anything can make gitsigns recompute"
+        )
+        #expect(
+            !command.contains("gs.get_hunks()") || command.range(of: "gs.get_hunks()")!.lowerBound < jump.lowerBound,
+            "the hunk list is read once, before the cursor is placed"
         )
     }
 
@@ -172,6 +198,87 @@ struct ShellQuotingTests {
         #expect(command.contains("nvim|nvim\\ *|vim|vim\\ *"))
         // The other branch exists and is plain.
         #expect(command.contains("exec $editor '/tmp/a.md'"))
+    }
+
+    // MARK: - Diff mode
+
+    /// The default is inline, and it is a decision rather than an accident: a
+    /// vertical split in an 80-column tab leaves 40 a side, and that is where a
+    /// terminal usually is.
+    @Test("the diff is inline unless the user said otherwise")
+    func inlineIsTheDefault() {
+        let command = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        #expect(command.contains("toggle_deleted"))
+        #expect(!command.contains("diffthis"))
+    }
+
+    /// Side by side is `diffthis` and nothing else. The inline displays would
+    /// be marking up one half of a window that is already showing both, and the
+    /// jump is redundant because vim's diff mode opens on the first change.
+    @Test("side by side splits, and does not also mark up the buffer")
+    func sideBySideIsOnlyTheSplit() {
+        let command = AppState.editorCommand(
+            forFileAt: "/tmp/a.md",
+            settings: TerminalSettings.EditorSettings(diffMode: .sideBySide)
+        )
+        #expect(command.contains("pcall(gs.diffthis)"))
+        #expect(!command.contains("nvim_win_set_cursor"), "the split already opens on the first change")
+        #expect(!command.contains("toggle_deleted"), "the other half is where the deleted lines are")
+        #expect(!command.contains("toggle_word_diff"))
+    }
+
+    /// Both modes wait the same way. The poll is the part that knows the attach
+    /// is asynchronous, and it does not become unnecessary because the payload
+    /// changed — a `diffthis` issued before the attach diffs against nothing.
+    @Test("both modes wait for the attach")
+    func bothModesPoll() {
+        for mode in TerminalSettings.EditorSettings.DiffMode.allCases {
+            let command = AppState.editorCommand(
+                forFileAt: "/tmp/a.md",
+                settings: TerminalSettings.EditorSettings(diffMode: mode)
+            )
+            #expect(command.contains("get_hunks"), "\(mode.label) must wait for hunks")
+            #expect(command.contains("t<20"), "\(mode.label) must give up rather than stay armed")
+        }
+    }
+
+    // MARK: - Minimap
+
+    /// Detected, never installed. A terminal that edits your Neovim config to
+    /// draw a sidebar has overstepped — the same surface ADR-003 declined for
+    /// tab binding.
+    @Test("the minimap is asked for, never required")
+    func minimapIsOptional() {
+        let off = AppState.editorCommand(forFileAt: "/tmp/a.md")
+        #expect(!off.contains("mini.map"), "off by default")
+
+        let on = AppState.editorCommand(
+            forFileAt: "/tmp/a.md",
+            settings: TerminalSettings.EditorSettings(showMinimap: true)
+        )
+        #expect(on.contains("pcall(require,\"mini.map\")"), "a missing plugin must not raise")
+        #expect(on.contains("pcall(mm.open)"))
+    }
+
+    /// The map is not part of the diff. It is drawn from the buffer, so it
+    /// belongs to opening the file and not to finding a hunk — a clean file
+    /// with the setting on still gets one.
+    @Test("the minimap does not depend on there being a diff")
+    func minimapIsIndependentOfHunks() {
+        let command = AppState.editorCommand(
+            forFileAt: "/tmp/a.md",
+            settings: TerminalSettings.EditorSettings(showMinimap: true)
+        )
+        guard let poll = command.range(of: "if t<20"),
+              let map = command.range(of: "mini.map")
+        else {
+            Issue.record("the command no longer both polls and opens a map")
+            return
+        }
+        #expect(
+            poll.upperBound < map.lowerBound,
+            "the map must sit outside the hunk poll, not inside its success branch"
+        )
     }
 
     /// The property the whole thing rests on: whatever the path is, the result

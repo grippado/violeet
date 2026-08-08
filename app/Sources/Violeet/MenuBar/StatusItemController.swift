@@ -92,6 +92,39 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         state.sessions.values.count { $0.lifecycle == .waitingForYou }
     }
 
+    /// The Violeeter mark, sized for the menu bar. Loaded once.
+    ///
+    /// A PDF and not a PNG: `NSImage` scales vector art without resampling, so
+    /// one file is right on every display instead of an @1x/@2x/@3x set that is
+    /// still soft on the next one. The size below is in **points** — setting it
+    /// is what makes the vector render at menu bar height rather than at the
+    /// 858×992 the artboard happens to be.
+    ///
+    /// 16pt tall, which is what the system's own menu bar symbols occupy inside
+    /// a 22pt bar. The width follows the artwork's proportion rather than being
+    /// chosen, so the glyph cannot be subtly stretched.
+    ///
+    /// `isTemplate` is the whole reason this works in both appearances: macOS
+    /// throws the colour away and redraws the shape in whatever the bar needs,
+    /// including the inverted state while the menu is open. Artwork that
+    /// carried its own colour would be a white mark on a white bar in light
+    /// mode.
+    ///
+    /// `nil` when the bundle has no artwork — a dev build run straight from
+    /// `swift run` has no `Contents/Resources`. The caller falls back to the
+    /// old symbol rather than showing nothing.
+    private static let markImage: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "violeet-menubar", withExtension: "pdf"),
+              let image = NSImage(contentsOf: url)
+        else { return nil }
+
+        let height: CGFloat = 16
+        let aspect = image.size.width / max(image.size.height, 1)
+        image.size = NSSize(width: (height * aspect).rounded(), height: height)
+        image.isTemplate = true
+        return image
+    }()
+
     private func refreshIcon(force: Bool = false) {
         let waiting = waitingCount
         guard force || waiting != renderedAttention else { return }
@@ -99,15 +132,26 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         guard let button = statusItem.button else { return }
 
-        // Two channels, not one. The glyph changes shape (outline → filled) and
-        // the tint changes colour, so the state survives both a monochrome menu
-        // bar and a user who cannot distinguish the amber.
-        let symbol = waiting > 0 ? "terminal.fill" : "terminal"
         let description = waiting > 0
             ? "violeet — \(waiting) waiting for you"
             : "violeet"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
-        image?.isTemplate = true
+
+        // The mark, not a stock terminal glyph. `terminal` is the symbol every
+        // terminal in the menu bar uses, which made this one unfindable in a
+        // row of them — an icon whose job is to be spotted while the app is not
+        // in front cannot be the same shape as its neighbours.
+        //
+        // Two channels are still two channels. They used to be shape
+        // (outline → filled) and tint; they are now the count and the tint.
+        // That is a straight upgrade rather than a concession: "something is
+        // waiting" and "four things are waiting" are different decisions about
+        // whether to switch apps now, and a digit says which without relying on
+        // the amber being distinguishable.
+        let image = Self.markImage ?? NSImage(
+            systemSymbolName: "terminal",
+            accessibilityDescription: description
+        )
+        image?.accessibilityDescription = description
         button.image = image
         button.imagePosition = waiting > 0 ? .imageLeading : .imageOnly
         // The count, because "something is waiting" and "four things are
@@ -277,9 +321,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func selectTab(_ sender: NSMenuItem) {
         guard let tabID = sender.representedObject as? String else { return }
-        state.selectedTabID = tabID
+        state.select(tab: tabID)
         bringForward()
-        state.focusTerminal()
     }
 
     @objc private func openApp() {

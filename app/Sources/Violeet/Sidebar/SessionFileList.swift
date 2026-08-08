@@ -41,6 +41,38 @@ struct SessionFileList: Equatable {
     var isQualified: Bool { isPartial == true || isTruncated == true }
 }
 
+/// What happened to a file, as the one letter a row has room for.
+///
+/// A letter and not only a colour: the same two-channel rule the menu bar icon
+/// follows, for the same reader. Someone who cannot tell the green from the red
+/// still reads `A`, `U` and `D`.
+///
+/// # `D` is the one that can mislead
+///
+/// The daemon reports `created`; it does not report deletion, and nothing here
+/// watches for it. `D` is derived from the file not being at the path the
+/// session wrote — which covers a delete, and equally covers a rename, a
+/// `git mv`, or a directory renamed above it. The letter is short and the
+/// tooltip is not: the row says the whole sentence on hover. Calling it `D`
+/// anyway because "gone from here" is what the reader needs to know before they
+/// click, and the three cases are indistinguishable from this side.
+enum FileMark: String, Equatable {
+    /// The session created it.
+    case added = "A"
+    /// It existed, and the session wrote to it.
+    case updated = "U"
+    /// It is not at that path any more.
+    case gone = "D"
+
+    /// Gone wins over both others, including over `added`: a file the session
+    /// created and then moved is, to a reader about to click the row, gone.
+    /// Which it also once was is history the row has no width for.
+    static func of(_ change: FileChange, stillThere: Bool) -> FileMark {
+        guard stillThere else { return .gone }
+        return change.created ? .added : .updated
+    }
+}
+
 /// A group of files sharing a root, which is how the tree is drawn.
 ///
 /// Grouping by root rather than showing absolute paths is what keeps notes in
