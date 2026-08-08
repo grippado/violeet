@@ -58,6 +58,27 @@ final class TabModel: ObservableObject, Identifiable {
     /// opening and the first poll, and whenever the kernel declines.
     @Published private(set) var foregroundProcess: String?
 
+    /// Which folders the Files panel has open in this tab's directory tree.
+    ///
+    /// Held on the tab and not in the view, because the view dies. Clicking a
+    /// file opens an editor tab, the panel switches to that tab, and coming
+    /// back rebuilt the tree with every folder shut — so reading three files
+    /// out of one folder meant opening it three times.
+    ///
+    /// It is a property of how this tab is being *read*, which outlives a
+    /// glance at something else. Cleared on `cd`, where the paths stop meaning
+    /// anything.
+    @Published private(set) var expandedFolders: Set<String> = []
+
+    /// Open a folder, or shut it.
+    func toggleFolder(_ path: String) {
+        if expandedFolders.contains(path) {
+            expandedFolders.remove(path)
+        } else {
+            expandedFolders.insert(path)
+        }
+    }
+
     /// A name the user typed for **this tab**, when no agent session owns it.
     ///
     /// A session-backed tab keeps its manual name in the daemon instead, which
@@ -94,6 +115,9 @@ final class TabModel: ObservableObject, Identifiable {
 
         session.onDirectoryChange = { [weak self] path in
             self?.currentDirectory = path
+            // The open folders belonged to the directory that was. Keeping them
+            // would mean carrying paths that are no longer under the root.
+            self?.expandedFolders.removeAll()
         }
         session.onTitleChange = { [weak self] title in
             guard let self else { return }
@@ -131,6 +155,14 @@ final class TabModel: ObservableObject, Identifiable {
         session.terminate()
     }
 
+    /// Ask this tab's editor to quit cleanly, so it does not leave a swap file
+    /// behind. Only meaningful for a tab the Files panel opened — see
+    /// `TerminalSession.askEditorToQuit`.
+    func askEditorToQuit() {
+        guard editing != nil else { return }
+        session.askEditorToQuit()
+    }
+
     // MARK: - Naming
 
     /// Everything that could name this tab, for `SessionName.resolve`.
@@ -146,7 +178,8 @@ final class TabModel: ObservableObject, Identifiable {
             foregroundProcess: foregroundProcess,
             oscTitle: terminalTitle,
             oscProcess: terminalTitleProcess,
-            cwd: currentDirectory
+            cwd: currentDirectory,
+            editingFile: editing?.name
         )
     }
 

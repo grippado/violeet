@@ -296,3 +296,44 @@ func whitespaceIsNotAName() {
     #expect(name.text == "etc")
     #expect(name.source == .directory)
 }
+
+
+// MARK: - The file a tab was opened to edit
+
+/// The bug this level exists for. Three tabs opened from the Files panel
+/// were all called `nvim`, which is a tab strip that has stopped naming
+/// anything.
+@Test("an editor tab is named after its file, not after the editor")
+func editingFileBeatsTheProcess() {
+    let name = SessionName.resolve(
+        NameInputs(foregroundProcess: "nvim", editingFile: "AppState.swift")
+    )
+    #expect(name.text == "AppState.swift")
+}
+
+/// Level 1 still wins. Nothing overrides the human, and a file is not an
+/// exception to that.
+@Test("a typed name still beats the file")
+func manualBeatsTheFile() {
+    let name = SessionName.resolve(
+        NameInputs(manualName: "review", foregroundProcess: "nvim", editingFile: "AppState.swift")
+    )
+    #expect(name.text == "review")
+    #expect(name.isLocked)
+}
+
+/// The file arrives before the first poll does, so a tab is named correctly
+/// from the moment it appears rather than a beat later.
+@Test("the file names the tab before any process is known")
+func fileWorksWithoutAProcess() {
+    let name = SessionName.resolve(NameInputs(cwd: "/Users/me/repo", editingFile: "README.md"))
+    #expect(name.text == "README.md")
+}
+
+/// A tab that is not editing anything is unaffected — this level simply
+/// does not apply, and the ladder below it is unchanged.
+@Test("a tab with no file falls through to the process")
+func noFileFallsThrough() {
+    let name = SessionName.resolve(NameInputs(foregroundProcess: "btop", editingFile: nil))
+    #expect(name.text == "btop")
+}

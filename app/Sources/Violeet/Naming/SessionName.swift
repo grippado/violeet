@@ -2,9 +2,10 @@
 //
 // # Why this file exists at all
 //
-// A name has five plausible sources — the human, the program in the
-// foreground, the agent's own title, the working directory, and a generic
-// last resort — and every one of them updates at a different moment. Spread
+// A name has six plausible sources — the human, the file a tab was opened to
+// edit, the program in the foreground, the agent's own title, the working
+// directory, and a generic last resort — and every one of them updates at a
+// different moment. Spread
 // the precedence across the views that render it and you get the worst bug
 // this feature can have: *I renamed it and it came back on its own*. That is
 // not a cosmetic failure. It teaches the user that renaming does not work,
@@ -18,17 +19,19 @@
 // # The order
 //
 //  1. **The human.** Nothing overrides it. Ever.
-//  2. **The foreground process** — `btop`, `vim`, `ssh`. What the tab *is
+//  2. **The file the tab was opened to edit**, when there is one. The tab
+//     exists because of that file; the editor running it is a detail.
+//  3. **The foreground process** — `btop`, `vim`, `ssh`. What the tab *is
 //     doing* beats where it is.
-//  3. **The agent's title** — derived from the first prompt, upgraded to
+//  4. **The agent's title** — derived from the first prompt, upgraded to
 //     Claude Code's own `ai-title`. What the tab is *for*.
-//  4. **The working directory.**
-//  5. **A generic fallback**, for a tab that has told us nothing.
+//  5. **The working directory.**
+//  6. **A generic fallback**, for a tab that has told us nothing.
 //
 // # Where each level comes from
 //
-// Levels 2 and 4 are the app's own knowledge: only it holds the PTY. Level 3
-// belongs to the daemon, which decides between prompt and `ai-title` on its
+// Levels 2, 3 and 5 are the app's own knowledge: only it holds the PTY and only
+// it spawned the editor. Level 4 belongs to the daemon, which decides between prompt and `ai-title` on its
 // own rank ladder and sends the winner. Level 1 can arrive from either side —
 // a tab with no session is renamed locally, a session is renamed through
 // `rename_session` — and both arrive here as the same field.
@@ -80,6 +83,16 @@ struct NameInputs: Equatable {
 
     var cwd: String?
 
+    /// The file this tab was opened to edit, when it was.
+    ///
+    /// The same fact the OSC layer below is trying to obtain, arriving by a
+    /// route that cannot fail: this app spawned the editor and knows what it
+    /// handed it. No stock shell in this app emits OSC — see `ProcessDirectory`
+    /// for the same problem with `cwd` — so waiting for vim to announce its
+    /// filename means waiting for something that never comes, and the tab sits
+    /// there called `nvim` while three of them are open.
+    var editingFile: String?
+
     init(
         manualName: String? = nil,
         agentTitle: String? = nil,
@@ -87,7 +100,8 @@ struct NameInputs: Equatable {
         foregroundProcess: String? = nil,
         oscTitle: String? = nil,
         oscProcess: String? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        editingFile: String? = nil
     ) {
         self.manualName = manualName
         self.agentTitle = agentTitle
@@ -96,6 +110,7 @@ struct NameInputs: Equatable {
         self.oscTitle = oscTitle
         self.oscProcess = oscProcess
         self.cwd = cwd
+        self.editingFile = editingFile
     }
 }
 
@@ -141,7 +156,24 @@ enum SessionName {
             return ResolvedName(text: manual, source: .manual)
         }
 
-        // ---- 2. what the tab is doing --------------------------------------
+        // ---- 2. what the tab is *for* --------------------------------------
+        //
+        // Above the process, and that is the point rather than an oversight.
+        // A tab opened from the Files panel exists because of one file; the
+        // program editing it is an implementation detail of that. Three such
+        // tabs all called `nvim` is a tab strip that has stopped naming
+        // anything — which is exactly what it did.
+        //
+        // This is the same judgement the OSC layer below makes ("`vim`
+        // announcing the file it has open is worth more than `vim`"), reached
+        // without needing vim to announce anything. It is also more stable than
+        // the process: the file does not change for the life of the tab, and
+        // `EditorTab` is set once, at spawn, for that reason.
+        if let file = trimmed(input.editingFile) {
+            return ResolvedName(text: file, source: .process)
+        }
+
+        // ---- 3. what the tab is doing --------------------------------------
         if let process = usefulProcess(input.foregroundProcess) {
             // The OSC title rides on top, and only while the process that set
             // it is still there. `vim` announcing the file it has open is
@@ -155,7 +187,7 @@ enum SessionName {
             return ResolvedName(text: process, source: .process)
         }
 
-        // ---- 3. what the tab is for ----------------------------------------
+        // ---- 4. what the agent says it is ----------------------------------
         //
         // `cwd` as a daemon source is skipped on purpose: that is level 4
         // wearing level 3's clothes, and the app's own rule for directories is
@@ -164,12 +196,12 @@ enum SessionName {
             return ResolvedName(text: title, source: .agent)
         }
 
-        // ---- 4. where the tab is -------------------------------------------
+        // ---- 5. where the tab is -------------------------------------------
         if let directory = directoryName(input.cwd) {
             return ResolvedName(text: directory, source: .directory)
         }
 
-        // ---- 5. nothing ------------------------------------------------------
+        // ---- 6. nothing ------------------------------------------------------
         return ResolvedName(text: fallback, source: .fallback)
     }
 
