@@ -111,25 +111,35 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
         }
     }
 
-    // Read from the end when there is already a file, from the start when
-    // there is not.
+    // Always from the start. This used to read from the end of a transcript
+    // that already existed, and the reasoning was about the wrong thing.
     //
-    // From the end, because a transcript is up to 15 MB and the daemon usually
-    // meets a session already in progress; replaying it would publish an hour
-    // of stale actions as if they had just happened. The cost is that
-    // cumulative counters begin partial — they stay `None` until something is
-    // actually read, which is honest, and is why the app must never present
-    // them as a complete bill.
+    // The fear was replaying an hour of stale actions as if they had just
+    // happened, and that fear is right about *events*. It is wrong about
+    // *numbers*, which is what the backlog actually carries: token totals and
+    // the files the session wrote. Skipping it did not avoid publishing stale
+    // data, it published `partial` forever — every counter tilde'd and the
+    // Files panel saying "File changes unknown" for a session whose whole
+    // history was sitting on disk, unread.
     //
-    // From the start when the file does not exist yet, because there is no
-    // backlog to skip and "seek to the end" of a file that is not there is an
-    // error rather than a no-op. A hook can name a transcript a moment before
-    // Claude Code creates it, and the watch is on the parent directory
-    // precisely so the creation is seen.
-    let already_exists = path.exists();
+    // The distinction that makes reading it safe: the watcher emits one update
+    // per *batch*, not per event. Reading the file in one pass produces a
+    // single update carrying the complete totals and the genuinely last action,
+    // rather than an hour of actions arriving one by one. Nothing is presented
+    // as newer than it is; `last_event_at` still comes from the event.
+    //
+    // The cost is one parse of a file that can reach 15 MB, once, when a
+    // session is adopted. That buys exact counters instead of permanently
+    // approximate ones, which is the whole point of measuring rather than
+    // estimating.
+    //
+    // `false` also covers the case the old flag existed for: seeking to the end
+    // of a file that does not exist yet is an error, and a hook can name a
+    // transcript a moment before Claude Code creates it.
+    let from_end = false;
 
     let reader = Box::new(ClaudeCodeReader::new());
-    let (handle, updates, shared) = match watch_shared(path, reader, already_exists) {
+    let (handle, updates, shared) = match watch_shared(path, reader, from_end) {
         Ok(pair) => pair,
         Err(e) => {
             // Not fatal, and deliberately not retried here: the next hook for
