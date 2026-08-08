@@ -98,6 +98,57 @@ struct FileChange: Equatable, Decodable, Identifiable {
     var id: String { path }
 }
 
+/// The session's last message ends by asking the user something.
+///
+/// `state: "idle"` says the agent stopped; it does not say whether it stopped
+/// having finished or stopped having asked, and those are different situations
+/// for whoever is reading the sidebar. This carries the second one.
+///
+/// `Decodable` and not hand-parsed, like `FileChange` and unlike the patch
+/// around it: the tri-state lives on the *field*, not inside the object. The
+/// object either arrived or it did not.
+struct AnswerRequest: Equatable, Decodable {
+    /// Which rule fired: `question_mark` | `lexicon`.
+    ///
+    /// A `String` and not an enum. The protocol is explicit that this is
+    /// display and telemetry only and that **clients must not re-derive it**,
+    /// and keeping it open means a signal name added later does not turn the
+    /// whole patch into a decode failure here.
+    let signal: String
+    /// The asking message, whole, up to the daemon's cap.
+    let question: String
+    /// The conversation leading to it, oldest first, cut by the daemon.
+    ///
+    /// The app does not cut it and must not: the feature's whole claim is that
+    /// what the user sees and what left the machine are the same string, which
+    /// needs one cut, in one place, with one test.
+    let context: [AnswerContextMessage]
+    /// The excerpt does not cover the whole conversation.
+    let contextTruncated: Bool
+    /// The asking message itself was cut at the cap.
+    ///
+    /// Separate from `contextTruncated` because they fail differently: this one
+    /// means the reader is seeing less of *the question they are being asked*.
+    /// A panel that can only say "something was truncated" cannot name its
+    /// subject, and a warning that cannot do that gets ignored.
+    let questionTruncated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case signal
+        case question
+        case context
+        case contextTruncated = "context_truncated"
+        case questionTruncated = "question_truncated"
+    }
+}
+
+/// One message of an `AnswerRequest` excerpt.
+struct AnswerContextMessage: Equatable, Decodable {
+    /// `user` | `assistant`, as the transcript spells it.
+    let role: String
+    let text: String
+}
+
 struct SessionRegistered: Equatable {
     let sessionID: String
     /// `null` when the session could not be bound to a tab — an agent started
@@ -170,6 +221,23 @@ struct SessionUpdated: Equatable {
     let lastAction: Patch<String>
     let lastEventAt: Patch<String>
     let tabID: Patch<String>
+    /// The session stopped having *asked* rather than having finished.
+    ///
+    /// A `Patch` and not an `AnswerRequest?` for the reason the whole file
+    /// exists: three states. `.unchanged` means the daemon said nothing, and
+    /// includes "this daemon never looked"; `.unknown` — an explicit `null` —
+    /// means the session is no longer asking, and is the only thing that tells
+    /// a panel to close; `.value` means it is asking now. Collapsed to an
+    /// optional, a panel opened once would have to guess when to go away.
+    let answerRequest: Patch<AnswerRequest>
+    /// How many background agents the session is waiting on.
+    ///
+    /// `0` is a positive claim that it is waiting on none, and must not be read
+    /// as `.unchanged` — same rule as a zero token reading. A session waiting
+    /// on subagents reports `idle` and, without this, renders and sorts exactly
+    /// like one waiting on its user: 29.6% of measured stop points looked
+    /// available and were not.
+    let pendingAgents: Patch<Int>
 
     /// Everything absent unless named.
     ///
@@ -205,7 +273,9 @@ struct SessionUpdated: Equatable {
         gitBranch: Patch<String> = .unchanged,
         lastAction: Patch<String> = .unchanged,
         lastEventAt: Patch<String> = .unchanged,
-        tabID: Patch<String> = .unchanged
+        tabID: Patch<String> = .unchanged,
+        answerRequest: Patch<AnswerRequest> = .unchanged,
+        pendingAgents: Patch<Int> = .unchanged
     ) {
         self.sessionID = sessionID
         self.state = state
@@ -233,6 +303,8 @@ struct SessionUpdated: Equatable {
         self.lastAction = lastAction
         self.lastEventAt = lastEventAt
         self.tabID = tabID
+        self.answerRequest = answerRequest
+        self.pendingAgents = pendingAgents
     }
 }
 
@@ -380,7 +452,9 @@ enum DaemonMessageDecoder {
                 gitBranch: Patch.decode(from: container, key: DynamicKey("git_branch")),
                 lastAction: Patch.decode(from: container, key: DynamicKey("last_action")),
                 lastEventAt: Patch.decode(from: container, key: DynamicKey("last_event_at")),
-                tabID: Patch.decode(from: container, key: DynamicKey("tab_id"))
+                tabID: Patch.decode(from: container, key: DynamicKey("tab_id")),
+                answerRequest: Patch.decode(from: container, key: DynamicKey("answer_request")),
+                pendingAgents: Patch.decode(from: container, key: DynamicKey("pending_agents"))
             )))
 
         case "hitl_pending":

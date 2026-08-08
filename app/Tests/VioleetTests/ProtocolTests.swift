@@ -136,6 +136,102 @@ struct SparsePatchTests {
         #expect(patch.originApp == .value("iTerm2"))
         #expect(patch.originTTY == .value("ttys005"))
     }
+
+    /// `answer_request` has the same three outcomes as every other patch field,
+    /// and here the middle one carries weight the others do not: an explicit
+    /// `null` is the *only* thing that tells the panel the session stopped
+    /// asking. Read as `.unchanged`, a panel opened once would never close.
+    @Test func answerRequestDecodesAbsentNullAndObjectAsThreeStates() throws {
+        func patch(_ body: String) throws -> SessionUpdated {
+            let line = Data("""
+            {"type":"session_updated","v":1,"ts":"2026-08-08T18:00:00Z","session_id":"s1"\(body)}
+            """.utf8)
+            guard case .success(.sessionUpdated(let p)) = DaemonMessageDecoder.decode(line: line) else {
+                throw DecodingFailure.notASessionUpdate
+            }
+            return p
+        }
+
+        #expect(
+            try patch("").answerRequest == .unchanged,
+            "absent means the daemon said nothing, including that it never looked"
+        )
+        #expect(
+            try patch(#","answer_request":null"#).answerRequest == .unknown,
+            "an explicit null means the session is no longer asking — this is how a panel closes"
+        )
+
+        let asking = try patch("""
+        ,"answer_request":{"signal":"question_mark",\
+        "question":"Sigo pelo primeiro?",\
+        "context":[{"role":"user","text":"compara as duas rotas"},\
+        {"role":"assistant","text":"A primeira lê do fim do arquivo…"}],\
+        "context_truncated":true,"question_truncated":false}
+        """)
+        guard case .value(let request) = asking.answerRequest else {
+            Issue.record("expected an answer_request object")
+            return
+        }
+        #expect(request.signal == "question_mark")
+        #expect(request.question == "Sigo pelo primeiro?")
+        #expect(request.context.count == 2)
+        #expect(request.context.first == AnswerContextMessage(role: "user", text: "compara as duas rotas"))
+        #expect(request.contextTruncated)
+        #expect(!request.questionTruncated)
+    }
+
+    /// The two truncation flags are two facts, so both combinations decode.
+    ///
+    /// A cut excerpt and a cut question fail differently, and a panel that can
+    /// only say "something was truncated" cannot name which — a warning that
+    /// cannot name its subject gets ignored.
+    @Test(arguments: [(true, false), (false, true)])
+    func truncationFlagsDecodeIndependently(context: Bool, question: Bool) throws {
+        let line = Data("""
+        {"type":"session_updated","v":1,"ts":"2026-08-08T18:00:00Z","session_id":"s1",\
+        "answer_request":{"signal":"lexicon","question":"qual das duas?","context":[],\
+        "context_truncated":\(context),"question_truncated":\(question)}}
+        """.utf8)
+
+        guard case .success(.sessionUpdated(let patch)) = DaemonMessageDecoder.decode(line: line),
+              case .value(let request) = patch.answerRequest
+        else {
+            Issue.record("expected an answer_request object")
+            return
+        }
+        #expect(request.contextTruncated == context)
+        #expect(request.questionTruncated == question)
+        #expect(
+            request.contextTruncated != request.questionTruncated,
+            "one flag must never be readable as the other"
+        )
+    }
+
+    /// `pending_agents: 0` is the positive claim "waiting on none", which is one
+    /// half of "your turn". Read as absent or unknown, a session waiting on four
+    /// subagents looks exactly like one waiting on its user.
+    @Test func pendingAgentsZeroIsAReadingAndNotAnAbsence() throws {
+        func pending(_ body: String) -> Patch<Int>? {
+            let line = Data("""
+            {"type":"session_updated","v":1,"ts":"2026-08-08T18:00:00Z","session_id":"s1"\(body)}
+            """.utf8)
+            guard case .success(.sessionUpdated(let p)) = DaemonMessageDecoder.decode(line: line) else {
+                return nil
+            }
+            return p.pendingAgents
+        }
+
+        #expect(pending(#","pending_agents":0"#) == .value(0), "zero is a reading, not an absence")
+        #expect(pending(#","pending_agents":3"#) == .value(3))
+        #expect(pending(#","pending_agents":null"#) == .unknown)
+        #expect(pending("") == .unchanged)
+    }
+}
+
+/// Thrown by the helpers above so a wrong message type fails the test rather
+/// than silently asserting on a default.
+private enum DecodingFailure: Error {
+    case notASessionUpdate
 }
 
 @Suite("Inbound decoding")
