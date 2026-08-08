@@ -183,7 +183,7 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
                 }
 
                 if let Some(telemetry) = pending.take() {
-                    publish(&thread_hub, &owned_session, &telemetry, partial);
+                    publish(&thread_hub, &owned_session, &telemetry, partial, false);
                     last_publish = Instant::now();
                 }
             }
@@ -229,7 +229,10 @@ pub fn finalize(hub: &Hub, session_id: &str) {
     };
 
     if let Some((telemetry, partial)) = final_read {
-        publish(hub, session_id, &telemetry, partial);
+        // `ending`: this is the `SessionEnd` path, so whatever launches are
+        // still open on the last line are open on a session that no longer
+        // exists. See the `pending_agents` block in `publish`.
+        publish(hub, session_id, &telemetry, partial, true);
     }
     // `followed` drops here, taking the watcher and its thread with it.
 }
@@ -314,7 +317,29 @@ fn wire_files(telemetry: &Telemetry) -> (Vec<WireFileChange>, bool) {
     (files, truncated)
 }
 
-fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
+/// What `pending_agents` goes on the wire as: a count, or nothing at all.
+///
+/// A pure function so the rule can be read and tested without a Hub, because it
+/// is a rule about *what a number claims* rather than about plumbing.
+///
+/// - **`ending`** — the `SessionEnd` path. The session is gone, so it waits on
+///   nothing, whatever the last lines say about launches that never reported.
+/// - **`partial` with a count of zero** — we met this session already running,
+///   so launches from before we started looking are not in our sets. `0` there
+///   is the positive claim "waiting on none" with nothing behind it, so the
+///   field is left unknown instead.
+/// - **`partial` with a positive count** — still published. That launch is one we
+///   read with our own eyes; a partial read weakens what a zero means, not what a
+///   one means.
+fn pending_on_wire(counted: u64, partial: bool, ending: bool) -> Option<u64> {
+    match (ending, partial, counted) {
+        (true, _, _) => Some(0),
+        (false, true, 0) => None,
+        (false, _, n) => Some(n),
+    }
+}
+
+fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool, ending: bool) {
     let now = Utc::now();
 
     // Whether a permission request is open for this session. Read before the
@@ -416,11 +441,25 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
         // session from one this daemon has never looked at. The state stays
         // `idle` on the wire — that is the contract, and the presentation
         // decision belongs to the client.
+        //
+        // Two guards, and both are about what a `0` *asserts*:
+        //
+        // - **`ending`** — the `SessionEnd` path. The session is gone, so it is
+        //   waiting on nothing, whatever the file's last lines say about
+        //   launches that never reported. This is the second of the three ways a
+        //   wait ends in `docs/PROTOCOL.md`, and without it a card keeps an
+        //   orphan launch for as long as it stays on screen.
+        // - **`partial`** — we met this session already running, so the launches
+        //   that happened before we started looking are not in our sets. `0`
+        //   there is the positive claim "waiting on none" with nothing behind
+        //   it, so the field is cleared to unknown instead. A *positive* count
+        //   under a partial read is still a launch we read with our own eyes and
+        //   is published.
         {
-            let pending = telemetry.pending_agents();
-            if session.pending_agents != Some(pending) {
-                session.pending_agents = Some(pending);
-                patch.pending_agents = Some(Some(pending));
+            let pending = pending_on_wire(telemetry.pending_agents(now), partial, ending);
+            if session.pending_agents != pending {
+                session.pending_agents = pending;
+                patch.pending_agents = Some(pending);
                 anything = true;
             }
         }
@@ -561,5 +600,39 @@ mod tests {
         let (files, truncated) = wire_files(&Telemetry::new());
         assert!(files.is_empty());
         assert!(!truncated);
+    }
+
+    // ---- what a count is allowed to claim -------------------------------
+
+    /// A partial read may not assert "waiting on none".
+    ///
+    /// The block that publishes this field used to ignore `partial` while the
+    /// three fields beside it all honoured it, and the zero it sent was a
+    /// positive claim about launches it had never had the chance to see.
+    #[test]
+    fn a_partial_read_publishes_unknown_rather_than_a_zero_it_cannot_support() {
+        assert_eq!(pending_on_wire(0, true, false), None, "no basis for a zero");
+        assert_eq!(
+            pending_on_wire(2, true, false),
+            Some(2),
+            "a launch we read is a launch we read, partial or not"
+        );
+        assert_eq!(
+            pending_on_wire(0, false, false),
+            Some(0),
+            "a complete read of a session with no agents is a positive zero"
+        );
+    }
+
+    /// `SessionEnd` closes whatever is left. The second of the three ways a wait
+    /// ends, and the one that keeps a departing card from lying for good.
+    #[test]
+    fn a_session_that_ends_publishes_zero_whatever_was_open() {
+        assert_eq!(pending_on_wire(3, false, true), Some(0));
+        assert_eq!(
+            pending_on_wire(3, true, true),
+            Some(0),
+            "even a partial read: the session is gone either way"
+        );
     }
 }
