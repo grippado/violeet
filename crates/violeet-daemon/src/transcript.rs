@@ -379,12 +379,21 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool) {
                 patch.files = Some(Some(files));
                 anything = true;
             }
-            // The same read that makes the token totals partial makes this list
-            // partial, and for a second reason besides: a file written by
-            // `Bash` never appears here at all.
-            if session.files.partial != Some(partial) {
-                session.files.partial = Some(partial);
-                patch.files_partial = Some(Some(partial));
+            // Two reasons, not one, and this used to carry only the first.
+            //
+            // A partial *read* means we started watching midway. A `Bash` that
+            // writes means we were watching the whole time and still cannot see
+            // what it did — the tool result carries no path, so those edits
+            // exist nowhere in this list.
+            //
+            // The comment here named both reasons long before the code did, and
+            // the gap had a visible cost: a session that changed a hundred files
+            // through the shell showed "nothing written yet", which is the one
+            // claim this panel is built to never make.
+            let files_partial = partial || telemetry.wrote_untracked;
+            if session.files.partial != Some(files_partial) {
+                session.files.partial = Some(files_partial);
+                patch.files_partial = Some(Some(files_partial));
                 anything = true;
             }
             if session.files.truncated != Some(truncated) {

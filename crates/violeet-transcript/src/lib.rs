@@ -198,6 +198,13 @@ pub struct ToolUse {
     /// this ends up in a sidebar row.
     pub summary: Option<String>,
     pub at: Option<String>,
+    /// This call looks like it wrote a file the file list cannot see.
+    ///
+    /// True only for a `Bash` whose command looks like it writes — see
+    /// `command_may_write`. It is what turns "nothing written yet" into "file
+    /// changes unknown", which are different claims and only one of them can be
+    /// made about a session that shelled out.
+    pub writes_untracked: bool,
 }
 
 /// A compaction, as reported by the file itself.
@@ -304,6 +311,18 @@ pub struct Telemetry {
     /// publish look like a change.
     pub files: std::collections::BTreeMap<String, FileStat>,
 
+    /// The session ran a shell command that looks like it wrote something.
+    ///
+    /// Sticky, and deliberately: one such command anywhere in the session means
+    /// the file list has a hole in it from then on, and a flag that cleared on
+    /// the next tracked edit would say the list is complete when it is not.
+    ///
+    /// This is the second of the two reasons a list is partial. The first — the
+    /// daemon having met the session already running — is about *when* we
+    /// started looking; this one is about *what we cannot see* however early we
+    /// arrived.
+    pub wrote_untracked: bool,
+
     pub turn_count: u64,
     pub last_event_at: Option<String>,
     /// How many compactions this session has been through.
@@ -390,6 +409,7 @@ impl Telemetry {
             }
 
             TranscriptEvent::ToolUse(tool) => {
+                self.wrote_untracked |= tool.writes_untracked;
                 let label = match &tool.summary {
                     Some(s) => format!("{} {}", tool.name, s),
                     None => tool.name.clone(),
@@ -737,6 +757,7 @@ mod tests {
             name: "Bash".into(),
             summary: Some("cargo test".into()),
             at: None,
+            writes_untracked: false,
         }));
         assert_eq!(t.in_flight_tool.as_deref(), Some("Bash cargo test"));
         assert_eq!(t.last_action.as_deref(), Some("Bash cargo test"));
@@ -845,5 +866,33 @@ mod tests {
             file: None,
         });
         assert!(t.files.is_empty());
+    }
+
+    /// The flag is sticky. One shell write leaves a hole in the list from then
+    /// on, and a tracked edit afterwards does not fill it — a flag that cleared
+    /// would claim the list is complete when it is not.
+    #[test]
+    fn an_untracked_write_marks_the_session_for_good() {
+        let mut t = Telemetry::new();
+        assert!(!t.wrote_untracked, "a fresh session has seen nothing");
+
+        t.apply(&TranscriptEvent::ToolUse(ToolUse {
+            id: Some("t1".into()),
+            name: "Bash".into(),
+            summary: Some("echo x > f".into()),
+            at: None,
+            writes_untracked: true,
+        }));
+        assert!(t.wrote_untracked);
+
+        // A perfectly visible edit lands afterwards. The hole is still there.
+        t.apply(&TranscriptEvent::ToolUse(ToolUse {
+            id: Some("t2".into()),
+            name: "Edit".into(),
+            summary: Some("/repo/a.rs".into()),
+            at: None,
+            writes_untracked: false,
+        }));
+        assert!(t.wrote_untracked, "one shell write is not undone by a tracked one");
     }
 }
