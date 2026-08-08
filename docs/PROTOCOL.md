@@ -1,6 +1,6 @@
 # violeet socket protocol
 
-> **Wire version `v` = 1. Document revision 7.**
+> **Wire version `v` = 1. Document revision 8.**
 >
 > These are two different numbers and conflating them has now cost time twice:
 > two separate tracks were briefed that the protocol was "v2, frozen", read
@@ -22,7 +22,10 @@
 >   (2026-08-08) added `answer_request` and `pending_agents`, both optional
 >   fields of `session_updated`, absorbing
 >   [`tracks/C-protocol-request.md`](tracks/C-protocol-request.md) — same rule
->   again, so `v` stays `1`.
+>   again, so `v` stays `1`. Revision 8 (2026-08-08) rewrote how
+>   `pending_agents` is derived: revision 7 named a tool that does not exist and
+>   a completion signal that never fires. Wording of an already-optional field,
+>   so `v` stays `1`.
 >
 > When a brief says "the protocol is at v2", it means this document's second
 > revision. The wire is still `1`.
@@ -457,14 +460,64 @@ not.
 `0` is a positive claim that it is waiting on none; absent or `null` is
 unchanged, in the sparse-patch sense.
 
-**It is derived on every read and never counted up.** The value is recomputed
-from the transcript each time it is read, as *tool uses of the `Task` tool with
-no matching result yet*. There is no increment and no decrement, so there is
-nothing to leak: a `SubagentStop` that never arrives, or arrives twice, costs
-one stale reading and corrects itself on the next. A counter would be wrong from
-the first missed event until the session ended, and missed events happen. A
-number whose error is unbounded in time is worse than no number, because it
-looks like the same kind of fact as a correct one.
+**It is derived, never counted up.** The value is a set difference over what the
+transcript says: *background agent launches read, minus the task notifications
+read*. There is no increment and no decrement, so there is nothing to leak.
+
+A launch is recognised by the **structural marker on the launch's own result**
+(`isAsync: true`, or `status: "async_launched"`), **not by the name of the tool**.
+The completion is the **task notification**, not the launch's `tool_result`.
+
+> **Corrected in revision 8, and the first wording was wrong on both counts.**
+> Revision 7 said "tool uses of the `Task` tool with no matching result yet".
+> Measured over 539 transcript files: there is **no `Task` tool at all** — 252
+> `Agent`, 47 `Workflow`, zero `Task`. And "no matching `tool_result`" taken
+> literally yields **always zero**, because a launch receives an immediate
+> `tool_result` as a receipt and the real outcome arrives later as a task
+> notification. A client implementing revision 7 to the letter would have
+> published `0` forever while remaining formally correct against this document.
+> Naming the tool was the mistake: the marker is stable, the tool names are not.
+
+**What is deliberately not counted.**
+
+- **A launch with no correlatable id.** A `Workflow` launch carries no `agentId`
+  (measured: 235 launches with one, 47 without, no exceptions), and part of its
+  notifications carry only a task id, so the two ends share no key. Such a launch
+  is **not counted**. This loses the 47, and that is the intended trade: a false
+  positive here never corrects itself, while a false negative corrects itself on
+  the next read. **That asymmetry is the deciding rule for this whole field.**
+- **Backgrounded shell commands.** They report through the same notification
+  shape and are not agents. They fall out for free: no launch marker, so nothing
+  opens. Measured cost of the exclusion: 19 of 192 notification-followed stop
+  points still render as free. Widening `pending_agents` to cover shell would be
+  a change to what this field *means*, so it is a contract decision and not an
+  implementation detail.
+
+**Three ways a wait ends, and all three are required.** Choosing one leaves a
+hole the other two cover:
+
+1. **The task notification** closes the normal case.
+2. **`SessionEnd`** closes whatever is still open when the session goes away.
+   Without it, a card left with an orphan launch lies for the rest of the session.
+3. **An age limit** is the backstop for launches that never report at all —
+   measured at 61 of 235 `Agent` launches (user interrupt, killed agent, session
+   ended mid-flight). Without it, one abandoned agent poisons the card forever,
+   and the self-correction the derivation promises never fires, because it depends
+   on a line that never arrives.
+
+`SubagentStop` is **not** in that list on purpose: it is a hook, and the whole
+point of deriving from the transcript is not to depend on hook delivery.
+
+**Precedence: `answer_request` outranks `pending_agents`, always.** A session with
+agents out *and* a question on screen is a session waiting on the human. Reporting
+it as busy would hide the one thing that has an action attached to it, which is
+the failure this product exists to prevent. A client that shows a single state
+shows the question.
+
+A counter would be wrong from the first missed event until the session ended, and
+missed events happen. **A number whose error is unbounded in time is worse than no
+number**, because it looks like the same kind of fact as a correct one — which is
+also the standard this field has to clear before it is published at all.
 
 **Why a field and not a state.** `state` has four wire values and a transition
 matrix that the 2026-07-31 revision spent effort *simplifying*, removing two
