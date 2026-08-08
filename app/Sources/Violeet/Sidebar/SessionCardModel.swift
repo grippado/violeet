@@ -65,6 +65,16 @@ struct SessionCard: Identifiable, Equatable {
     /// the card can also show *what* it is blocked on.
     var pendingHitl: HitlPending?
 
+    /// How many background agents this session is waiting on.
+    ///
+    /// `nil` means the daemon has not said — which is not zero, and is why this
+    /// is an optional like every other unknown here. A session with a positive
+    /// count reports `state == "idle"`, because the `Stop` hook fires the same
+    /// way whether a person or a subagent is expected next; it is idle in the
+    /// sense that nothing is computing in the foreground and emphatically not
+    /// free. See `lifecycle`.
+    var pendingAgents: Int?
+
     var id: String { sessionID }
 
     init(registered: SessionRegistered) {
@@ -106,6 +116,7 @@ struct SessionCard: Identifiable, Equatable {
         fiveHourLimitResetsAt = patch.fiveHourLimitResetsAt.applied(to: fiveHourLimitResetsAt)
         sevenDayLimitUsedPercent = patch.sevenDayLimitUsedPercent.applied(to: sevenDayLimitUsedPercent)
         sevenDayLimitResetsAt = patch.sevenDayLimitResetsAt.applied(to: sevenDayLimitResetsAt)
+        pendingAgents = patch.pendingAgents.applied(to: pendingAgents)
     }
 }
 
@@ -257,7 +268,18 @@ extension SessionCard {
         switch state {
         case "working": return .working
         case "hitl": return .waitingForYou
-        case "idle": return .idle
+        case "idle":
+            // `idle` plus a positive count is the one reading the wire cannot
+            // express in `state` alone, and it is the reason this case exists:
+            // the session stopped, nothing is computing, and nobody needs to
+            // look at it. Rendering it as plain `idle` put a busy card in the
+            // same place as one holding a question.
+            //
+            // A `nil` count is not zero. An old daemon, or one that has not read
+            // the transcript yet, says nothing — and a session we know nothing
+            // about must not be promoted out of `idle` on a guess.
+            if let pending = pendingAgents, pending > 0 { return .waitingOnAgents(pending) }
+            return .idle
         case "starting": return .starting
         case "done": return .done
         case "dead": return .dead
@@ -268,22 +290,43 @@ extension SessionCard {
     /// Sort key. Cards waiting on the user come first — they are the only ones
     /// with an action attached, and burying them under six working sessions is
     /// the failure this product exists to fix.
+    /// Sort key. Cards waiting on the user come first — they are the only ones
+    /// with an action attached, and burying them under six working sessions is
+    /// the failure this product exists to fix.
+    ///
+    /// A session waiting on background agents sits with the busy ones, directly
+    /// below `working`: it must not compete for attention with a card that has a
+    /// question on it, and it must not sink into the free pile either, because
+    /// sorting it there is what made a session running five agents look like the
+    /// most available one on the board.
     var sortRank: Int {
         switch lifecycle {
         case .waitingForYou: return 0
         case .working: return 1
-        case .starting: return 2
-        case .idle: return 3
-        case .done: return 4
-        case .dead: return 5
+        case .waitingOnAgents: return 2
+        case .starting: return 3
+        case .idle: return 4
+        case .done: return 5
+        case .dead: return 6
         }
     }
 }
 
+/// What a card is doing, as the *client* understands it.
+///
+/// Not a projection of the wire's `state`, and the difference matters:
+/// `waitingForYou` already merges `state == "hitl"` with a pending permission
+/// request the app knows about, and `waitingOnAgents` is `state == "idle"`
+/// combined with `pending_agents > 0`. Both are presentation, decided here,
+/// once, so no view has to combine two fields on its own.
 enum Lifecycle: Equatable {
     case starting
     case idle
     case working
+    /// Stopped, with background agents still out. Carries how many, because
+    /// "waiting on one" and "waiting on five" are different situations and the
+    /// count is already on the wire.
+    case waitingOnAgents(Int)
     case waitingForYou
     case done
     case dead
@@ -293,6 +336,12 @@ enum Lifecycle: Equatable {
         case .starting: return "starting"
         case .idle: return "idle"
         case .working: return "working"
+        // Deliberately not the word "waiting": on a card, "waiting" is the
+        // vocabulary of `waiting for you`, and reusing it here would be asking
+        // for attention on behalf of a session that needs none. What it says
+        // instead is who is working — someone is, and it is not you.
+        case .waitingOnAgents(let count):
+            return count == 1 ? "1 agent running" : "\(count) agents running"
         case .waitingForYou: return "waiting for you"
         case .done: return "done"
         case .dead: return "dead"
