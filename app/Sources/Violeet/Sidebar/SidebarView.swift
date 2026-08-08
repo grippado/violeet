@@ -424,9 +424,28 @@ private struct TabRow: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Circle()
-                .fill(tab.hasExited ? Color.secondary.opacity(0.4) : Color.secondary)
-                .frame(width: 5, height: 5)
+            // A dot for a shell, the file's own icon for an editor.
+            //
+            // This row draws two different things and only looked like one. A
+            // tab opened from the *directory tree* has no session — nothing
+            // launched an agent in it — so it lands in this list rather than
+            // under a card, and it was getting the same anonymous dot as a
+            // plain shell. See `FileIcons`; the same icon is on the panel row
+            // and on an editor tab under a card, and this was the third place
+            // that had to agree and did not.
+            if let editing = tab.editing {
+                let icon = FileIcons.icon(for: editing.name, isDirectory: false)
+                Image(systemName: icon.symbol)
+                    .appFont(.micro)
+                    .foregroundStyle(tab.hasExited
+                        ? AnyShapeStyle(.tertiary)
+                        : (icon.tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary)))
+                    .frame(width: 5)
+            } else {
+                Circle()
+                    .fill(tab.hasExited ? Color.secondary.opacity(0.4) : Color.secondary)
+                    .frame(width: 5, height: 5)
+            }
             EditableName(
                 name: name,
                 display: name.text,

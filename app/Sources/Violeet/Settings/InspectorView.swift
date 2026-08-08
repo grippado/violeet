@@ -88,7 +88,13 @@ struct InspectorView: View {
             return ("Changes", "plus.forwardslash.minus")
         }
         if let tab = state.inspectedTab {
-            return tab.editing != nil ? ("File", "doc") : ("Tree", "folder")
+            // The open file's own icon, not a generic page. The tab strip and
+            // the panel row already show it, and this header sitting above the
+            // file's name was the one place still calling it "a document".
+            if let editing = tab.editing {
+                return ("File", FileIcons.icon(for: editing.name, isDirectory: false).symbol)
+            }
+            return ("Tree", "folder")
         }
         return (InspectorPanel.files.title, InspectorPanel.files.symbol)
     }
