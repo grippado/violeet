@@ -258,11 +258,25 @@ def main() -> int:
     for key, v in data["variants"].items():
         for ext, render in EXPORTS.items():
             (DIST / f"violeeter-{key}.{ext}").write_text(render(v))
-    (DIST / "violeeter.css").write_text(css(data))
+    stylesheet = css(data)
+    (DIST / "violeeter.css").write_text(stylesheet)
     written = sorted(p.name for p in DIST.iterdir())
     print(f"wrote {len(written)} files to {DIST}/")
     for name in written:
         print(f"  {name}")
+
+    # The project page is served from `docs/`, which cannot reach up into
+    # `theme/`. Writing the stylesheet there too is what stops the page that
+    # advertises this palette from being painted in a stale copy of it.
+    page = ROOT.parent / "docs"
+    if page.is_dir():
+        (page / "violeeter.css").write_text(stylesheet)
+        # The palette itself, so the page can draw its swatches from the source
+        # rather than from its own stylesheet. Reading them back out of CSS
+        # meant asking the browser to recompute `:root` mid-script, which it
+        # does not reliably do — the two variants came out identical.
+        (page / "violeeter.json").write_text(SOURCE.read_text())
+        print(f"wrote {page}/violeeter.css and violeeter.json")
     return 0
 
 

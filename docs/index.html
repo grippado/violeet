@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Violeet — a terminal for watching agents work</title>
+<meta name="description" content="A macOS terminal built for running several coding agents at once: every session on a board, permission requests surfaced, and the files each one wrote.">
+<link rel="stylesheet" href="violeeter.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--violeeter-bg);
+    color: var(--violeeter-fg);
+    font: 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  a { color: var(--violeeter-magenta); }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+  h1, h2, h3 { line-height: 1.25; margin: 0; }
+
+  /* ---- header ---- */
+  header { padding: 72px 0 56px; }
+  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  .mark {
+    width: 40px; height: 40px; border-radius: 10px; flex: none;
+    background: linear-gradient(145deg, var(--violeeter-magenta), var(--violeeter-blue));
+  }
+  .brand-name { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
+  h1 { font-size: clamp(2rem, 6vw, 3.1rem); font-weight: 700; letter-spacing: -0.03em; max-width: 16ch; }
+  .lede { font-size: 1.12rem; margin: 20px 0 0; max-width: 58ch; opacity: 0.85; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+  .btn {
+    display: inline-block; padding: 10px 18px; border-radius: 8px;
+    text-decoration: none; font-weight: 600; font-size: 0.95rem;
+    border: 1px solid var(--violeeter-brightblack);
+    color: var(--violeeter-fg);
+  }
+  .btn-primary {
+    background: var(--violeeter-magenta);
+    border-color: var(--violeeter-magenta);
+    color: var(--violeeter-bg);
+  }
+  .toggle {
+    margin-left: auto; align-self: center;
+    background: none; border: 1px solid var(--violeeter-brightblack);
+    color: var(--violeeter-fg); border-radius: 6px;
+    padding: 5px 11px; font-size: 0.82rem; cursor: pointer;
+  }
+
+  /* ---- terminal ---- */
+  .term {
+    border: 1px solid var(--violeeter-brightblack);
+    border-radius: 10px; overflow: hidden; margin: 8px 0 0;
+    background: var(--violeeter-bg);
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 7px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--violeeter-brightblack);
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .term-title { margin-left: 8px; font-size: 0.8rem; opacity: 0.6; }
+  .term-body { padding: 16px; font-size: 0.85rem; line-height: 1.65; overflow-x: auto; }
+  .term-body pre { margin: 0; }
+  .c-magenta { color: var(--violeeter-magenta); }
+  .c-green   { color: var(--violeeter-green); }
+  .c-yellow  { color: var(--violeeter-yellow); }
+  .c-blue    { color: var(--violeeter-blue); }
+  .c-red     { color: var(--violeeter-red); }
+  .c-cyan    { color: var(--violeeter-cyan); }
+  .c-dim     { color: var(--violeeter-brightblack); }
+
+  /* ---- sections ---- */
+  section { padding: 56px 0; border-top: 1px solid var(--violeeter-selection); }
+  h2 { font-size: 1.5rem; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .section-lede { opacity: 0.8; max-width: 62ch; margin: 0 0 28px; }
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .card {
+    border: 1px solid var(--violeeter-selection);
+    border-radius: 10px; padding: 18px 20px;
+  }
+  .card h3 { font-size: 1rem; margin-bottom: 6px; }
+  .card p { margin: 0; font-size: 0.92rem; opacity: 0.82; }
+
+  /* ---- palette ---- */
+  .swatches { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin: 14px 0 4px; }
+  .sw { aspect-ratio: 1; border-radius: 5px; }
+  .variant { margin-bottom: 28px; }
+  .variant-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .variant-name { font-weight: 650; }
+  .variant-meta { font-size: 0.82rem; opacity: 0.65; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--violeeter-selection); }
+  th { font-weight: 600; opacity: 0.7; font-size: 0.82rem; }
+  td.mono { font-size: 0.85rem; }
+  .scroll { overflow-x: auto; }
+
+  pre.block {
+    background: var(--violeeter-selection);
+    padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+    font-size: 0.85rem; margin: 0;
+  }
+
+  footer { padding: 40px 0 64px; font-size: 0.88rem; opacity: 0.65; border-top: 1px solid var(--violeeter-selection); }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <div class="brand">
+    <div class="mark"></div>
+    <span class="brand-name">Violeet</span>
+    <button class="toggle" id="toggle" type="button">Light</button>
+  </div>
+
+  <h1>A terminal for watching agents work.</h1>
+  <p class="lede">
+    Run six coding agents at once and the hard part stops being the code. It is
+    knowing which one is blocked on you, which one is burning context, and what
+    any of them actually changed. Violeet puts that on a board beside the
+    terminal.
+  </p>
+
+  <div class="cta">
+    <a class="btn btn-primary" href="https://github.com/grippado/violeet/releases">Download for macOS</a>
+    <a class="btn" href="https://github.com/grippado/violeet">Source on GitHub</a>
+  </div>
+
+  <div class="term" style="margin-top:44px">
+    <div class="term-bar">
+      <span class="dot" style="background:var(--violeeter-red)"></span>
+      <span class="dot" style="background:var(--violeeter-yellow)"></span>
+      <span class="dot" style="background:var(--violeeter-green)"></span>
+      <span class="term-title">violeet — sessions</span>
+    </div>
+    <div class="term-body">
+<pre><span class="c-yellow">▌ refactor the transcript reader</span>   <span class="c-yellow">waiting for you</span>
+<span class="c-dim">  ~/www/personal/violeet</span>
+<span class="c-dim">  ctx</span> <span class="c-green">████████</span><span class="c-dim">░░░░░░░░</span>  38% · 375k/1.0M
+<span class="c-dim">  Edit</span> crates/violeet-transcript/src/lib.rs
+
+<span class="c-magenta">▌ files panel</span>                        <span class="c-cyan">working</span>
+<span class="c-dim">  ~/www/personal/violeet</span>
+<span class="c-dim">  ctx</span> <span class="c-green">███</span><span class="c-dim">░░░░░░░░░░░░░</span>  14% · 140k/1.0M
+<span class="c-dim">  Bash</span> swift test
+
+<span class="c-dim">▌ docs sweep                             idle</span>
+<span class="c-dim">  ~/.notes</span>
+<span class="c-dim">  ctx ██░░░░░░░░░░░░░  9% · 90k/1.0M</span></pre>
+    </div>
+  </div>
+</header>
+
+<section>
+  <h2>What it does</h2>
+  <p class="section-lede">
+    Every agent session on the machine appears on the board, including the ones
+    started somewhere else.
+  </p>
+  <div class="grid">
+    <div class="card">
+      <h3>Blocked agents come to you</h3>
+      <p>A session waiting on a permission request is signalled three ways at
+      once — a lit edge, a slow pulse, and a colour used nowhere else. You are
+      not watching the sidebar, so it has to reach you from the corner of your
+      eye.</p>
+    </div>
+    <div class="card">
+      <h3>Context, measured</h3>
+      <p>How full each window is, with the absolute pair beside the percentage.
+      A small window nearly full and a large one barely touched call for
+      opposite reactions, and one number cannot tell them apart.</p>
+    </div>
+    <div class="card">
+      <h3>The files each session wrote</h3>
+      <p>A tree grouped by root, with a real diffstat — read from the diff the
+      agent itself produced, not estimated. Click a file and it opens in your
+      editor, on the first uncommitted change.</p>
+    </div>
+    <div class="card">
+      <h3>Sessions from anywhere</h3>
+      <p>An agent started in iTerm, or in another window, is still a real
+      session. It shows up on the board, clearly marked as living somewhere
+      else rather than quietly omitted.</p>
+    </div>
+  </div>
+</section>
+
+<section id="theme">
+  <h2>Violeeter</h2>
+  <p class="section-lede">
+    The palette Violeet ships with, published on its own under MIT. Two
+    variants. This page is painted with it — the stylesheet below is generated
+    from the same file the terminals download, so the page cannot advertise
+    colours it is not using.
+  </p>
+
+  <div class="variant">
+    <div class="variant-head">
+      <span class="variant-name">Violeeter Dark</span>
+      <span class="variant-meta mono">#24203F · worst text contrast 4.53</span>
+    </div>
+    <div class="swatches" id="sw-dark"></div>
+  </div>
+
+  <div class="variant">
+    <div class="variant-head">
+      <span class="variant-name">Violeeter Light</span>
+      <span class="variant-meta mono">#FAF8FE · worst text contrast 5.06</span>
+    </div>
+    <div class="swatches" id="sw-light"></div>
+  </div>
+
+  <p class="section-lede" style="margin-top:28px">
+    Every colour that can carry text clears WCAG AA against its own background,
+    and that is checked rather than claimed: <code>python3 build.py --check</code>
+    measures all thirty-six values and fails the build if one drops under 4.5.
+  </p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Terminal</th><th>File</th></tr></thead>
+      <tbody>
+        <tr><td>iTerm2</td><td class="mono">violeeter-{dark,light}.itermcolors</td></tr>
+        <tr><td>Alacritty</td><td class="mono">violeeter-{dark,light}.toml</td></tr>
+        <tr><td>Kitty</td><td class="mono">violeeter-{dark,light}.conf</td></tr>
+        <tr><td>Ghostty</td><td class="mono">violeeter-{dark,light}.ghostty</td></tr>
+        <tr><td>Windows Terminal</td><td class="mono">violeeter-{dark,light}.json</td></tr>
+        <tr><td>Web</td><td class="mono">violeeter.css</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p style="margin-top:22px">
+    <a class="btn" href="https://github.com/grippado/violeet/tree/main/theme">Get Violeeter</a>
+  </p>
+</section>
+
+<section>
+  <h2>Install</h2>
+  <p class="section-lede">
+    macOS, Apple silicon and Intel. Builds are ad-hoc signed, so the first
+    launch needs the quarantine flag cleared.
+  </p>
+<pre class="block">git clone https://github.com/grippado/violeet
+cd violeet
+app/scripts/package.sh
+app/scripts/install.sh</pre>
+  <p class="section-lede" style="margin-top:20px">
+    The daemon that watches sessions installs separately and runs under
+    <code>launchd</code>. It is optional: with it stopped, Violeet is still a
+    terminal, and the board simply says so.
+  </p>
+</section>
+
+<footer>
+  Violeet and Violeeter are MIT licensed. Built by
+  <a href="https://github.com/grippado">grippado</a>.
+</footer>
+
+</div>
+
+<script>
+  // Swatches come from `violeeter.json` — the same file the terminal exports
+  // are generated from — rather than from this page's own stylesheet.
+  //
+  // Reading them back out of CSS was the first attempt and does not work: both
+  // variants are scoped to `:root`, so showing the one the page is not wearing
+  // means setting `data-theme` and asking for the computed style in the same
+  // tick, which the browser does not recompute in time. Both rows came out
+  // identical, one of them labelled with the other one's name. Reading the
+  // source has no such problem and is the stronger claim anyway.
+  const SLOTS = ["black","red","green","yellow","blue","magenta","cyan","white",
+                 "brightBlack","brightRed","brightGreen","brightYellow",
+                 "brightBlue","brightMagenta","brightCyan","brightWhite"];
+
+  function paint(id, variant) {
+    const host = document.getElementById(id);
+    host.textContent = "";
+    for (const slot of SLOTS) {
+      const value = variant.ansi[slot];
+      const cell = document.createElement("div");
+      cell.className = "sw";
+      cell.style.background = value;
+      cell.title = slot + " " + value;
+      host.appendChild(cell);
+    }
+  }
+
+  fetch("violeeter.json")
+    .then(response => response.json())
+    .then(theme => {
+      paint("sw-dark", theme.variants.dark);
+      paint("sw-light", theme.variants.light);
+    })
+    // A page that cannot reach the palette says nothing about it rather than
+    // showing sixteen empty boxes that look like a palette of nothing.
+    .catch(() => {
+      for (const id of ["sw-dark", "sw-light"]) {
+        document.getElementById(id).remove();
+      }
+    });
+
+  const root = document.documentElement;
+  const button = document.getElementById("toggle");
+  button.addEventListener("click", () => {
+    const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    button.textContent = next === "dark" ? "Light" : "Dark";
+  });
+</script>
+
+</body>
+</html>

@@ -1,4 +1,9 @@
-# violeet
+# Violeet
+
+**[grippado.github.io/violeet →](https://grippado.github.io/violeet/)** · a terminal for watching agents work.
+Named after the colour it has always used, and shipping with
+[Violeeter](theme/), that colour as a palette anyone can take.
+
 
 **This `violeet`:** a native macOS terminal built for running several AI coding agents — Claude Code, Codex, opencode — as tabs in a single window, instead of scattering them across six terminal windows you lose track of. Tabs name themselves from what the agent is actually working on. A SwiftUI sidebar keeps one card per session showing its state, how full its context window is, and — the reason this exists — any permission request currently blocking that agent, answerable from the sidebar without switching tabs. It is the sibling of [aitop](https://github.com/grippado/aitop), which monitors agent sessions read-only from a TUI; `violeet` is where you actually run them.
 
