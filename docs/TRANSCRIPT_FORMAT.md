@@ -197,6 +197,44 @@ keyed on that name would count zero. Hence keying on the result.
 them: a dynamic workflow reports only the latter, so a reader correlating on
 `tool-use-id` alone leaves those pending forever.
 
+#### The notification has **two** deliveries, and the second one is not a `user` line
+
+Re-measured 2026-08-08 over 540 files: **358 deliveries of
+`<task-notification>`**, and only 228 of them are the `user` line described
+above. The other **130** arrive as their own line:
+
+```json
+{"type": "attachment",
+ "attachment": {"type": "queued_command", "commandMode": "task-notification",
+                "prompt": "<task-notification>…</task-notification>"}}
+```
+
+The text is in `attachment.prompt` — a string in every notification measured,
+though the same field is a list of content blocks for other kinds of queued
+command. All 130 carry **both** ids, so correlating them was never the hard part:
+a reader that only looks at `message.content` simply never reaches them. No
+attachment notification is followed by a `user` line repeating the same text, so
+the two deliveries are disjoint and neither is a duplicate of the other.
+
+Also present and deliberately not read: 315 `queue-operation` lines and 45
+`assistant` lines that mention a notification. They are the queueing and the
+quoting of one, not a delivery.
+
+#### How long a wait lasts
+
+Latency from a launch to its first notification, over the 227 pairs that carry an
+`agentId` and can therefore be correlated at both ends:
+
+| p50 | p75 | p90 | p95 | p98 | p99 | max |
+|---|---|---|---|---|---|---|
+| 157 s | 280 s | 635 s | 1006 s | 1563 s | 2524 s | 2543 s |
+
+Measured for one purpose: `pending_agents` needs an age at which an open launch
+stops being believed, and 42 minutes is the longest wait this corpus has ever
+recorded. 25 launches of 283 are never closed anywhere in their file — user
+interrupt, killed agent, session ended mid-flight — of which 9 carried an
+`agentId` and were therefore counted.
+
 **Not covered, and named rather than guessed at:** `SendMessage` resuming an
 agent that had already reported in. Its result announces the resume in prose
 (`"…resumed from transcript in the background…"`) with no structural marker and

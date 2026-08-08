@@ -148,6 +148,35 @@ impl TranscriptReader for ClaudeCodeReader {
                 }]
             }
 
+            // A notification can also arrive on its own line, as a *queued
+            // command* rather than as a `user` turn. Measured: of 358
+            // `<task-notification>` deliveries on this corpus, 228 are a `user`
+            // line and **130 are this**, and every one of the 130 carries both
+            // ids — so they were never hard to correlate, they were simply never
+            // read. Before this arm they fell through to `Other` and 130 waits
+            // could only ever be closed by the age limit.
+            //
+            // Only [`TranscriptEvent::AgentFinished`] is emitted, and no
+            // `UserTurn`: the attachment is a command *queued* for the next
+            // turn, and the turn it rides on is a separate line already counted.
+            // Measured on the corpus: no attachment notification is followed by
+            // a `user` line repeating the same text, so nothing is lost by not
+            // counting it and nothing is doubled.
+            "attachment" => {
+                if let Some((tool_use_id, task_id)) = queued_notification(object.get("attachment"))
+                {
+                    return vec![TranscriptEvent::AgentFinished {
+                        tool_use_id,
+                        task_id,
+                        at,
+                    }];
+                }
+                vec![TranscriptEvent::Other {
+                    kind: "attachment".to_string(),
+                    at,
+                }]
+            }
+
             "" => Vec::new(),
             other => vec![TranscriptEvent::Other {
                 kind: other.to_string(),
@@ -314,11 +343,42 @@ fn agent_launch(result: Option<&Value>) -> Option<Option<String>> {
 /// notifications, `task-id` in all of them — a dynamic workflow reports only the
 /// latter, which is why the correlation accepts either.
 ///
+/// This is the `user`-line delivery. The other one is
+/// [`queued_notification`], and it is 130 of 358 deliveries measured.
+///
 /// Read with a substring scan rather than a parser: this is XML-ish text inside
 /// a JSON string, written by another tool, and pulling two tags out of it must
 /// not be able to fail on a shape that gains a third.
 fn task_notification(message: Option<&Value>) -> Option<(Option<String>, Option<String>)> {
-    let text = message?.as_object()?.get("content")?.as_str()?;
+    notification_ids(message?.as_object()?.get("content")?.as_str()?)
+}
+
+/// The same notification, delivered as an `attachment` line.
+///
+/// `attachment.type` is `queued_command` and the text sits in
+/// `attachment.prompt`, which is a string in every notification measured and a
+/// list of content blocks for other kinds of queued command. Both are read, and
+/// the ids come out of the **same** [`notification_ids`] the `user` shape uses:
+/// two ways in, one definition of what a notification says.
+fn queued_notification(attachment: Option<&Value>) -> Option<(Option<String>, Option<String>)> {
+    match attachment?.as_object()?.get("prompt")? {
+        Value::String(text) => notification_ids(text),
+        Value::Array(blocks) => {
+            let text: String = blocks
+                .iter()
+                .filter_map(|b| b.as_object()?.get("text")?.as_str())
+                .collect();
+            notification_ids(&text)
+        }
+        _ => None,
+    }
+}
+
+/// The two ids in a `<task-notification>`, when the text is one.
+///
+/// The single definition of "this text is a notification", so the `user` line
+/// and the `attachment` line cannot drift into recognising different things.
+fn notification_ids(text: &str) -> Option<(Option<String>, Option<String>)> {
     if !text.contains("<task-notification>") {
         return None;
     }
@@ -1051,6 +1111,63 @@ mod tests {
             }) => {
                 assert_eq!(*tool_use_id, None);
                 assert_eq!(task_id.as_deref(), Some("w40vtbz74"));
+            }
+            other => panic!("expected a finish, got {other:?}"),
+        }
+    }
+
+    /// **The 130 that were being thrown away.** Verbatim corpus line, whole.
+    ///
+    /// A notification delivered as `type: "attachment"` with
+    /// `attachment.type == "queued_command"` and the text in
+    /// `attachment.prompt`. Before this was read, the line fell through to
+    /// `Other` and the wait it closes could only ever be closed by the age limit.
+    /// Note the `status: failed`: any status ends the wait, because a session is
+    /// not waiting on an agent that died.
+    #[test]
+    fn a_notification_delivered_as_an_attachment_closes_the_wait() {
+        let line = r#"{"parentUuid":"61e20555-3c93-4e3d-9d31-b720406c7d52","isSidechain":false,"attachment":{"type":"queued_command","prompt":"<task-notification>\n<task-id>a79b45f6948bce499</task-id>\n<tool-use-id>toolu_019w8QYpAvui7VXTjMpnhzjo</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-grippado/5b9530c8-3ecb-404d-8c51-3c454b8bab10/tasks/a79b45f6948bce499.output</output-file>\n<status>failed</status>\n<summary>Agent \"Bug: app mostra 0 sessions\" failed: Agent stalled: no progress for 600s (stream watchdog did not recover)</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>I'll investigate. Let me start reading the key files.</result>\n</task-notification>","commandMode":"task-notification","timestamp":"2026-08-07T21:16:31.763Z"},"type":"attachment","uuid":"f99aeba9-8627-41d1-b19c-bc958bdb90d5","timestamp":"2026-08-07T21:16:31.763Z","session_id":"5b9530c8-3ecb-404d-8c51-3c454b8bab10","userType":"external","entrypoint":"cli","cwd":"/Users/grippado/www/personal/aiterm","sessionId":"fd0f4c55-1a53-4f18-887d-7ef1b7245adf","version":"2.1.224","gitBranch":"main"}"#;
+        let events = reader().parse_line(line);
+        assert_eq!(events.len(), 1, "a finish and nothing else: {events:?}");
+        match &events[0] {
+            TranscriptEvent::AgentFinished {
+                tool_use_id,
+                task_id,
+                at,
+            } => {
+                assert_eq!(
+                    tool_use_id.as_deref(),
+                    Some("toolu_019w8QYpAvui7VXTjMpnhzjo")
+                );
+                assert_eq!(task_id.as_deref(), Some("a79b45f6948bce499"));
+                assert_eq!(at.as_deref(), Some("2026-08-07T21:16:31.763Z"));
+            }
+            other => panic!("expected a finish, got {other:?}"),
+        }
+    }
+
+    /// A queued command that is not a notification stays what it was: a line we
+    /// parsed and do not model. The arm must not turn every attachment into an
+    /// agent completion.
+    #[test]
+    fn an_attachment_that_is_not_a_notification_is_not_a_completion() {
+        let line = r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"roda os testes de novo"},"timestamp":"2026-08-07T21:16:31.763Z"}"#;
+        let events = reader().parse_line(line);
+        assert!(
+            matches!(events.as_slice(), [TranscriptEvent::Other { kind, .. }] if kind == "attachment"),
+            "{events:?}"
+        );
+    }
+
+    /// The other `prompt` shape: a list of content blocks, as a queued command
+    /// with an image attached is written. Read through the same tag scan, so the
+    /// two deliveries cannot come to recognise different things.
+    #[test]
+    fn a_notification_in_a_block_list_prompt_is_still_read() {
+        let line = r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n</task-notification>"}]},"timestamp":"2026-08-07T21:16:31.763Z"}"#;
+        match reader().parse_line(line).first() {
+            Some(TranscriptEvent::AgentFinished { task_id, .. }) => {
+                assert_eq!(task_id.as_deref(), Some("a1"));
             }
             other => panic!("expected a finish, got {other:?}"),
         }
