@@ -147,6 +147,68 @@ struct CardStateTests {
         #expect(waiting.sortRank < working.sortRank)
         #expect(working.sortRank < idle.sortRank)
     }
+
+    // MARK: - Waiting on background agents
+
+    /// The bug this branch exists to fix: `state == "idle"` with agents still
+    /// out is not the same card as `state == "idle"` with nothing pending, and
+    /// it must not sort as one.
+    @Test func a_session_waiting_on_agents_does_not_sort_as_free() {
+        var busy = SessionCard(registered: registered(id: "busy"))
+        busy.state = "idle"
+        busy.pendingAgents = 3
+        var free = SessionCard(registered: registered(id: "free"))
+        free.state = "idle"
+        free.pendingAgents = 0
+
+        #expect(busy.lifecycle == .waitingOnAgents(3))
+        #expect(free.lifecycle == .idle)
+        #expect(busy.sortRank < free.sortRank, "a session nobody needs to look at is not the freest one")
+
+        var working = SessionCard(registered: registered(id: "working"))
+        working.state = "working"
+        var waiting = SessionCard(registered: registered(id: "waiting"))
+        waiting.state = "hitl"
+        #expect(waiting.sortRank < busy.sortRank, "and it must not outrank a card holding a question")
+        #expect(working.sortRank < busy.sortRank)
+    }
+
+    /// It must not read as free either. The label is the whole of what the
+    /// sidebar says about a card at a glance.
+    @Test func a_session_waiting_on_agents_says_so() {
+        var card = SessionCard(registered: registered())
+        card.state = "idle"
+        card.pendingAgents = 1
+        #expect(card.lifecycle.label == "1 agent running")
+        card.pendingAgents = 4
+        #expect(card.lifecycle.label == "4 agents running")
+        #expect(card.lifecycle.label != Lifecycle.idle.label)
+    }
+
+    /// Zero is a reading and `nil` is silence, and neither may be promoted into
+    /// the other. An old daemon says nothing, and a session we know nothing about
+    /// keeps the state its hooks gave it.
+    @Test func an_unknown_agent_count_is_not_a_busy_session() {
+        var unknown = SessionCard(registered: registered(id: "unknown"))
+        unknown.state = "idle"
+        unknown.pendingAgents = nil
+        #expect(unknown.lifecycle == .idle)
+
+        var zero = SessionCard(registered: registered(id: "zero"))
+        zero.state = "idle"
+        zero.pendingAgents = 0
+        #expect(zero.lifecycle == .idle)
+        #expect(unknown.sortRank == zero.sortRank, "both are free; only one is known to be")
+    }
+
+    /// Foreground work outranks background work: a session that is computing is
+    /// `working`, whatever it also has out.
+    @Test func a_computing_session_is_working_even_with_agents_out() {
+        var card = SessionCard(registered: registered())
+        card.state = "working"
+        card.pendingAgents = 2
+        #expect(card.lifecycle == .working)
+    }
 }
 
 @Suite("Card patching")
@@ -171,6 +233,34 @@ struct CardPatchTests {
         #expect(card.gitBranch == nil, "an explicit null must clear")
         #expect(card.contextUsedTokens == 500)
         #expect(card.cumulativeOutputTokens == 1_000)
+    }
+
+    /// The whole producer-to-consumer path for the three states of
+    /// `pending_agents`: absent leaves the card alone, `0` is a reading that
+    /// changes what the card is, and an explicit null puts it back to unknown.
+    ///
+    /// The failure this guards is the collapse: if absent and `0` arrived as the
+    /// same thing, a card would drop out of `agents running` on any patch that
+    /// merely reported new token counts.
+    @Test func an_absent_agent_count_is_not_a_zero() {
+        var card = SessionCard(registered: registered())
+        card.state = "idle"
+        card.apply(SessionUpdated(sessionID: "s1", pendingAgents: .value(2)))
+        #expect(card.lifecycle == .waitingOnAgents(2))
+
+        // A patch about something else entirely. The count must survive it.
+        card.apply(SessionUpdated(sessionID: "s1", cumulativeOutputTokens: .value(9_000)))
+        #expect(card.pendingAgents == 2, "an absent field is unchanged, not zero")
+        #expect(card.lifecycle == .waitingOnAgents(2))
+
+        // The agents reported in. Zero is the positive claim that closes it.
+        card.apply(SessionUpdated(sessionID: "s1", pendingAgents: .value(0)))
+        #expect(card.pendingAgents == 0)
+        #expect(card.lifecycle == .idle)
+
+        // And "became unknown" is a third thing, distinguishable from both.
+        card.apply(SessionUpdated(sessionID: "s1", pendingAgents: .unknown))
+        #expect(card.pendingAgents == nil)
     }
 
     /// The tilde has to be able to turn off again: a session followed from its
