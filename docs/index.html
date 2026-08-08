@@ -23,6 +23,17 @@
   /* ---- header ---- */
   header { padding: 72px 0 56px; }
   .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  /* The Violeeter mark at text size, for the places its name appears inside a
+     sentence or a button. `1em` so it tracks whatever it sits in instead of
+     being right in one place and wrong in the rest, and `flex: none` so it can
+     never be what wraps a single-line control. */
+  .inline-mark {
+    height: 1em; width: 1em; flex: none;
+    object-fit: contain;
+    vertical-align: -0.14em;
+    margin-right: 0.3em;
+  }
+
   .mark {
     width: 40px; height: 40px; flex: none;
     display: block;
@@ -51,7 +62,8 @@
   .lede { font-size: 1.12rem; margin: 20px 0 0; max-width: 58ch; opacity: 0.85; }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
   .btn {
-    display: inline-block; padding: 10px 18px; border-radius: 8px;
+    display: inline-flex; align-items: center; white-space: nowrap;
+    padding: 10px 18px; border-radius: 8px;
     text-decoration: none; font-weight: 600; font-size: 0.95rem;
     border: 1px solid var(--violeeter-brightblack);
     color: var(--violeeter-fg);
@@ -149,7 +161,7 @@
   <div class="cta">
     <a class="btn btn-primary" href="https://github.com/grippado/violeet/releases">Download for macOS</a>
     <a class="btn" href="https://github.com/grippado/violeet">Source on GitHub</a>
-    <a class="btn" href="https://grippado.github.io/violeeter/">Wears Violeeter →</a>
+    <a class="btn" href="https://grippado.github.io/violeeter/">Wears <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
   </div>
 
   <div class="term" style="margin-top:44px">
@@ -213,7 +225,7 @@
 </section>
 
 <section id="theme">
-  <h2>Violeeter</h2>
+  <h2><img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter</h2>
   <p class="section-lede">
     The palette Violeet ships with, published on its own under MIT. Two
     variants. This page is painted with it, and the stylesheet below is generated
@@ -264,7 +276,7 @@
   </p>
 
   <p style="margin-top:20px">
-    <a class="btn btn-primary" href="https://grippado.github.io/violeeter/">Get Violeeter →</a>
+    <a class="btn btn-primary" href="https://grippado.github.io/violeeter/">Get <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
   </p>
 </section>
 
