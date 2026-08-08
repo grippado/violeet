@@ -270,44 +270,46 @@ struct EditorTabPanel: View {
     private func openWith(_ editing: EditorTab) -> some View {
         let chosen = ExternalApps.resolve(state.preferences.terminal.editor.openWith)
 
-        if chosen.count == 1, let app = chosen[0] as ExternalApps.Choice? {
+        if chosen.count == 1, let app = chosen.first {
             actionButton("Open in \(app.name)", symbol: "arrow.up.forward.app") {
                 ExternalApps.open(path: editing.path, with: app.url)
             }
             .help("Open \(editing.name) in \(app.name).")
         } else {
             let apps = chosen.isEmpty ? ExternalApps.choices(for: editing.path) : chosen
-            Menu {
-                ForEach(apps) { app in
-                    Button(app.name) { ExternalApps.open(path: editing.path, with: app.url) }
+            // A button that raises an `NSMenu`, not SwiftUI's `Menu`.
+            //
+            // `Menu` draws its own chrome and paints over the label's
+            // background, so this row came out flat while the two above it were
+            // filled shapes. Three actions that do the same kind of thing must
+            // not look like two buttons and a caption.
+            //
+            // The menu is built here rather than held, because the list depends
+            // on the file and the file changes with the tab.
+            actionButton("Open in", symbol: "arrow.up.forward.app", trailing: "chevron.down") {
+                let menu = NSMenu()
+                for app in apps {
+                    let path = editing.path
+                    let url = app.url
+                    menu.addItem(MenuAction.item(app.name) {
+                        ExternalApps.open(path: path, with: url)
+                    })
                 }
-                if !apps.isEmpty { Divider() }
+                if !apps.isEmpty { menu.addItem(.separator()) }
                 // Always present, and the only entry when nothing claims the
                 // type. macOS answers that case with its own picker, which is
                 // the right place for the question once we have nothing useful
                 // to offer.
-                Button("System default") { ExternalApps.openWithDefault(path: editing.path) }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.forward.app")
-                        .appFont(.caption)
-                    Text("Open in")
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down")
-                        .appFont(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .appFont(.body)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Self.buttonBackground)
-                .contentShape(Rectangle())
+                let path = editing.path
+                menu.addItem(MenuAction.item("System default") {
+                    ExternalApps.openWithDefault(path: path)
+                })
+                // At the pointer, which is where the click just happened. The
+                // alternative needs the button's own frame in screen space,
+                // and threading a geometry reader through here to place a menu
+                // two pixels differently is not a trade worth making.
+                menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize(horizontal: false, vertical: true)
-            .pointingHand()
             .help("Open \(editing.name) in another application.")
         }
     }
@@ -321,6 +323,7 @@ struct EditorTabPanel: View {
     private func actionButton(
         _ title: String,
         symbol: String,
+        trailing: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         QuietButton(action: action) {
@@ -331,6 +334,11 @@ struct EditorTabPanel: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
+                if let trailing {
+                    Image(systemName: trailing)
+                        .appFont(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             // A rung up from where these started.
             //
