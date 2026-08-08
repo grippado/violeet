@@ -1,7 +1,7 @@
 ---
 date: "2026-07-30"
 type: decision
-tags: [adr, aiterm, hitl, permissions, hooks, pty, claude-code]
+tags: [adr, violeet, hitl, permissions, hooks, pty, claude-code]
 status: accepted
 ---
 
@@ -12,7 +12,7 @@ status: accepted
 
 ## Context and problem
 
-The reason to build aiterm rather than keep using tabs in iTerm is this: when
+The reason to build violeet rather than keep using tabs in iTerm is this: when
 four agents are running, three of them are usually blocked on a permission
 prompt you have not noticed. The sidebar should surface that and let you answer
 it in place.
@@ -42,7 +42,7 @@ own, and the identifier we would naturally correlate on does not exist.
 ## Decision
 
 **HITL is implemented on the `PermissionRequest` hook. The daemon holds the HTTP
-response open and resolves it three ways. aiterm does not write into the
+response open and resolves it three ways. violeet does not write into the
 agent's PTY in v0.**
 
 The three resolutions, first one wins:
@@ -80,7 +80,7 @@ The wire shape of all three is `hitl_resolved` in
 - Structured input: real `tool_name` and `tool_input`, not text parsed off a
   screen.
 - The failure path is the status quo. Every way this can break lands the user in
-  the interactive dialog they would have had without aiterm.
+  the interactive dialog they would have had without violeet.
 - The daemon never has to understand the terminal, so ADR-001's boundary stays
   clean.
 
@@ -98,7 +98,7 @@ The wire shape of all three is `hitl_resolved` in
 - **No headless support**, by measurement. `claude -p` never fires the event and
   we will not pretend otherwise.
 - A hook that is slower than a competing `PermissionRequest` hook in the user's
-  own settings loses silently. `aiterm doctor` should report other
+  own settings loses silently. `violeet doctor` should report other
   `PermissionRequest` hooks it finds.
 
 **Neutral**

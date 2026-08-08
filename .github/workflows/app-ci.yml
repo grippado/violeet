@@ -81,15 +81,15 @@ jobs:
           # gets wrong: a missing executable, a plist Launch Services cannot
           # read, and a binary with only one architecture in it.
           mkdir -p verify && ditto -x -k "$app" verify
-          bundle=verify/aiterm.app
-          test -x "$bundle/Contents/MacOS/AITerm"
+          bundle=verify/violeet.app
+          test -x "$bundle/Contents/MacOS/Violeet"
           plutil -lint "$bundle/Contents/Info.plist"
-          lipo -info "$bundle/Contents/MacOS/AITerm" | tee /dev/stderr | grep -q 'x86_64 arm64'
+          lipo -info "$bundle/Contents/MacOS/Violeet" | tee /dev/stderr | grep -q 'x86_64 arm64'
           codesign --verify --verbose=2 "$bundle"
 
       - uses: actions/upload-artifact@v5
         with:
-          name: aiterm-app-unsigned
+          name: violeet-app-unsigned
           path: app/dist/*
           # Long enough to bisect a regression, short enough that unsigned
           # builds do not accumulate as if they were releases.

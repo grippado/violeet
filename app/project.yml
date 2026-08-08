@@ -1,10 +1,10 @@
 # XcodeGen spec. The .xcodeproj is generated from this file and is NOT committed
 # — pbxproj is machine-written XML and conflicts badly when parallel tracks touch
 # the app. Regenerate with:  cd app && xcodegen generate
-name: AITerm
+name: Violeet
 
 options:
-  bundleIdPrefix: digital.opengateway.aiterm
+  bundleIdPrefix: digital.opengateway.violeet
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
@@ -15,26 +15,26 @@ packages:
     from: 1.15.0
 
 targets:
-  AITerm:
+  Violeet:
     type: application
     platform: macOS
     sources:
-      - path: Sources/AITerm
+      - path: Sources/Violeet
     dependencies:
       - package: SwiftTerm
     # Deliberately NOT an `info:` block. XcodeGen's `info:` *generates*
-    # Sources/AITerm/Info.plist, overwriting it on every `xcodegen generate` —
+    # Sources/Violeet/Info.plist, overwriting it on every `xcodegen generate` —
     # and that same file is the one `scripts/package.sh` copies into the bundle
     # it assembles without Xcode. One file, one author: the plist is committed
     # and hand-maintained, and Xcode is pointed at it rather than handed a
     # recipe to rewrite it from.
     settings:
       base:
-        INFOPLIST_FILE: Sources/AITerm/Info.plist
+        INFOPLIST_FILE: Sources/Violeet/Info.plist
         GENERATE_INFOPLIST_FILE: false
-        PRODUCT_BUNDLE_IDENTIFIER: digital.opengateway.aiterm
+        PRODUCT_BUNDLE_IDENTIFIER: digital.opengateway.violeet
         SWIFT_VERSION: "5.9"
         ENABLE_HARDENED_RUNTIME: true
-        # The app spawns PTYs and talks to a Unix socket in ~/.aiterm.
+        # The app spawns PTYs and talks to a Unix socket in ~/.violeet.
         # Sandboxing is deliberately off for v0 — revisit before distribution.
         ENABLE_APP_SANDBOX: false

@@ -15,7 +15,7 @@ shaped [ADR-004](../adr/ADR-004-hitl-via-permissionrequest-sem-injecao-pty.md).
 Claude Code **v2.1.220**, TUI driven over a real PTY, with the session
 transcript as the arbiter rather than the screen.
 
-Rescued from `/tmp/aiterm-spike` on 2026-07-31, where it would not have survived
+Rescued from `/tmp/violeet-spike` on 2026-07-31, where it would not have survived
 a reboot.
 
 ### The part the daemon depends on
@@ -23,7 +23,7 @@ a reboot.
 `scripts/hook-allow-0.sh` and `scripts/hook-deny.sh` are the hooks whose
 decisions Claude Code **honoured**, confirmed as `err=False` in the transcript.
 Their output is the shape `PermissionResponse` in
-`crates/aiterm-daemon/src/http/payload.rs` must produce, and there is a test
+`crates/violeet-daemon/src/http/payload.rs` must produce, and there is a test
 asserting it byte for byte:
 
 ```json

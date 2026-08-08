@@ -1,7 +1,7 @@
 ---
 date: "2026-08-01"
 type: decision
-tags: [adr, aiterm, security, http, hooks, authentication, threat-model]
+tags: [adr, violeet, security, http, hooks, authentication, threat-model]
 status: accepted
 ---
 
@@ -12,7 +12,7 @@ status: accepted
 
 ## Context and problem
 
-The daemon binds `127.0.0.1` on a port it publishes in `~/.aiterm/daemon.json`,
+The daemon binds `127.0.0.1` on a port it publishes in `~/.violeet/daemon.json`,
 and answers two routes: `/hook/event` and `/hook/permission-request`. There is
 no token, no signature, no check on the caller. Any process running as this user
 can read the discovery file, learn the port, and POST whatever it likes.
@@ -24,7 +24,7 @@ much they matter:
 `session_id` and the sidebar grows a card for an agent that does not exist. It
 would sit there until it expired for inactivity. Cosmetic, confusing, harmless.
 
-**A forged tab binding.** POST with an `x-aiterm-tab-id` header naming a tab
+**A forged tab binding.** POST with an `x-violeet-tab-id` header naming a tab
 that *does* exist and the fake session attaches to a real tab. Now the sidebar
 misattributes: a card claiming to be the agent in tab 2 is not. ADR-003 went to
 some trouble to make binding exact rather than heuristic, and this walks around
@@ -52,7 +52,7 @@ below, and record the mitigation now rather than discovering it later.**
 The reasoning, stated as an assumption so it can be checked rather than
 assumed:
 
-> **aiterm's threat model for v0 is a single-user machine where every local
+> **violeet's threat model for v0 is a single-user machine where every local
 > process is already trusted.**
 
 On such a machine an attacker who can POST to loopback can also read
@@ -64,7 +64,7 @@ This is a real limit and not a universal one. It stops being true on a shared
 machine, a multi-user build box, or anywhere untrusted code runs as this user —
 a sandboxed-but-local process, a compromised dependency in a project the agent
 is working on, a malicious VS Code extension. In those settings the argument
-above does not hold, and this decision should be revisited before aiterm is used
+above does not hold, and this decision should be revisited before violeet is used
 there.
 
 ### What is *not* accepted
@@ -83,11 +83,11 @@ Two things are out of scope for the acceptance and stay as they are:
 **A shared secret in a header.**
 
 - The daemon generates a random token at startup and writes it into
-  `~/.aiterm/daemon.json`, which is already `0600` in a `0700` directory — so
+  `~/.violeet/daemon.json`, which is already `0600` in a `0700` directory — so
   the token is readable by exactly the accounts that could already reach the
   socket.
-- `aiterm install-hooks` reads it and writes it into each hook entry as
-  `"headers": {"x-aiterm-token": "$AITERM_TOKEN"}` with `AITERM_TOKEN` in
+- `violeet install-hooks` reads it and writes it into each hook entry as
+  `"headers": {"x-violeet-token": "$VIOLEET_TOKEN"}` with `VIOLEET_TOKEN` in
   `allowedEnvVars`, or inlines the literal value.
 - The daemon rejects any request whose token does not match, with `500` on
   `/hook/permission-request` so the invariant above survives.
@@ -100,7 +100,7 @@ surprised:
    on every restart — the hooks would fire, be rejected, and the board would go
    quiet with no error the user ever sees. Either the token is persisted across
    restarts, or `install-hooks` has to be re-run each time, and the second is
-   not acceptable. `aiterm doctor` should compare the two and report a mismatch,
+   not acceptable. `violeet doctor` should compare the two and report a mismatch,
    because this failure is otherwise invisible.
 2. **The token would sit in the user's settings file in plaintext.** That is the
    same trust boundary as the discovery file, so it adds no new exposure — but
@@ -109,7 +109,7 @@ surprised:
 
 **Not implemented in this ADR.** Writing it down is the deliverable; the
 mitigation lands when the threat model changes or when someone wants to run
-aiterm somewhere the assumption above is false.
+violeet somewhere the assumption above is false.
 
 ## Consequences
 
@@ -127,15 +127,15 @@ aiterm somewhere the assumption above is false.
 - A local process can forge sessions, forge tab bindings, and answer permission
   requests the user was being asked about. The third is the serious one and it is
   accepted only under the single-user assumption stated above.
-- `aiterm doctor` cannot currently tell a forged session from a real one, and
+- `violeet doctor` cannot currently tell a forged session from a real one, and
   will not be able to until there is a token to check.
-- Anyone deploying aiterm outside the stated threat model inherits a decision
+- Anyone deploying violeet outside the stated threat model inherits a decision
   they did not make. This document is the mitigation for that: it is findable,
   and it says plainly when it stops applying.
 
 **Neutral**
 
-- The discovery file's `0600` and the `~/.aiterm` directory's `0700` (wave 2)
+- The discovery file's `0600` and the `~/.violeet` directory's `0700` (wave 2)
   narrow *who can find the port*, which is defence in depth rather than
   authentication. A process that can read the file is not the only process that
   can find a listening port on loopback.

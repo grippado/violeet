@@ -19,7 +19,7 @@ exactly like one that has it, right up until you type into nothing.
 
 ### Setup
 
-1. Open aiterm. One tab, shell prompt visible.
+1. Open violeet. One tab, shell prompt visible.
 2. `⌥⌘I` to open the panel.
 3. Click into the terminal and type `echo focus` — **do not press Return.** The
    line on screen is the probe: every step below must be able to add to it.
@@ -70,7 +70,7 @@ panel ever holds it at all.
 **Why this matters more than it looks.** Font family, size and line spacing
 change the cell size, which changes how many columns and rows fit. The program
 on the other end of the PTY cannot see that. Without `TIOCSWINSZ` and the
-`SIGWINCH` it raises, aiterm redraws at the new size while the program keeps
+`SIGWINCH` it raises, violeet redraws at the new size while the program keeps
 composing for the old one — and a full-screen TUI tears the moment anything
 repaints.
 

@@ -1,13 +1,13 @@
 ---
 date: "2026-07-31"
 type: log
-tags: [aiterm, track-c, cli, hooks, doctor]
+tags: [violeet, track-c, cli, hooks, doctor]
 ---
 
 # Track C — the CLI: doctor, install-hooks, uninstall-hooks
 
-Wave 2, last track. Scope as briefed: `crates/aiterm-cli/`,
-`crates/aiterm-transcript/`, `docs/TRANSCRIPT_FORMAT.md`, and this file. Task 1
+Wave 2, last track. Scope as briefed: `crates/violeet-cli/`,
+`crates/violeet-transcript/`, `docs/TRANSCRIPT_FORMAT.md`, and this file. Task 1
 only — the CLI. Nothing was needed from outside the frozen protocol, so there is
 no `docs/tracks/C-protocol-request.md`.
 
@@ -26,19 +26,19 @@ with **Claude Code v2.1.220** and the committed daemon:
 
 The user's own `~/.claude/settings.json` was **never written to**. Every
 install/uninstall ran against a copy under a disposable `HOME`, and the real
-file is confirmed untouched — no aiterm entries, no backup files beside it.
+file is confirmed untouched — no violeet entries, no backup files beside it.
 
 ### `allowedEnvVars` is the whole binding, and it is easy to miss
 
-Claude Code interpolates `$AITERM_TAB_ID` into a header **only if the variable
+Claude Code interpolates `$VIOLEET_TAB_ID` into a header **only if the variable
 is also listed in `allowedEnvVars`**; otherwise the reference resolves to an
-empty string. The daemon deliberately reads an empty `x-aiterm-tab-id` as *no
+empty string. The daemon deliberately reads an empty `x-violeet-tab-id` as *no
 tab*. So omitting one array would not error, would not warn, and would silently
 unbind every session from its tab — the product's headline feature failing with
 no symptom but a sidebar that never matches a tab.
 
 Confirmed empirically rather than trusted: a logging server in place of the
-daemon showed `x-aiterm-tab-id = 'tab-CLI-PROOF-42'` arriving on every request.
+daemon showed `x-violeet-tab-id = 'tab-CLI-PROOF-42'` arriving on every request.
 There is also a unit test asserting every entry declares the variable it
 interpolates.
 
@@ -52,7 +52,7 @@ the better first source.
 
 ## Two URLs, eleven events
 
-Confirmed by reading `crates/aiterm-daemon/src/http/mod.rs`, as instructed:
+Confirmed by reading `crates/violeet-daemon/src/http/mod.rs`, as instructed:
 `/hook/event` serves every informational hook and discriminates on the payload's
 `hook_event_name`; `/hook/permission-request` is separate because it is the only
 one that blocks. A `PermissionRequest` payload arriving at `/hook/event` is
@@ -78,14 +78,14 @@ directory live. Not mine to change.
 This machine's global settings already had a competing hook — the superset
 notifier, a `command` hook that exits 0 without emitting JSON. It is exactly the
 case ADR-004 warns about: with two hooks on this event the first to decide wins
-and the slower one is not awaited, and aiterm holds its answer open for minutes
+and the slower one is not awaited, and violeet holds its answer open for minutes
 waiting for a human, so it is *structurally* the slower one. A competing hook
 does not degrade HITL; it silently wins.
 
 Four explicit outcomes, no decision made on the user's behalf:
 
 - **absorb** — the foreign group is moved out of the settings and parked in
-  `~/.aiterm/absorbed-hooks.json`; `uninstall-hooks` puts it back where it was.
+  `~/.violeet/absorbed-hooks.json`; `uninstall-hooks` puts it back where it was.
 - **replace** — removed, with a copy-pasteable restore recipe printed first.
 - **abort** — nothing changes.
 - **coexist** — left in place, with a plain warning that HITL is now
@@ -116,7 +116,7 @@ directory are ignored *in silence* — no warning, no log line — so the sympto
 from `~/.claude.json` → `projects[<abs path>].hasTrustDialogAccepted`. This very
 repository is not in that map, so the check fires on its own author's checkout.
 
-It is a ⚠ and not a ✗: aiterm installs into *user* settings, which trust does
+It is a ⚠ and not a ✗: violeet installs into *user* settings, which trust does
 not gate, so it only bites someone who also keeps hooks in project settings. The
 fix text says so rather than issuing an order for a problem the user may not
 have.
@@ -126,7 +126,7 @@ have.
 Three rules, and a bug that a test caught.
 
 **Merge, never overwrite.** Other hooks on the same event, other top-level keys
-and key order all survive. Our entries are recognized by a `?src=aiterm` query
+and key order all survive. Our entries are recognized by a `?src=violeet` query
 parameter on our own URL — not by an extra JSON key, because an unknown field is
 a bet that Claude Code's schema is permissive, and losing that bet costs the
 user a settings file that no longer loads. The marker also survives a port
@@ -184,7 +184,7 @@ parked file consumed.
   `GET /health` on loopback against a server we wrote, and a line diff that is
   thirty lines of LCS. Each dependency would have been larger than the code it
   replaced. Written out rather than assumed to be obvious.
-- **`crates/aiterm-transcript/` does not exist.** Task 2 was not given. It also
+- **`crates/violeet-transcript/` does not exist.** Task 2 was not given. It also
   cannot be created without adding a member to the workspace `Cargo.toml`, which
   is read-only and outside my scope — flagging it now so it is not discovered
   mid-task later.
@@ -195,10 +195,10 @@ parked file consumed.
 - **`docs/PROTOCOL.md` says "Status: v1 — normative"; the brief said v2.** I
   coded against the file, which is normative and which the brief also told me to
   read. Nothing depends on the answer: the wire `v` is `1` either way, which is
-  what the daemon accepts and what `aiterm-proto::PROTOCOL_VERSION` says. Track
+  what the daemon accepts and what `violeet-proto::PROTOCOL_VERSION` says. Track
   B's log records the same discrepancy from wave 1, so it has now survived two
   tracks without being reconciled.
-- **The daemon creates `~/.aiterm` with mode 755.** The socket is `0600`, but
+- **The daemon creates `~/.violeet` with mode 755.** The socket is `0600`, but
   the directory holding it is world-readable and group/world-traversable. It is
   the daemon's control channel; another account on the machine should not be
   able to reach the directory. `doctor` reports it as ⚠ with `chmod 700` as the
@@ -214,7 +214,7 @@ parked file consumed.
 
 ## Dependency change, which is a scope deviation
 
-`crates/aiterm-cli/Cargo.toml` enables `serde_json`'s `preserve_order` feature.
+`crates/violeet-cli/Cargo.toml` enables `serde_json`'s `preserve_order` feature.
 That pulls in `indexmap` and therefore **modifies `Cargo.lock`**, which is at the
 repository root and outside my scope. The workspace `Cargo.toml` was not
 touched.
@@ -229,7 +229,7 @@ maps, so its output is unaffected — its own test suite still passes.
 
 - **The daemon is authoritative for routing.** I read `http/mod.rs` rather than
   the brief, as instructed, and the two agreed.
-- **`aiterm-proto` owns the protocol types.** `PROTOCOL_VERSION` and
+- **`violeet-proto` owns the protocol types.** `PROTOCOL_VERSION` and
   `DEFAULT_HOOK_PORT` are used from it, not re-declared. The CLI does not need
   the message types themselves: it never opens the socket for messaging, only to
   check that it accepts a connection.
@@ -240,14 +240,14 @@ maps, so its output is unaffected — its own test suite still passes.
 
 ---
 
-# Task 2 — `aiterm-transcript`
+# Task 2 — `violeet-transcript`
 
 Scope was widened for this task: the workspace `Cargo.toml` and the root
 `.gitignore` are now mine, and the parallel-track rules no longer apply. The
 crate is added to `members`; the read-only comment on that file is updated to
 say the waves are over rather than left to mislead.
 
-No dependency on `aiterm-daemon`, as briefed. The crate takes a path and returns
+No dependency on `violeet-daemon`, as briefed. The crate takes a path and returns
 typed events plus a telemetry snapshot. `notify` is its only dependency.
 
 ## What I measured

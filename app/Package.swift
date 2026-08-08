@@ -13,7 +13,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "AITerm",
+    name: "Violeet",
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.15.0"),
@@ -34,11 +34,11 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "AITerm",
+            name: "Violeet",
             dependencies: [
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
-            path: "Sources/AITerm",
+            path: "Sources/Violeet",
             // Info.plist is consumed by the Xcode target, not by SwiftPM; the
             // per-directory READMEs are orientation for humans, not resources.
             exclude: [
@@ -63,12 +63,12 @@ let package = Package(
         // rendering a value the session no longer has, which looks like a daemon
         // bug from the outside and points nowhere near this file.
         .testTarget(
-            name: "AITermTests",
+            name: "VioleetTests",
             dependencies: [
-                "AITerm",
+                "Violeet",
                 .product(name: "Testing", package: "swift-testing"),
             ],
-            path: "Tests/AITermTests",
+            path: "Tests/VioleetTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

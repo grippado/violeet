@@ -73,7 +73,7 @@ jobs:
             version="${GITHUB_REF_NAME#v}"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Building aiterm $version"
+          echo "Building violeet $version"
 
       # The keychain is created, used, and left behind on a runner that is
       # destroyed minutes later. It still gets a random password rather than a
@@ -109,7 +109,7 @@ jobs:
       - name: Package
         working-directory: app
         env:
-          AITERM_SIGN_IDENTITY: ${{ env.MACOS_SIGN_IDENTITY }}
+          VIOLEET_SIGN_IDENTITY: ${{ env.MACOS_SIGN_IDENTITY }}
         run: ./scripts/package.sh --version "${{ steps.version.outputs.version }}" --output dist
 
       # Notarization is Apple telling Gatekeeper this build is known. Stapling
@@ -147,29 +147,29 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "## aiterm ${{ steps.version.outputs.version }}"
+            echo "## violeet ${{ steps.version.outputs.version }}"
             echo
             echo "macOS 14 or later. Universal (Apple silicon and Intel)."
             echo
             if [[ "${{ steps.signing.outputs.signed }}" == "true" ]]; then
-              echo "Signed with a Developer ID. Open the .dmg and drag aiterm to Applications."
+              echo "Signed with a Developer ID. Open the .dmg and drag violeet to Applications."
             else
               echo "**This build is not signed with a Developer ID.** macOS will refuse to"
               echo "open it until the quarantine flag is removed:"
               echo
               echo '```'
-              echo "xattr -dr com.apple.quarantine /Applications/aiterm.app"
+              echo "xattr -dr com.apple.quarantine /Applications/violeet.app"
               echo '```'
             fi
             echo
-            echo "aiterm talks to \`aiterm-daemon\` over \`~/.aiterm/daemon.sock\`. Without the"
+            echo "violeet talks to \`violeet-daemon\` over \`~/.violeet/daemon.sock\`. Without the"
             echo "daemon running the terminal works normally and the sidebar has no data."
           } > notes.md
           cat notes.md
 
       - uses: softprops/action-gh-release@v2
         with:
-          name: aiterm ${{ steps.version.outputs.version }}
+          name: violeet ${{ steps.version.outputs.version }}
           body_path: notes.md
           # A tag that looks like a prerelease is published as one, so a
           # `v0.2.0-rc1` never becomes the download the front page offers.

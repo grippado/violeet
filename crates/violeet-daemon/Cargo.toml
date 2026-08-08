@@ -1,0 +1,49 @@
+[package]
+name = "violeet-daemon"
+description = "violeet daemon: session registry, Claude Code hook endpoint, socket server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "violeet_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "violeet-daemon"
+path = "src/main.rs"
+
+[dependencies]
+violeet-proto = { path = "../violeet-proto" }
+
+# The transcript reader. A one-way dependency on purpose: that crate knows
+# nothing about the socket, the registry or this runtime, so it stays testable
+# on its own and the daemon does the wiring.
+violeet-transcript = { path = "../violeet-transcript" }
+serde.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "sync",
+    "time",
+    "io-util",
+    "signal",
+] }
+axum = "0.8.9"
+tower-http = { version = "0.7.0", features = ["catch-panic"] }
+
+[dev-dependencies]
+http-body-util = "0.1.4"
+hyper = { version = "1.11.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.20", features = ["tokio"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+
+# Tracks add their own dependencies here. The workspace Cargo.toml is read-only
+# during a fan-out wave.

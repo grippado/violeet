@@ -1,0 +1,30 @@
+[package]
+name = "violeet-cli"
+description = "violeet CLI: doctor, install-hooks, uninstall-hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "violeet"
+path = "src/main.rs"
+
+[dependencies]
+violeet-proto = { path = "../violeet-proto" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+serde.workspace = true
+
+# `preserve_order` is not a preference here, it is the whole "never corrupt the
+# user's settings" requirement.
+#
+# Without it `serde_json::Map` is a `BTreeMap`, so reading a file and writing it
+# back **unchanged** reorders every key alphabetically. The user's settings.json
+# starts `hooks`, `statusLine`, `enabledPlugins`; a round trip would rewrite the
+# whole file, show a diff nobody asked for, and make "install then uninstall
+# restores it byte for byte" impossible to honour.
+#
+# Costs one transitive crate (`indexmap`) and its Cargo.lock entries.
+serde_json = { workspace = true, features = ["preserve_order"] }

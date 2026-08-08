@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/aiterm-proto",
-    "crates/aiterm-daemon",
-    "crates/aiterm-cli",
-    "crates/aiterm-transcript",
+    "crates/violeet-proto",
+    "crates/violeet-daemon",
+    "crates/violeet-cli",
+    "crates/violeet-transcript",
 ]
 
 # This file was READ-ONLY during the fan-out waves, so parallel tracks could not
@@ -17,7 +17,7 @@ edition = "2021"
 rust-version = "1.82"
 license = "MIT"
 authors = ["Gabriel Gripp"]
-repository = "https://github.com/grippado/aiterm"
+repository = "https://github.com/grippado/violeet"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

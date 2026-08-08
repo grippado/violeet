@@ -1,18 +1,18 @@
 ---
 date: "2026-07-30"
 type: decision
-tags: [adr, aiterm, terminal, swift, swiftterm, vt]
+tags: [adr, violeet, terminal, swift, swiftterm, vt]
 status: accepted
 ---
 
 # ADR-001: Host SwiftTerm rather than write our own terminal emulator
 
 > **Status:** accepted (2026-07-30)
-> **Context:** aiterm needs real VT emulation and PTY handling in a native macOS app. The question is whether that comes from an existing Swift library or from a Rust core we write and bridge.
+> **Context:** violeet needs real VT emulation and PTY handling in a native macOS app. The question is whether that comes from an existing Swift library or from a Rust core we write and bridge.
 
 ## Context and problem
 
-aiterm is, first and last, a terminal. Agents like Claude Code drive the screen
+violeet is, first and last, a terminal. Agents like Claude Code drive the screen
 hard: alternate screen buffer, bracketed paste, mouse reporting, OSC sequences
 for the title, truecolor, wide glyphs and combining marks, resize during a
 render. Anything short of correct here is not a rough edge, it is the product

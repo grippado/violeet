@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Regenerate app/Resources/aiterm.icns from the source artwork.
+# Regenerate app/Resources/violeet.icns from the source artwork.
 #
 # The .icns is committed because `package.sh` copies it and a release must not
 # depend on anyone's local tooling. But a committed binary with no recorded way
@@ -17,8 +17,8 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-SOURCE="${1:-../AITerm-icon.png}"
-OUTPUT="Resources/aiterm.icns"
+SOURCE="${1:-../Violeet-icon.png}"
+OUTPUT="Resources/violeet.icns"
 
 [[ -f "$SOURCE" ]] || { echo "make-icon.sh: no such file: $SOURCE" >&2; exit 1; }
 
@@ -27,7 +27,7 @@ HEIGHT="$(sips -g pixelHeight "$SOURCE" | awk '/pixelHeight/ {print $2}')"
 [[ "$WIDTH" == "$HEIGHT" ]] || { echo "make-icon.sh: source is not square (${WIDTH}×${HEIGHT})" >&2; exit 1; }
 (( WIDTH >= 1024 )) || { echo "make-icon.sh: source is ${WIDTH}px; 1024 is the minimum" >&2; exit 1; }
 
-ICONSET="$(mktemp -d)/aiterm.iconset"
+ICONSET="$(mktemp -d)/violeet.iconset"
 mkdir -p "$ICONSET"
 trap 'rm -rf "$(dirname "$ICONSET")"' EXIT
 

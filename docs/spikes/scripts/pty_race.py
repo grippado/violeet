@@ -28,7 +28,7 @@ env.pop("CLAUDECODE", None)
 p = subprocess.Popen(
     [BIN, "--settings", settings, "--model", "claude-haiku-4-5-20251001"],
     stdin=slave, stdout=slave, stderr=slave,
-    cwd="/private/tmp/aiterm-spike", env=env, preexec_fn=os.setsid,
+    cwd="/private/tmp/violeet-spike", env=env, preexec_fn=os.setsid,
 )
 os.close(slave)
 

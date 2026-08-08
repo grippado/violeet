@@ -21,7 +21,7 @@ A ressalva que muda o desenho do produto: **o diálogo interativo é renderizado
 ## Como o spike foi montado
 
 ```
-/tmp/aiterm-spike/
+/tmp/violeet-spike/
 ├── hook-deny.sh              # hook command: loga payload cru + devolve deny
 ├── hook-allow-{0,5,20}.sh    # hook command: allow após N segundos
 ├── hook-slow-allow.sh        # hook command: dorme 90s, devolve allow
@@ -41,7 +41,7 @@ Registro porque qualquer um que repita isso vai cair nelas:
 
 **1. `PermissionRequest` não dispara em modo headless (`claude -p`).** As três primeiras rodadas não produziram nenhuma linha em `hook.log`. Um controle com o mesmo script registrado como `PreToolUse` disparou normalmente — provando que o carregamento de settings estava certo e que o problema era o evento. Em headless a permissão é curto-circuitada para `"This command requires approval"` **antes** de chegar ao hook. Todo o teste real precisou de TUI de verdade, via PTY.
 
-**2. `.claude/settings.json` de projeto em diretório não confiado é ignorado em silêncio.** `/tmp/aiterm-spike` não estava em `hasTrustDialogAccepted`. Enquanto isso valeu, o hook de projeto simplesmente não existia. Depois que aceitei o diálogo de trust no primeiro PTY, o settings de projeto passou a valer — e como eu tinha deixado o hook de *deny* ali, **ele contaminou os cenários B, B2, C e D**, que apareceram como "deny imediato" e me levaram a concluir errado que a decisão era ignorada. O `hook.log` mostrou o hook de deny disparando em todas as 5 rodadas. Após remover o settings de projeto, os cenários limpos deram resultado oposto. As conclusões abaixo usam **só as rodadas limpas**.
+**2. `.claude/settings.json` de projeto em diretório não confiado é ignorado em silêncio.** `/tmp/violeet-spike` não estava em `hasTrustDialogAccepted`. Enquanto isso valeu, o hook de projeto simplesmente não existia. Depois que aceitei o diálogo de trust no primeiro PTY, o settings de projeto passou a valer — e como eu tinha deixado o hook de *deny* ali, **ele contaminou os cenários B, B2, C e D**, que apareceram como "deny imediato" e me levaram a concluir errado que a decisão era ignorada. O `hook.log` mostrou o hook de deny disparando em todas as 5 rodadas. Após remover o settings de projeto, os cenários limpos deram resultado oposto. As conclusões abaixo usam **só as rodadas limpas**.
 
 ---
 
@@ -54,8 +54,8 @@ Registro porque qualquer um que repita isso vai cair nelas:
 ```json
 {
   "session_id": "1ae1b042-809c-4bb2-95f7-5c42524ae408",
-  "transcript_path": "/Users/grippado/.claude/projects/-private-tmp-aiterm-spike/1ae1b042-....jsonl",
-  "cwd": "/private/tmp/aiterm-spike",
+  "transcript_path": "/Users/grippado/.claude/projects/-private-tmp-violeet-spike/1ae1b042-....jsonl",
+  "cwd": "/private/tmp/violeet-spike",
   "prompt_id": "01f3f3c7-a92b-4c6b-9f37-2a09ee9c5004",
   "permission_mode": "default",
   "hook_event_name": "PermissionRequest",
@@ -193,20 +193,20 @@ Vale notar que o `~/.claude/settings.json` deste usuário **já tem** um hook `P
 BIN=/Users/grippado/.local/share/claude/versions/2.1.220
 
 # cenário allow lento (command), 90s
-rm -f /tmp/aiterm-spike/.claude/settings.json     # evitar contaminação
-python3 /tmp/aiterm-spike/pty_drive.py \
-  /tmp/aiterm-spike/settings-C-slowcmd.json \
+rm -f /tmp/violeet-spike/.claude/settings.json     # evitar contaminação
+python3 /tmp/violeet-spike/pty_drive.py \
+  /tmp/violeet-spike/settings-C-slowcmd.json \
   "Use a ferramenta Bash para executar: /bin/date +SPIKE_MARKER_X" \
-  170 /tmp/aiterm-spike/saida.txt
+  170 /tmp/violeet-spike/saida.txt
 
 # cenário allow lento (http), 90s
-SPIKE_DELAY=90 python3 /tmp/aiterm-spike/slow_server.py 8787 &
-python3 /tmp/aiterm-spike/pty_drive.py \
-  /tmp/aiterm-spike/settings-B-slow.json "..." 170 /tmp/aiterm-spike/saida.txt
+SPIKE_DELAY=90 python3 /tmp/violeet-spike/slow_server.py 8787 &
+python3 /tmp/violeet-spike/pty_drive.py \
+  /tmp/violeet-spike/settings-B-slow.json "..." 170 /tmp/violeet-spike/saida.txt
 ```
 
 O árbitro de cada cenário é o transcript oficial em
-`~/.claude/projects/-private-tmp-aiterm-spike/*.jsonl` (campos `tool_use` / `tool_result`),
+`~/.claude/projects/-private-tmp-violeet-spike/*.jsonl` (campos `tool_use` / `tool_result`),
 não a raspagem da tela — o PTY acumula frames transitórios e produz falso positivo.
 
 ---

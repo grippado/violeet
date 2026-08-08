@@ -1,4 +1,4 @@
-# aiterm socket protocol
+# violeet socket protocol
 
 > **Wire version `v` = 1. Document revision 6.**
 >
@@ -8,7 +8,7 @@
 > authoritative.
 >
 > - **`v` is what goes on the wire.** It is `1`. Every message carries `"v": 1`,
->   `aiterm_proto::PROTOCOL_VERSION` is `1`, and a receiver drops anything
+>   `violeet_proto::PROTOCOL_VERSION` is `1`, and a receiver drops anything
 >   greater. Changing it is a code change in three projections, not an edit
 >   here.
 > - **The revision number counts edits to this document.** Revision 2 was the
@@ -25,9 +25,9 @@
 
 Status: **normative.**
 
-This document is the contract between `aiterm-daemon` and its clients. The Rust
-types in `crates/aiterm-proto` and the Swift decoder in
-`app/Sources/AITerm/Daemon` are *projections* of this document. When a
+This document is the contract between `violeet-daemon` and its clients. The Rust
+types in `crates/violeet-proto` and the Swift decoder in
+`app/Sources/Violeet/Daemon` are *projections* of this document. When a
 projection and this document disagree, the document is right and the code is the
 bug.
 
@@ -45,7 +45,7 @@ bug.
 
 ## Transport
 
-- Unix domain socket, `SOCK_STREAM`, at `~/.aiterm/daemon.sock`.
+- Unix domain socket, `SOCK_STREAM`, at `~/.violeet/daemon.sock`.
 - The daemon creates the socket with mode `0600` and unlinks a stale one on
   startup. It is a local, single-user channel: there is no authentication and no
   attempt at one.
@@ -60,12 +60,12 @@ bug.
 
 ### Discovery
 
-The daemon writes `~/.aiterm/daemon.json` on startup:
+The daemon writes `~/.violeet/daemon.json` on startup:
 
 ```json
 {
   "pid": 4823,
-  "socket": "/Users/you/.aiterm/daemon.sock",
+  "socket": "/Users/you/.violeet/daemon.sock",
   "hook_port": 9847,
   "protocol_version": 1,
   "started_at": "2026-07-30T18:02:11Z"
@@ -98,8 +98,8 @@ greater than the reader supports is dropped and logged.
 
 | Id | Minted by | Shape | Notes |
 |---|---|---|---|
-| `session_id` | the agent | opaque string | Claude Code's own session UUID, read from the hook payload. Never invented by aiterm. |
-| `tab_id` | the app | opaque string | Generated when a tab is created, exported to the child process as `AITERM_TAB_ID`. See ADR-003. |
+| `session_id` | the agent | opaque string | Claude Code's own session UUID, read from the hook payload. Never invented by violeet. |
+| `tab_id` | the app | opaque string | Generated when a tab is created, exported to the child process as `VIOLEET_TAB_ID`. See ADR-003. |
 | `hitl_id` | **the daemon** | opaque string | Minted per permission request. |
 
 > **`hitl_id` exists because `tool_use_id` does not.** The `PermissionRequest`
@@ -122,7 +122,7 @@ A new agent session became known to the daemon.
   "session_id": "b497437c-e819-4d0c-9145-03eb6573f8ef",
   "tab_id": "tab-7f3a",
   "agent": "claude-code",
-  "cwd": "/Users/you/www/personal/aiterm",
+  "cwd": "/Users/you/www/personal/violeet",
   "title": "Add HTTP hook endpoint",
   "model": "claude-opus-5",
   "started_at": "2026-07-30T18:02:44Z"
@@ -132,7 +132,7 @@ A new agent session became known to the daemon.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `session_id` | string | yes | |
-| `tab_id` | string \| null | yes | `null` when the session could not be bound to a tab (agent started outside aiterm). |
+| `tab_id` | string \| null | yes | `null` when the session could not be bound to a tab (agent started outside violeet). |
 | `agent` | string | yes | `claude-code` \| `codex` \| `opencode` \| `unknown`. Values outside this list are rendered generically, not dropped. |
 | `cwd` | string \| null | yes | `null` when the session was first seen through a hook that carried no working directory. Never `""` — an empty string renders as an empty path instead of as *unknown*. |
 | `title` | string \| null | yes | `null` until the daemon has something real to name it with. Never a placeholder. |
@@ -152,7 +152,7 @@ An explicit `null` means *became unknown*.
   "state": "working",
   "context_window_used_tokens": 39104,
   "context_window_size_tokens": 200000,
-  "last_action": "Edit crates/aiterm-daemon/src/http/mod.rs"
+  "last_action": "Edit crates/violeet-daemon/src/http/mod.rs"
 }
 ```
 
@@ -265,10 +265,10 @@ a client that does not know the field ignores it, which is exactly what the
 "receivers must ignore unknown fields" rule is for.
 
 **`origin_app` / `origin_tty` answer "where is this session", for the ones
-aiterm did not start.** The hooks are installed user-wide, so an agent launched
+violeet did not start.** The hooks are installed user-wide, so an agent launched
 from iTerm2 reaches the same daemon and gets a card. Those cards are the ones
 most worth having — they block on a permission request while the user is looking
-somewhere else — but until revision 4 they could only say *outside aiterm*,
+somewhere else — but until revision 4 they could only say *outside violeet*,
 which is true and unusable.
 
 They are resolved from the process tree behind the hook's **own TCP connection**:
@@ -281,7 +281,7 @@ finds nothing, because Claude Code closes the file between writes.
 `origin_app` is reported **verbatim** from the process's own name rather than
 mapped to a friendlier label, so a terminal nobody anticipated shows its real
 name instead of "unknown". Either field may be `null` on its own: an agent with
-no controlling terminal still has an application. A session bound to an aiterm
+no controlling terminal still has an application. A session bound to an violeet
 tab carries neither, because its tab already answers the question.
 
 Resolution costs two short-lived subprocesses (~45 ms, measured) and happens at
@@ -328,7 +328,7 @@ precedence is not visible from the title alone. In rank order:
 
 A title is only ever replaced by one that outranks it, which is what stops a
 name from flickering between derivations — and what makes a manual rename
-final. The daemon persists the pair to `~/.aiterm/titles.json` so a restart does
+final. The daemon persists the pair to `~/.violeet/titles.json` so a restart does
 not rename every card back to its folder.
 
 `ai-title` rather than `summary` on measurement: `summary` appears in **none**
@@ -338,7 +338,7 @@ session's life, and is written in the language of the conversation.
 
 **The rate-limit fields come from a different channel entirely.** They are not
 in the transcript and not in any hook: Claude Code reports them, along with the
-real `context_window_size`, only to the **status line** command. `aiterm
+real `context_window_size`, only to the **status line** command. `violeet
 install-statusline` wraps whatever status line the user already has, forwards a
 copy of that payload to the daemon, and runs the original unchanged — so the
 user's prompt looks identical and the daemon gains two numbers it otherwise
@@ -434,7 +434,7 @@ on no other signal.
 | `hitl_id` | string | yes | |
 | `session_id` | string | yes | |
 | `origin` | string | yes | `app` \| `tui` \| `timeout` \| `daemon_error` |
-| `decision` | string \| null | yes | `allow` \| `deny` when `origin` is `app`. `null` otherwise — when the human answered in the TUI, aiterm genuinely does not know what they chose. |
+| `decision` | string \| null | yes | `allow` \| `deny` when `origin` is `app`. `null` otherwise — when the human answered in the TUI, violeet genuinely does not know what they chose. |
 
 `origin` values, in full:
 
@@ -479,11 +479,11 @@ so the app never has to garbage-collect an orphaned card.
 
 ### `register_tab`
 
-Announces a tab and its `AITERM_TAB_ID` before the agent process is spawned, so
+Announces a tab and its `VIOLEET_TAB_ID` before the agent process is spawned, so
 the daemon can bind the first session that reports that id.
 
 ```json
-{ "type": "register_tab", "v": 1, "ts": "...", "tab_id": "tab-7f3a", "cwd": "/Users/you/www/personal/aiterm" }
+{ "type": "register_tab", "v": 1, "ts": "...", "tab_id": "tab-7f3a", "cwd": "/Users/you/www/personal/violeet" }
 ```
 
 | Field | Type | Required |

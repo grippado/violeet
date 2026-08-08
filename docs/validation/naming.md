@@ -23,14 +23,14 @@ Four tabs, set up like this:
 1. **btop** — a tab running `btop`
 2. **Claude Code** — a tab running an agent
 3. **shell in `~`** — a plain shell, `cd ~`
-4. **shell in a repo** — a plain shell in `~/www/personal/aiterm`
+4. **shell in a repo** — a plain shell in `~/www/personal/violeet`
 
 ### Round 1 — automatic names
 
 - [ ] Tab 1 is called `btop` within about a second of launching it
 - [ ] Tab 2 is called by its prompt-derived title, and upgrades to Claude Code's own title one exchange later
 - [ ] Tab 3 is called **`~`** — not `grippado`. This is the reported bug
-- [ ] Tab 4 is called `aiterm`
+- [ ] Tab 4 is called `violeet`
 - [ ] The window's title bar shows the selected tab's name and changes with the selection
 
 ### Round 2 — renaming
@@ -70,7 +70,7 @@ Any name that comes back on its own is the failure this task exists to prevent.
 
 ### Round 5 — restart
 
-- [ ] Rename tab 2, quit **the daemon** (`aiterm daemon stop` / kill), start it
+- [ ] Rename tab 2, quit **the daemon** (`violeet daemon stop` / kill), start it
       again: the manual name comes back, still pinned
 - [ ] Unlock it after the restart: it still falls back to the agent's title,
       not to the directory

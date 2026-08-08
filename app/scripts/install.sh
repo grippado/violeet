@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install a built aiterm into /Applications, and make sure it is the only one.
+# Install a built violeet into /Applications, and make sure it is the only one.
 #
 # # Why this is not `cp`
 #
@@ -20,13 +20,13 @@
 # and a discovery bug that deletes is unrecoverable while a discovery bug that
 # moves is an annoyance. The Trash is the difference.
 #
-# Usage: app/scripts/install.sh [path/to/aiterm.app | path/to/dist.zip]
+# Usage: app/scripts/install.sh [path/to/violeet.app | path/to/dist.zip]
 #        With no argument, the newest zip in app/dist is used.
 
 set -euo pipefail
 
 readonly INSTALL_DIR="/Applications"
-readonly BUNDLE_NAME="aiterm.app"
+readonly BUNDLE_NAME="violeet.app"
 readonly TARGET="${INSTALL_DIR}/${BUNDLE_NAME}"
 
 readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
@@ -85,8 +85,8 @@ while IFS= read -r path; do
     [[ -d "$path" ]] && FOUND+=("$path")
 done < <(
     {
-        mdfind -name "aiterm.app" 2>/dev/null || true
-        mdfind -name "AITerm.app" 2>/dev/null || true
+        mdfind -name "violeet.app" 2>/dev/null || true
+        mdfind -name "Violeet.app" 2>/dev/null || true
         ls -d "${HOME}/Applications/"*iterm*.app 2>/dev/null || true
         ls -d "${INSTALL_DIR}/"*iterm*.app 2>/dev/null || true
     } | sort -u
@@ -103,9 +103,9 @@ for path in "${FOUND[@]:-}"; do
     [[ "$path" == /Volumes/* ]] && continue
 
     echo "    · moving to Trash: $(version_of "$path")  $path"
-    # A timestamped name, because the Trash already holding an `aiterm.app`
+    # A timestamped name, because the Trash already holding an `violeet.app`
     # would otherwise make this fail — or worse, overwrite.
-    mv "$path" "${HOME}/.Trash/aiterm-$(version_of "$path")-$$-${QUARANTINED}.app"
+    mv "$path" "${HOME}/.Trash/violeet-$(version_of "$path")-$$-${QUARANTINED}.app"
     QUARANTINED=$((QUARANTINED + 1))
 done
 
@@ -129,7 +129,7 @@ echo "==> ${TARGET} is ${NEW_VERSION}"
 [[ "$QUARANTINED" -gt 0 ]] && echo "==> ${QUARANTINED} older copies moved to the Trash"
 
 # The check that matters: after all that, is there exactly one?
-REMAINING="$(mdfind -name "aiterm.app" 2>/dev/null | grep -c . || true)"
+REMAINING="$(mdfind -name "violeet.app" 2>/dev/null | grep -c . || true)"
 if [[ "$REMAINING" -gt 1 ]]; then
     echo "!!  Spotlight still knows ${REMAINING} bundles; re-run after it reindexes" >&2
 fi

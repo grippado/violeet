@@ -3,52 +3,6 @@
 version = 3
 
 [[package]]
-name = "aiterm-cli"
-version = "0.0.0"
-dependencies = [
- "aiterm-proto",
- "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "aiterm-daemon"
-version = "0.0.0"
-dependencies = [
- "aiterm-proto",
- "aiterm-transcript",
- "axum",
- "chrono",
- "http-body-util",
- "hyper",
- "hyper-util",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tower-http",
-]
-
-[[package]]
-name = "aiterm-proto"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "aiterm-transcript"
-version = "0.0.0"
-dependencies = [
- "notify",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -888,6 +842,52 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "violeet-cli"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "violeet-proto",
+]
+
+[[package]]
+name = "violeet-daemon"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower-http",
+ "violeet-proto",
+ "violeet-transcript",
+]
+
+[[package]]
+name = "violeet-proto"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "violeet-transcript"
+version = "0.0.0"
+dependencies = [
+ "notify",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "walkdir"

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The bundle's Info.plist, kept static on purpose.
+
+  It contains no `$(BUILD_VARIABLE)` placeholders because it is consumed by two
+  different builders: Xcode, which expands them, and `scripts/package.sh`, which
+  does not. A plist that only works under one of them is a plist that silently
+  produces a broken bundle under the other.
+
+  Version numbers are the exception, and they are rewritten in place by
+  `package.sh` from the git tag rather than edited by hand — see that script.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleName</key>
+	<string>Violeet</string>
+	<key>CFBundleDisplayName</key>
+	<string>violeet</string>
+	<key>CFBundleExecutable</key>
+	<string>Violeet</string>
+	<key>CFBundleIdentifier</key>
+	<string>digital.opengateway.violeet</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+	<!--
+	  The Dock icon, and the reason it is a file name without an extension:
+	  `CFBundleIconFile` is resolved against `Contents/Resources` and appends
+	  `.icns` itself. A placeholder, drawn by hand and dropped in the repo root
+	  — a bundle with no icon at all gets the generic white page, which reads
+	  as a broken app rather than as an unfinished one.
+	-->
+	<key>CFBundleIconFile</key>
+	<string>violeet</string>
+	<!--
+	  The commit this bundle was built from, overwritten by
+	  scripts/package.sh. `unknown` is the honest value for a bundle assembled
+	  by hand: the About panel shows nothing rather than a hash that would send
+	  a bug report to the wrong revision.
+	-->
+	<key>VioleetGitCommit</key>
+	<string>unknown</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!--
+	  violeet is a terminal: it is the foreground app with a menu bar and a
+	  Dock icon, not an agent. Stated explicitly because a bundle assembled by
+	  hand does not inherit the default an Xcode application target would.
+	-->
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<!--
+	  A terminal must never be terminated with live PTYs behind its back; the
+	  app closes its tabs and tells the daemon on the way out.
+	-->
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+</dict>
+</plist>

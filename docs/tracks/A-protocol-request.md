@@ -143,7 +143,7 @@ Optionally rename the existing pair to `context_window_used_tokens` /
 breaking; the addition is not.
 
 **Note:** none of this is urgent for Wave 1. All four fields are `None` until
-Track C's `aiterm-transcript` fills them.
+Track C's `violeet-transcript` fills them.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 date: "2026-07-31"
 type: log
-tags: [aiterm, track-b, app, swift, swiftui, swiftterm]
+tags: [violeet, track-b, app, swift, swiftui, swiftterm]
 ---
 
 # Track B — the app: window, tabs, terminal
@@ -11,9 +11,9 @@ starting, not extended — no `docs/tracks/B-protocol-request.md` was needed.
 
 ## What is done and tested
 
-Everything below was exercised against the real `aiterm-daemon` (the committed
-`target/debug/aiterm-daemon`), not a mock, in a build installed as
-`~/Applications/aiterm.app` and driven by hand.
+Everything below was exercised against the real `violeet-daemon` (the committed
+`target/debug/violeet-daemon`), not a mock, in a build installed as
+`~/Applications/violeet.app` and driven by hand.
 
 **The window.** One window, sidebar left, terminals right, drag handle between.
 Sidebar is resizable (160–480 pt) and collapsible. Not a `NavigationSplitView`:
@@ -28,10 +28,10 @@ with only visibility moving, because a terminal that left the view hierarchy
 would have its NSView torn down and its PTY with it — switching tabs would kill
 agents.
 
-**The binding (ADR-003).** A fresh UUID per tab, exported as `AITERM_TAB_ID`
-alongside `AITERM_SOCKET`, and `register_tab` is sent **before** the child is
+**The binding (ADR-003).** A fresh UUID per tab, exported as `VIOLEET_TAB_ID`
+alongside `VIOLEET_SOCKET`, and `register_tab` is sent **before** the child is
 spawned so the daemon can never see a hook naming a tab it has not heard of.
-Verified end to end: `echo $AITERM_TAB_ID` in a tab returned
+Verified end to end: `echo $VIOLEET_TAB_ID` in a tab returned
 `447a0aea-…`, and a hook posted with that id came back as
 `session_registered` carrying that `tab_id` — which it could only do if
 `register_tab` had already arrived.
@@ -60,7 +60,7 @@ deliberately *not* restored — restoring a tab would mean restoring a process,
 and a tab whose shell is gone is a lie about state the user can act on.
 
 **Packaging.** `app/scripts/package.sh` builds a universal binary, assembles the
-bundle by hand, signs it (Developer ID if `AITERM_SIGN_IDENTITY` is set, ad-hoc
+bundle by hand, signs it (Developer ID if `VIOLEET_SIGN_IDENTITY` is set, ad-hoc
 otherwise) and emits a `.dmg` and a `.zip`. Ran locally, produced both, and the
 resulting `.app` is the one all the testing above was done with.
 
@@ -126,7 +126,7 @@ It now searches every submenu by selector, and runs again on
   commit — the ignore rule and the force-add were contradicting each other, and
   a repo where the two disagree is a repo where the next person reverts the
   wrong one.
-- **`crates/aiterm-daemon` `/health` reports a session as live after its
+- **`crates/violeet-daemon` `/health` reports a session as live after its
   `session_ended`.** Observed while testing; the registry appears to keep ended
   sessions until they expire. Did not touch it. Track A's.
 
@@ -134,7 +134,7 @@ It now searches every submenu by selector, and runs again on
 
 Both by explicit instruction from Gabriel during the wave, overriding the brief:
 
-1. **Rule 5 said no push.** He created `github.com/grippado/aiterm` and asked for
+1. **Rule 5 said no push.** He created `github.com/grippado/violeet` and asked for
    everything to go to origin. Added the remote (SSH — HTTPS had no credential)
    and pushed `main`. The working tree had no other track's uncommitted work at
    the time; I checked before pushing and committed nothing but my own paths.
@@ -144,7 +144,7 @@ Both by explicit instruction from Gabriel during the wave, overriding the brief:
    one builds or gates the other's code.
 
 Also outside the repo, for testing only: the app was installed to
-`~/Applications/aiterm.app` (the computer-use tooling only resolves apps in
+`~/Applications/violeet.app` (the computer-use tooling only resolves apps in
 standard locations).
 
 **A mistake worth recording.** I reported two `zsh` processes on ttys008 and
@@ -162,7 +162,7 @@ confidence than it earned.
 `docs/spikes/` went public-repo-shaped before anyone audited it. Checked:
 `grep -rniE 'gabriel|grippado|arco|isaac|/Users/'`. The only hits are
 `/Users/grippado/…` in home paths — the `cwd` of every captured payload is
-`/private/tmp/aiterm-spike` and every `tool_input` is `/bin/date
+`/private/tmp/violeet-spike` and every `tool_input` is `/bin/date
 +SPIKE_MARKER_*`. No client repo path, no work context, no secret. The spike's
 discipline held.
 
@@ -174,14 +174,14 @@ history rewrite is warranted. If it is ever made public, normalizing
 ## Assumptions about the other tracks
 
 - **Track A (daemon) is done and its wire format is the one in
-  `crates/aiterm-proto`.** I read it to cross-check my projection rather than to
+  `crates/violeet-proto`.** I read it to cross-check my projection rather than to
   copy it, and both are checked against `docs/PROTOCOL.md`.
-- **The `x-aiterm-tab-id` header is the hook's business, not mine.** The app
-  only exports the environment variable; whatever `aiterm install-hooks` writes
+- **The `x-violeet-tab-id` header is the hook's business, not mine.** The app
+  only exports the environment variable; whatever `violeet install-hooks` writes
   is what forwards it. I used the header directly to inject test sessions, which
   is not something the app ever does.
-- **`aiterm-cli` and `aiterm-transcript` do not exist and are not needed.** The
-  app never shells out to either. `AITERM_SOCKET` is exported for a future CLI's
+- **`violeet-cli` and `violeet-transcript` do not exist and are not needed.** The
+  app never shells out to either. `VIOLEET_SOCKET` is exported for a future CLI's
   benefit and nothing in this build reads it back.
 - **Nobody else touches `app/`.** All of `Package.swift`, `project.yml` and
   `Info.plist` are edited here on that assumption. `project.yml` no longer has

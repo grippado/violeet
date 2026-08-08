@@ -13,7 +13,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 DELAY = float(os.environ.get("SPIKE_DELAY", "90"))
-LOG = "/tmp/aiterm-spike/http.log"
+LOG = "/tmp/violeet-spike/http.log"
 
 
 def log(msg):

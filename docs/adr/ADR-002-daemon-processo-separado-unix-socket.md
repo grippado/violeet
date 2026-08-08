@@ -1,7 +1,7 @@
 ---
 date: "2026-07-30"
 type: decision
-tags: [adr, aiterm, daemon, ipc, unix-socket, ffi, rust, swift]
+tags: [adr, violeet, daemon, ipc, unix-socket, ffi, rust, swift]
 status: accepted
 ---
 
@@ -13,7 +13,7 @@ status: accepted
 > **Wording updated 2026-08-01.** The decision stands unchanged; the prose below
 > described transcript parsing as happening *inside the daemon process*, which
 > was true when this was written and is now imprecise. Parsing lives in the
-> `aiterm-transcript` crate, which the daemon depends on and links in. The
+> `violeet-transcript` crate, which the daemon depends on and links in. The
 > crate is a pure library — no socket, no registry, no runtime — but it does run
 > in the daemon's address space, so every blast-radius argument below applies to
 > it exactly as written. A panic in transcript parsing still must not be able to
@@ -21,7 +21,7 @@ status: accepted
 
 ## Context and problem
 
-`aiterm-daemon` owns everything that is not pixels: which sessions exist, what
+`violeet-daemon` owns everything that is not pixels: which sessions exist, what
 they are doing, how full their context windows are, and which of them are
 blocked on a permission request. The app renders that. The two have to
 communicate.
@@ -44,14 +44,14 @@ the boundary is undefined behaviour at worst and a dead app at best — taking
 every running agent's PTY with it. Losing a sidebar is an annoyance; losing four
 live agent sessions is data loss.
 
-**Agents run outside aiterm too.** A Claude Code session started in iTerm should
+**Agents run outside violeet too.** A Claude Code session started in iTerm should
 still appear on the board. That only works if the hook endpoint and registry
 exist independently of whether the app is open.
 
 ## Decision
 
-**`aiterm-daemon` runs as its own process. Clients talk to it over a Unix domain
-socket at `~/.aiterm/daemon.sock`, JSON-lines, one object per line, discriminated
+**`violeet-daemon` runs as its own process. Clients talk to it over a Unix domain
+socket at `~/.violeet/daemon.sock`, JSON-lines, one object per line, discriminated
 by `type`.**
 
 - The daemon owns the HTTP hook endpoint, the registry, and all computation.
@@ -73,7 +73,7 @@ An event whose `hook_event_name` this daemon does not know maps to
 state — it has no basis for one — but it is not discarded.
 
 That is what makes the daemon degrade well when Claude Code adds an event. It
-was measured in wave 2: `CwdChanged` was being installed by `aiterm
+was measured in wave 2: `CwdChanged` was being installed by `violeet
 install-hooks` for a whole wave before the daemon enumerated it, and the working
 directory on a card stayed correct throughout, because the unrecognized event
 carried a `cwd` and the registry applied it. Enumerating the event later bought
@@ -92,7 +92,7 @@ shape a failure can take.
 - A daemon panic loses the sidebar, not the terminals. The app reconnects and
   sends `request_snapshot`.
 - The hook endpoint is up whenever the daemon is, regardless of the app.
-- The boundary is inspectable by a human with `nc -U ~/.aiterm/daemon.sock`, and
+- The boundary is inspectable by a human with `nc -U ~/.violeet/daemon.sock`, and
   testable without building a macOS app at all — which is what makes parallel
   fan-out across tracks possible.
 - Rust and Swift keep independent build and release cycles. No bridging headers,
@@ -101,7 +101,7 @@ shape a failure can take.
 **Bad, accepted**
 
 - Two lifecycles to manage: startup, discovery, stale-socket cleanup, orphan
-  daemons. `aiterm doctor` exists precisely to make that debuggable.
+  daemons. `violeet doctor` exists precisely to make that debuggable.
 - Serialization cost on every update. Irrelevant at this scale — these are
   human-rate events, not a render loop.
 - The app must handle "daemon not running" as a real, ordinary state and not as
@@ -110,7 +110,7 @@ shape a failure can take.
 
 **Neutral**
 
-- The daemon writes `~/.aiterm/daemon.json` with pid, socket path and the
+- The daemon writes `~/.violeet/daemon.json` with pid, socket path and the
   **effective** hook port, so clients discover rather than assume.
 - Nothing in the protocol is macOS-specific, so a future non-macOS client is
   possible. Not a goal.
@@ -120,7 +120,7 @@ shape a failure can take.
 **Static Rust library over FFI.** Simplest to ship, best latency. Rejected on
 the crash-blast-radius argument alone: a panic in transcript parsing must not be
 able to kill live PTYs. That argument is about *which process* the parsing runs
-in, not which crate it lives in — `aiterm-transcript` runs inside the daemon,
+in, not which crate it lives in — `violeet-transcript` runs inside the daemon,
 which is the whole point of the daemon being separate from the app. The hook-endpoint lifetime argument is independent and
 also fatal.
 

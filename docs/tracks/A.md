@@ -1,6 +1,6 @@
 # Track A — daemon
 
-Scope: `crates/aiterm-daemon/`, `docs/PERMISSION_RACE.md`, this file.
+Scope: `crates/violeet-daemon/`, `docs/PERMISSION_RACE.md`, this file.
 
 Wave 1. Working from `docs/PROTOCOL.md` v1 as frozen at commit `a77a1ac`.
 
@@ -10,28 +10,28 @@ Wave 1. Working from `docs/PROTOCOL.md` v1 as frozen at commit `a77a1ac`.
 
 ### Boundary correction: `transcript/` removed from the daemon
 
-Deleted `crates/aiterm-daemon/src/transcript/` and dropped `mod transcript;`
+Deleted `crates/violeet-daemon/src/transcript/` and dropped `mod transcript;`
 from `src/main.rs`. Transcript reading is no longer the daemon's job: it becomes
-`crates/aiterm-transcript/`, a crate Track C creates from scratch.
+`crates/violeet-transcript/`, a crate Track C creates from scratch.
 
 Also updated, both inside my scope and both stale the moment the module left:
 the `src/main.rs` module-map doc comment, and the `Cargo.toml` `description`,
 which still advertised "transcript reader".
 
-**No dependency on `aiterm-transcript` was added.** The crate does not exist,
+**No dependency on `violeet-transcript` was added.** The crate does not exist,
 and nothing in the current task needs it. Wiring is Wave 2 integration work.
 
 #### Note for Wave 2 integration
 
 I raised this before the correction landed, and record it because it shaped the
-above: the original fan-out brief named `aiterm-transcript` as a Track C crate,
+above: the original fan-out brief named `violeet-transcript` as a Track C crate,
 while the repo at `a77a1ac` had transcript as a module *inside* my scope. Had I
 not been told to delete it, Track C would eventually have needed to edit a file
 formally owned by Track A. The boundary is now clean.
 
 ### Core: registry and socket server
 
-`cargo test -p aiterm-daemon` → **67 passing** (54 unit, 13 integration).
+`cargo test -p violeet-daemon` → **67 passing** (54 unit, 13 integration).
 `cargo clippy --all-targets` clean, `cargo fmt --check` clean.
 
 ### 2026-07-31 — protocol thaw, HTTP hook endpoint, HITL
@@ -69,7 +69,7 @@ for requests whose HTTP client vanished. All three resolutions are
 integration-tested against a real socket and a real HTTP client, including the
 TUI race, which resolves nothing when the match is ambiguous.
 
-**The remaining Wave 1 stubs are closed.** `~/.aiterm/daemon.json` is written
+**The remaining Wave 1 stubs are closed.** `~/.violeet/daemon.json` is written
 after both servers bind (never before — publishing a port that might fail to
 bind advertises a lie), removed on shutdown, and written atomically via
 rename. `session_ended` is published on expiry. `Hub::snapshot` replays
@@ -97,7 +97,7 @@ envelope — `permissionDecision` and `permissionDecisionReason` as siblings of
 `hookEventName` — and flagged it as the one thing not verified. It was worse
 than unverified: it was **wrong**.
 
-The spike's own hook scripts survived in `/tmp/aiterm-spike` and are now
+The spike's own hook scripts survived in `/tmp/violeet-spike` and are now
 preserved in [`docs/spikes/`](../spikes/). What Claude Code v2.1.220 actually
 honoured, confirmed as `err=False` in the session transcript, is a **nested
 `decision` object**:
@@ -159,7 +159,7 @@ session we watched finish: a `Done` session is not quiet, it is over.
 |---|---|
 | `register_tab` then hook | session born `Bound` |
 | hook then `register_tab` | session born `Pending`, promoted to `Bound` on `register_tab` |
-| hook with no tab id at all | `Unbound` forever — the supported "started outside aiterm" case |
+| hook with no tab id at all | `Unbound` forever — the supported "started outside violeet" case |
 
 `TabBinding` keeps `Pending` and `Unbound` as separate variants on purpose:
 collapsing them is what would make late binding impossible. And
@@ -229,14 +229,14 @@ promised by `PROTOCOL.md`, both tested.
 
 | Stub | Owner | Note |
 |---|---|---|
-| `Session::tokens` — all four fields `None` | **Track C** | `aiterm-transcript` fills them in Wave 2. Marked `TODO(track-C)`. |
+| `Session::tokens` — all four fields `None` | **Track C** | `violeet-transcript` fills them in Wave 2. Marked `TODO(track-C)`. |
 | `Session::git_branch` — always `None` | **Track C** | The registry does no I/O, so it never populates this itself. |
 | `SessionRegistered.model` — always `None` | **Track C** | Comes from the transcript. |
 | `TitleSource::Derived` — nothing writes it | **Track C** | Naming logic is a future task; the field and stickiness rule exist. |
 | The real socket client | **Track B** | Integration tests use fakes speaking the same JSON-lines protocol. |
 
 Everything Track A owed itself was closed on 2026-07-31: `ResolveHitl`,
-`Hub::snapshot`, `~/.aiterm/daemon.json` and `session_ended` on expiry all work
+`Hub::snapshot`, `~/.violeet/daemon.json` and `session_ended` on expiry all work
 and are tested. The Track C rows above are still open and still marked
 `TODO(track-C)` in the code.
 
@@ -263,7 +263,7 @@ the daemon and `PROTOCOL.md` today.
   updates the card only on `hitl_resolved`. Today the daemon ignores every
   `resolve_hitl`, so an app that optimistically clears its own card will
   desynchronise.
-- **Track C's `aiterm-transcript` will expose the four token quantities
+- **Track C's `violeet-transcript` will expose the four token quantities
   separately** and will not pre-sum anything. If it returns a single "tokens"
   number, the distinction the registry protects is lost before it reaches me.
 - **Track C does not need `Session` to be `Serialize`.** I deliberately did not
@@ -279,15 +279,15 @@ This is the section the Wave 2 integration should read first.
 > **Status after 2026-07-31.** The wave is over, so the scope rules that
 > produced this list no longer bind anyone.
 >
-> - **Item 1 — done.** `wire.rs` moved to `aiterm-proto`, where `PROTOCOL.md`
+> - **Item 1 — done.** `wire.rs` moved to `violeet-proto`, where `PROTOCOL.md`
 >   always said it lived. The daemon re-exports it, so `crate::wire` still
->   resolves and no call site changed. `aiterm-cli` already depended on
->   `aiterm-proto`, so it now gets the types for free rather than eventually
+>   resolves and no call site changed. `violeet-cli` already depended on
+>   `violeet-proto`, so it now gets the types for free rather than eventually
 >   hand-writing a second copy — which was the real deadline: once another
 >   track wants these types, moving them stops being mechanical and becomes a
 >   negotiation between sessions.
 > - **Item 2 — done.** The README's component table was wrong and is fixed.
-> - **Item 4 — done by consequence.** `aiterm-proto` is no longer a crate with
+> - **Item 4 — done by consequence.** `violeet-proto` is no longer a crate with
 >   one used constant in it.
 > - Items 3, 5 and 6 are still open.
 >
@@ -298,27 +298,27 @@ This is the section the Wave 2 integration should read first.
 > One item to add to 5: **the daemon now depends on `axum` and `tower-http`**,
 > declared in its own manifest, not promoted to `[workspace.dependencies]`.
 
-1. **`crates/aiterm-proto/` should own `wire.rs`.** `PROTOCOL.md` says in its
+1. **`crates/violeet-proto/` should own `wire.rs`.** `PROTOCOL.md` says in its
    own opening paragraph that the Rust projection of the protocol lives in
-   `aiterm-proto`. It does not: it lives in `crates/aiterm-daemon/src/wire.rs`,
-   because `aiterm-proto` is outside Track A's scope and rule 1 is absolute.
+   `violeet-proto`. It does not: it lives in `crates/violeet-daemon/src/wire.rs`,
+   because `violeet-proto` is outside Track A's scope and rule 1 is absolute.
    This is the single largest piece of misplaced code in the repo right now.
-   **Wave 2 should move it**, at which point `aiterm-cli` gets the types for
-   free instead of duplicating them. I did depend on `aiterm-proto` for its
+   **Wave 2 should move it**, at which point `violeet-cli` gets the types for
+   free instead of duplicating them. I did depend on `violeet-proto` for its
    constants (`PROTOCOL_VERSION`, `SOCKET_RELATIVE_PATH`), so the seam is
    already half there.
 
 2. **`README.md` still says the daemon does transcript reading.** Its component
    table lists "JSONL transcript reading, token and context math" under
-   `aiterm-daemon`. Wrong since the boundary correction. Left alone.
+   `violeet-daemon`. Wrong since the boundary correction. Left alone.
 
 3. **ADR-002's motivating example is now slightly off.** It argues a daemon panic
    must not kill the app, using transcript parsing as the thing most likely to
    panic. The argument still holds — the daemon will consume
-   `aiterm-transcript` — but the wording implies the parsing happens in-process
+   `violeet-transcript` — but the wording implies the parsing happens in-process
    here. Left alone.
 
-4. **`aiterm-proto/src/lib.rs` has a `DEFAULT_HOOK_PORT` constant and nothing
+4. **`violeet-proto/src/lib.rs` has a `DEFAULT_HOOK_PORT` constant and nothing
    else that is used.** I wanted to add the message types next to it. Did not.
 
 5. **I did not touch the workspace `Cargo.toml`.** `chrono`, `tokio` and
@@ -327,6 +327,6 @@ This is the section the Wave 2 integration should read first.
    `chrono` too. Promoting them is a Wave 2 cleanup; doing it now would have
    edited a read-only file and probably conflicted with another track.
 
-6. **I did not add a `[lib]` target to any other crate**, though `aiterm-cli`
+6. **I did not add a `[lib]` target to any other crate**, though `violeet-cli`
    will need one to be testable the same way. The daemon needed lib+bin so its
    integration tests could import it; I added that only to my own manifest.

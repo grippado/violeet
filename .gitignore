@@ -24,8 +24,8 @@ app/.swiftpm/
 # macOS
 .DS_Store
 
-# Runtime state lives in ~/.aiterm, but guard against a stray local copy
-/.aiterm/
+# Runtime state lives in ~/.violeet, but guard against a stray local copy
+/.violeet/
 
 # Stray logs from running the daemon locally. Scoped rather than global: a bare
 # `*.log` silently swallowed docs/spikes/hook-payload.log, which is preserved

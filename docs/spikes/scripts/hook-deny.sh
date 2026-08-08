@@ -1,6 +1,6 @@
 #!/bin/bash
 # Cenario A: hook `command` que loga o payload cru e nega imediatamente.
-LOG=/tmp/aiterm-spike/hook.log
+LOG=/tmp/violeet-spike/hook.log
 input=$(cat)
 
 {

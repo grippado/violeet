@@ -1,0 +1,14 @@
+[package]
+name = "violeet-proto"
+description = "Wire types for the violeet daemon socket protocol (docs/PROTOCOL.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true

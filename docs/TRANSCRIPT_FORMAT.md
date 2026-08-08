@@ -1,7 +1,7 @@
 ---
 date: "2026-07-31"
 type: reference
-tags: [aiterm, transcript, claude-code, jsonl, telemetry]
+tags: [violeet, transcript, claude-code, jsonl, telemetry]
 ---
 
 # Claude Code transcript format
@@ -18,7 +18,7 @@ distinction between "I counted this" and "this seems likely" is load-bearing,
 and anything in the third section is a gap, not a detail.
 
 Method, so the claims can be checked: a Python pass over the raw files to count
-and cross-tabulate, then the Rust parser in `crates/aiterm-transcript`, then a
+and cross-tabulate, then the Rust parser in `crates/violeet-transcript`, then a
 comparison of the two on the same files. Where a number appears below, both
 arrived at it independently.
 
@@ -214,7 +214,7 @@ is the most dangerous kind, because it passes every test they run.
 
 `window_size_for_model` therefore returns `None` unconditionally now, and is
 kept only as the place where the question is asked and answered. The gauge
-renders indeterminate, `aiterm doctor` names the affected sessions, and the
+renders indeterminate, `violeet doctor` names the affected sessions, and the
 percentage is absent rather than wrong.
 
 **The authoritative source exists, outside the transcript.** Claude Code passes
@@ -237,7 +237,7 @@ it to the status line command on stdin (documented in the binary, extracted
 }
 ```
 
-**This is now implemented.** `aiterm install-statusline` writes a wrapper that
+**This is now implemented.** `violeet install-statusline` writes a wrapper that
 forwards the payload to the daemon and then runs the user's original status line
 with the same stdin, printing its output verbatim — nothing about their prompt
 changes on screen. The daemon exposes `POST /statusline` for it. Verified
@@ -285,7 +285,7 @@ pending HITL text". It is not obtainable from this source.
 
 ## Consequences for the implementation
 
-`crates/aiterm-transcript` follows from the above:
+`crates/violeet-transcript` follows from the above:
 
 - usage is counted **once per `message.id`**
 - occupancy is **last-write-wins from one turn**, cost is a **sum over turns**,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build aiterm.app and wrap it in a .dmg and a .zip.
+# Build violeet.app and wrap it in a .dmg and a .zip.
 #
 # # Why SwiftPM and not xcodebuild
 #
@@ -27,15 +27,15 @@
 #   scripts/package.sh [--version X.Y.Z] [--output DIR] [--skip-dmg]
 #
 # Environment:
-#   AITERM_SIGN_IDENTITY   Codesign identity. Empty or unset means ad-hoc.
+#   VIOLEET_SIGN_IDENTITY   Codesign identity. Empty or unset means ad-hoc.
 
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-APP_NAME="aiterm"
-EXECUTABLE="AITerm"
-BUNDLE_ID="digital.opengateway.aiterm"
+APP_NAME="violeet"
+EXECUTABLE="Violeet"
+BUNDLE_ID="digital.opengateway.violeet"
 VERSION=""
 OUTPUT_DIR="dist"
 BUILD_DMG=1
@@ -75,7 +75,7 @@ if [[ "$GIT_COMMIT" != "unknown" ]] && ! git diff --quiet HEAD 2>/dev/null; then
   GIT_COMMIT="$GIT_COMMIT-dirty"
 fi
 
-echo "==> aiterm $VERSION (build $BUILD_NUMBER)"
+echo "==> violeet $VERSION (build $BUILD_NUMBER)"
 
 # ---------------------------------------------------------------------------
 # Compile
@@ -115,14 +115,14 @@ APP="$STAGING/$APP_NAME.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BINARY" "$APP/Contents/MacOS/$EXECUTABLE"
-cp Sources/AITerm/Info.plist "$APP/Contents/Info.plist"
+cp Sources/Violeet/Info.plist "$APP/Contents/Info.plist"
 # The icon, when there is one. Not fatal if missing: a bundle without an icon
 # still runs, and a build that stopped because of artwork would be a build
 # stopped for the least important reason there is.
-if [[ -f Resources/aiterm.icns ]]; then
-  cp Resources/aiterm.icns "$APP/Contents/Resources/aiterm.icns"
+if [[ -f Resources/violeet.icns ]]; then
+  cp Resources/violeet.icns "$APP/Contents/Resources/violeet.icns"
 else
-  echo "==> no Resources/aiterm.icns; the bundle will use the generic icon"
+  echo "==> no Resources/violeet.icns; the bundle will use the generic icon"
 fi
 
 # `APPL????` is what a bundle's PkgInfo has said since before any of this
@@ -131,13 +131,13 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :AITermGitCommit $GIT_COMMIT" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :VioleetGitCommit $GIT_COMMIT" "$APP/Contents/Info.plist"
 
 # ---------------------------------------------------------------------------
 # Sign
 # ---------------------------------------------------------------------------
 
-IDENTITY="${AITERM_SIGN_IDENTITY:-}"
+IDENTITY="${VIOLEET_SIGN_IDENTITY:-}"
 if [[ -n "$IDENTITY" ]]; then
   echo "==> Signing with: $IDENTITY"
   # The hardened runtime is required for notarization. It does not conflict with
@@ -148,7 +148,7 @@ if [[ -n "$IDENTITY" ]]; then
     "$APP"
   codesign --verify --deep --strict --verbose=2 "$APP"
 else
-  echo "==> Signing ad-hoc (no AITERM_SIGN_IDENTITY set)"
+  echo "==> Signing ad-hoc (no VIOLEET_SIGN_IDENTITY set)"
   echo "    This build runs on the machine that made it. On any other machine"
   echo "    Gatekeeper will refuse it until the quarantine flag is removed:"
   echo "      xattr -dr com.apple.quarantine /Applications/$APP_NAME.app"
