@@ -7,6 +7,23 @@ official documentation has been wrong about the same hook three separate times.
 **When this project and the docs disagree about `PermissionRequest`, these files
 win.**
 
+## 2026-08-08 — a stopped session is not a session waiting for you
+
+[`2026-08-08-parada-nao-e-pergunta.md`](2026-08-08-parada-nao-e-pergunta.md).
+112 sessions, 835 stop points across `~/.claude/projects/**/*.jsonl`. **22% of
+the moments a session goes quiet are a background task reporting in, not a
+person being asked anything**, and the `Task` tool's `tool_result` lands
+immediately at launch — so nothing is in flight by the time the session stops.
+
+Two consequences, and only the first is implemented: the detection rule for
+"write the answer" (`crates/violeet-transcript/src/answer_request.rs`), and a
+pre-existing bug where the sidebar shows a session waiting on five background
+agents as **idle**, sorted below sessions doing less. The write-up names the
+three lines the bug lives on and does not fix it.
+
+Reproduce with `cargo run --release --example answer_request_probe -p
+violeet-transcript`.
+
 ## 2026-07-30 — `PermissionRequest`, holding and resolving a permission
 
 [`RESULTADO.md`](RESULTADO.md) is the full write-up: verdict, method, the two
