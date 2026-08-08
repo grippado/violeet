@@ -1,6 +1,7 @@
 // The house palette, and the one way it can go wrong.
 //
-// Violeeter lives in `theme/violeeter.json` and is published from there. These
+// Violeeter is developed in its own repository and vendored here as
+// `vendor/violeeter/violeeter.json` — see that directory's README. These
 // values are transcribed into Swift, which means there are two copies, which
 // means they can disagree — and a palette that is *almost* the same in the app
 // and in the file people download is worse than two different palettes, because
@@ -23,7 +24,7 @@ struct VioleeterTests {
     private var themeFile: URL? {
         var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<6 {
-            let candidate = dir.appendingPathComponent("theme/violeeter.json")
+            let candidate = dir.appendingPathComponent("vendor/violeeter/violeeter.json")
             if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
             dir = dir.deletingLastPathComponent()
         }
