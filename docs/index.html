@@ -24,8 +24,12 @@
   header { padding: 72px 0 56px; }
   .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
   .mark {
-    width: 40px; height: 40px; border-radius: 10px; flex: none;
+    width: 40px; height: 40px; flex: none;
     display: block;
+    /* The artwork carries its own rounded frame at the edge of the canvas.
+       Rounding the element again shaves that frame off, and anything other
+       than `contain` crops it. */
+    object-fit: contain;
   }
   /* The icon comes in two cuts, and which one shows follows the theme by the
      same rules the colours do. Doing it in CSS rather than by swapping `src`
