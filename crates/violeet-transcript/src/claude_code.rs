@@ -223,7 +223,22 @@ const STOP_HOOK_SUMMARY: &str = "stop_hook_summary";
 /// line, under the same `message.id`, and putting it back together is
 /// [`crate::Telemetry`]'s job because only it sees more than one line.
 fn assistant_text(message: Option<&serde_json::Map<String, Value>>) -> Option<String> {
-    let blocks = message?.get("content")?.as_array()?;
+    joined_text_blocks(message?.get("content")?.as_array()?)
+}
+
+/// Every `text` block of one line, joined — the one spelling of the join.
+///
+/// Shared by [`assistant_text`] and [`user_text`] on purpose, because they used
+/// to disagree: the assistant side joined all the blocks and the user side
+/// returned at the first non-blank one. The difference was silent and it was not
+/// a decision — nothing in `docs/TRANSCRIPT_FORMAT.md` or in the history of
+/// either function records a measurement behind it. Its cost is specific: a
+/// `user` line whose prose arrived in two blocks shrank on the way into the
+/// excerpt, so it could start fitting a budget it did not fit, and reach the app
+/// as a whole message with `context_truncated: false`. `user_line_is_human_stop`
+/// already concatenated every block, so the predicate and the remembered text
+/// were reading different lines.
+fn joined_text_blocks(blocks: &[Value]) -> Option<String> {
     let joined = blocks
         .iter()
         .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
@@ -696,22 +711,15 @@ pub fn scan_head(path: &std::path::Path) -> std::io::Result<HeadScan> {
 
 /// The text of a user message, whether the content is a bare string or the
 /// block form.
+///
+/// The block form goes through [`joined_text_blocks`], the same join the
+/// assistant side uses — see the note there for why the two must not drift.
 fn user_text(message: Option<&Value>) -> Option<String> {
     let content = message?.get("content")?;
     if let Some(s) = content.as_str() {
         return (!s.trim().is_empty()).then(|| s.to_string());
     }
-    let blocks = content.as_array()?;
-    for block in blocks {
-        if block.get("type").and_then(Value::as_str) == Some("text") {
-            if let Some(t) = string_at(block.get("text")) {
-                if !t.trim().is_empty() {
-                    return Some(t);
-                }
-            }
-        }
-    }
-    None
+    joined_text_blocks(content.as_array()?)
 }
 
 fn string_at(value: Option<&Value>) -> Option<String> {
@@ -1265,6 +1273,59 @@ mod tests {
             Some(TranscriptEvent::AssistantTurn(turn)) => {
                 assert_eq!(turn.text.as_deref(), Some("Sigo pelo primeiro?"));
             }
+            other => panic!("expected a turn, got {other:?}"),
+        }
+    }
+
+    /// Several `text` blocks on one line, with a `thinking` before them and a
+    /// `tool_use` after — every block kind `docs/TRANSCRIPT_FORMAT.md` counts,
+    /// on a single line.
+    ///
+    /// That document measured **one block per line** on the reference corpus
+    /// (227 `thinking` + 252 `text` + 324 `tool_use` = exactly 803 `assistant`
+    /// lines), so this shape is the one the parser tolerates rather than the one
+    /// it was measured against — which is precisely why it needs its own test.
+    /// A replay of that corpus would not notice if the join broke, and the join
+    /// is what makes the whole reply the question.
+    #[test]
+    fn several_text_blocks_on_one_line_are_joined_and_the_other_kinds_are_not() {
+        let line = r#"{"type":"assistant","timestamp":"2026-08-09T10:00:00Z","message":{"id":"m1","model":"claude-sonnet-5","content":[{"type":"thinking","thinking":"deixa eu ver"},{"type":"text","text":"Achei dois caminhos."},{"type":"text","text":"Sigo pelo primeiro?"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}],"usage":{"input_tokens":1}}}"#;
+        let events = reader().parse_line(line);
+
+        match events.first() {
+            Some(TranscriptEvent::AssistantTurn(turn)) => assert_eq!(
+                turn.text.as_deref(),
+                Some("Achei dois caminhos.\n\nSigo pelo primeiro?"),
+                "the reply is the blocks together; the thinking and the tool \
+                 call are not prose"
+            ),
+            other => panic!("expected a turn, got {other:?}"),
+        }
+        let tool_ids: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                TranscriptEvent::ToolUse(t) => t.id.as_deref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_ids,
+            ["toolu_1"],
+            "the tool call on the same line is still its own event"
+        );
+    }
+
+    /// The same join on the `user` side, which is the half that used to keep
+    /// only the first block. A message that shrinks silently reaches the excerpt
+    /// looking whole, with nothing marking `context_truncated`.
+    #[test]
+    fn a_user_line_in_blocks_keeps_every_block_like_the_assistant_side() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"compara as duas rotas"},{"type":"text","text":"e me diz qual é mais barata"}]}}"#;
+        match reader().parse_line(line).as_slice() {
+            [TranscriptEvent::UserTurn { text, .. }] => assert_eq!(
+                text.as_deref(),
+                Some("compara as duas rotas\n\ne me diz qual é mais barata")
+            ),
             other => panic!("expected a turn, got {other:?}"),
         }
     }

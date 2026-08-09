@@ -815,4 +815,44 @@ mod tests {
         let short = "Sigo pelo primeiro?";
         assert_eq!(cap_question(short), (short.to_string(), false));
     }
+
+    /// The two sides of the comparison, one byte apart. The test above only
+    /// proves the far side of the cap; an off-by-one here would either truncate
+    /// a question that fits — and claim so on the wire — or let one byte past
+    /// the limit the receiver checks against.
+    #[test]
+    fn the_cap_is_exact_on_both_sides_of_the_limit() {
+        let exactly = "a".repeat(MAX_QUESTION_BYTES);
+        assert_eq!(
+            cap_question(&exactly),
+            (exactly.clone(), false),
+            "a question that is exactly the limit fits and is not truncated"
+        );
+
+        let one_over = "a".repeat(MAX_QUESTION_BYTES + 1);
+        let (cut, truncated) = cap_question(&one_over);
+        assert!(truncated);
+        assert_eq!(cut.len(), MAX_QUESTION_BYTES);
+    }
+
+    /// The limit falling *inside* a character, which is the case the byte cap
+    /// and the UTF-8 content only produce together. `ç` is two bytes, so this
+    /// string is one byte over the cap and the cut index lands between them:
+    /// backing off to the boundary is what keeps the result a string instead of
+    /// a panic, and it costs the whole character rather than half of it.
+    #[test]
+    fn a_character_straddling_the_limit_is_dropped_whole() {
+        let straddling = format!("{}ç", "a".repeat(MAX_QUESTION_BYTES - 1));
+        assert_eq!(straddling.len(), MAX_QUESTION_BYTES + 1);
+
+        let (cut, truncated) = cap_question(&straddling);
+        assert!(truncated);
+        assert_eq!(
+            cut.len(),
+            MAX_QUESTION_BYTES - 1,
+            "cutting short of the cap is the honest direction; cutting at it \
+             would split the ç"
+        );
+        assert!(cut.chars().all(|c| c == 'a'));
+    }
 }

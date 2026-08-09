@@ -81,10 +81,12 @@ struct SessionCard: Identifiable, Equatable {
     /// and "this daemon never looked", which is why `lifecycle` tests for
     /// presence and never for `!= nil` on the patch. See `AnswerRequest`.
     ///
-    /// No daemon populates this yet — the field is on the wire and in the
-    /// decoder, and the producer is still to come. The precedence it takes over
-    /// `pendingAgents` is implemented and tested here regardless, so the day the
-    /// producer lands the card is already right instead of hiding the question.
+    /// The daemon populates this from the transcript as of LAB-23: it runs the
+    /// rule at each stop point and publishes the reading from `answer_on_wire`
+    /// in `crates/violeet-daemon/src/transcript.rs`. What it never publishes is
+    /// the precedence — the daemon sends this and `pendingAgents` side by side,
+    /// neither suppressing the other, and which one the card shows is decided
+    /// here, in `lifecycle`.
     var answerRequest: AnswerRequest?
 
     var id: String { sessionID }

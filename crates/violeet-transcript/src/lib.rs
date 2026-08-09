@@ -508,6 +508,39 @@ pub struct PendingAnswer {
 /// keeping more of it than the length that makes it refuse is memory spent to
 /// change nothing. One character over the budget preserves the decision exactly
 /// while bounding what a session can hold.
+///
+/// ## What one live session can hold, and what is not bounded
+///
+/// This is the field that made `Telemetry` big, and `Telemetry` is cloned once
+/// per debounce window per session (`watch.rs`, and again in the daemon's
+/// `finalize`), so the ceiling is worth writing down. **Derived from the caps in
+/// this file, not measured on a heap profile** — no allocation profiling was
+/// run, and the numbers below are upper bounds on the strings, not on the
+/// process.
+///
+/// Bounded:
+///
+/// - `recent_turns` — at most `context_max_messages` (12) entries of
+///   `KEPT_CHARS_PER_TURN` (6001) **characters** each. Characters, because
+///   [`Telemetry::remember_turn`] cuts with `chars().take(…)`, so the byte
+///   ceiling is 4× that: 12 × 6001 × 4 ≈ **281 KiB** worst case, and roughly a
+///   quarter of it for the Portuguese and English prose this actually holds.
+/// - `answer_pending.request.context` — a copy of a prefix of `recent_turns`,
+///   itself capped at `context_char_budget` (6000) characters in total by
+///   [`AnswerRequestConfig::build_request`]: ≤ 24 KiB worst case.
+///
+/// Not bounded here, and stated rather than glossed:
+///
+/// - `current_assistant` and `answer_pending.request.question` both hold one
+///   whole assistant message, capped by nothing in this crate. `MAX_QUESTION_BYTES`
+///   (128 KiB) is a *wire* cap applied on the way out, in the daemon's
+///   `wire_answer`, so the in-memory copy may legitimately exceed it. What
+///   limits them in practice is how long one reply can be, which was not
+///   measured.
+///
+/// So: the ring is the part with a number, and it is small enough that a clone
+/// per debounce is not what would justify an `Arc` — if the clone ever shows up
+/// in a profile, the message being assembled is the part to look at first.
 const KEPT_CHARS_PER_TURN: usize = ANSWER_REQUEST.context_char_budget + 1;
 
 impl Telemetry {
