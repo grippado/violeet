@@ -55,8 +55,7 @@ fn is_safe_id(session_id: &str) -> bool {
 
 /// `~/.cursor/projects`, or `None` when `HOME` is not set.
 pub fn projects_root() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".cursor").join("projects"))
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cursor").join("projects"))
 }
 
 /// The transcript for `session_id`, if one is on disk.

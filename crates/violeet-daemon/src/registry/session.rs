@@ -809,8 +809,10 @@ mod tests {
 
     #[test]
     fn both_sources_appear_and_stay_ordered_by_path() {
-        let mut files = FileTelemetry::default();
-        files.from_transcript = vec![transcript_change("/repo/b.rs", 1, 0, true)];
+        let mut files = FileTelemetry {
+            from_transcript: vec![transcript_change("/repo/b.rs", 1, 0, true)],
+            ..Default::default()
+        };
         files.record_hook_edit("/repo/a.rs", 2, 0);
 
         let merged = files.merged();
@@ -825,8 +827,10 @@ mod tests {
     /// One file seen by both sources measured two parts of the same work.
     #[test]
     fn a_file_in_both_sources_is_summed_rather_than_replaced() {
-        let mut files = FileTelemetry::default();
-        files.from_transcript = vec![transcript_change("/repo/a.rs", 4, 1, true)];
+        let mut files = FileTelemetry {
+            from_transcript: vec![transcript_change("/repo/a.rs", 4, 1, true)],
+            ..Default::default()
+        };
         files.record_hook_edit("/repo/a.rs", 3, 2);
 
         let merged = files.merged();
