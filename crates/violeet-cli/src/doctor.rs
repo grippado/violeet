@@ -12,6 +12,7 @@
 
 use std::path::Path;
 
+use crate::cursor_hooks;
 use crate::hooks;
 use crate::probe;
 use crate::settings::Settings;
@@ -169,6 +170,37 @@ pub fn run(cwd: &Path) -> Vec<Check> {
         None => checks.push(Check::fail("settings file").detail("HOME is not set")),
     }
 
+    // --- Cursor hooks -----------------------------------------------------
+    if let Some(path) = cursor_hooks::hooks_path() {
+        match cursor_hooks::load(&path) {
+            Ok(doc) => {
+                checks.extend(cursor_hook_checks(&doc, port));
+                let script_path = cursor_hooks::script_path();
+                if let Some(script) = script_path {
+                    if script.exists() {
+                        checks.push(
+                            Check::ok("Cursor hook adapter script")
+                                .detail(script.display().to_string()),
+                        );
+                    } else if cursor_hooks::count_ours(&doc) > 0 {
+                        checks.push(
+                            Check::fail("Cursor hook adapter script")
+                                .detail(format!("{} is missing", script.display()))
+                                .fix("violeet install-cursor-hooks"),
+                        );
+                    }
+                }
+            }
+            Err(e) => checks.push(
+                Check::fail("Cursor hooks file")
+                    .detail(e)
+                    .fix("fix ~/.cursor/hooks.json by hand"),
+            ),
+        }
+    } else {
+        checks.push(Check::fail("Cursor hooks file").detail("HOME is not set"));
+    }
+
     // --- the third silent one ---------------------------------------------
     if let Some(Ok(s)) = &settings {
         checks.push(overwritten_check(s));
@@ -257,6 +289,56 @@ fn hook_checks(settings: &Settings, port: Option<u16>) -> Vec<Check> {
         );
     } else if port.is_some() && missing.is_empty() {
         checks.push(Check::ok("hooks point at the running daemon"));
+    }
+
+    checks
+}
+
+fn cursor_hook_checks(doc: &serde_json::Value, port: Option<u16>) -> Vec<Check> {
+    let mut missing = Vec::new();
+
+    for event in cursor_hooks::EVENTS {
+        let ours = doc
+            .get("hooks")
+            .and_then(|h| h.get(*event))
+            .and_then(|v| v.as_array())
+            .is_some_and(|arr| arr.iter().any(cursor_hooks::is_ours));
+
+        if !ours {
+            missing.push(*event);
+        }
+    }
+
+    let mut checks = Vec::new();
+
+    if missing.is_empty() {
+        checks.push(
+            Check::ok("Cursor hooks installed")
+                .detail(format!("{} event(s)", cursor_hooks::EVENTS.len())),
+        );
+    } else {
+        checks.push(
+            Check::fail("Cursor hooks installed")
+                .detail(format!("missing for: {}", missing.join(", ")))
+                .fix("violeet install-cursor-hooks"),
+        );
+    }
+
+    if port.is_some() && missing.is_empty() {
+        let discovery_port = port.unwrap();
+        checks.push(
+            Check::ok("Cursor hooks point at the running daemon")
+                .detail(format!(
+                    "adapter reads port {} from ~/.violeet/daemon.json",
+                    discovery_port
+                )),
+        );
+    } else if port.is_none() && missing.is_empty() {
+        checks.push(
+            Check::warn("Cursor hooks point at the running daemon")
+                .detail("no discovery file — adapter will fail-open until the daemon starts")
+                .fix("violeet-daemon &"),
+        );
     }
 
     checks
@@ -353,6 +435,17 @@ fn overwritten_check(settings: &Settings) -> Check {
             .collect();
         if !absent.is_empty() {
             missing.push("hooks");
+        }
+    }
+    if record.cursor_hooks {
+        let path = cursor_hooks::hooks_path();
+        let absent = path.as_ref().map(|p| cursor_hooks::load(p).ok()).flatten();
+        let count = absent
+            .as_ref()
+            .map(cursor_hooks::count_ours)
+            .unwrap_or(0);
+        if count < cursor_hooks::EVENTS.len() {
+            missing.push("Cursor hooks");
         }
     }
     if record.statusline && !crate::statusline::is_ours(settings) {
