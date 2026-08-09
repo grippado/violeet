@@ -1,9 +1,14 @@
 # Builds the macOS app on every change that touches it.
 #
-# Scope is deliberate: this workflow knows about `app/` and nothing else. The
-# Rust workspace belongs to another track and gets its own file, so neither can
-# turn the other one red — and neither has to be edited to change the other's
-# build.
+# Scope is deliberate: this workflow knows about `app/`, plus the one root file
+# it calls into — the `Makefile`, for the `test-install` target. The Rust
+# workspace belongs to another track and gets its own file, so neither can turn
+# the other one red — and neither has to be edited to change the other's build.
+#
+# The `Makefile` is in the triggers for the same reason it is in the steps: the
+# target is what this workflow runs, so a change that breaks it, renames it or
+# unhooks it has to be able to turn this workflow red. Left out, the gate could
+# be switched off by a pull request that never runs it.
 #
 # The build here is `swift build`, the same command `app/scripts/package.sh`
 # runs. There is no second build path to keep in sync, and no dependency on a
@@ -16,10 +21,12 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - "Makefile"
       - ".github/workflows/app-ci.yml"
   pull_request:
     paths:
       - "app/**"
+      - "Makefile"
       - ".github/workflows/app-ci.yml"
   # So the app can be built on demand without pushing anything.
   workflow_dispatch:
@@ -63,6 +70,17 @@ jobs:
       - name: Test
         working-directory: app
         run: swift test
+
+      # The installer discovers paths and moves what it finds to the Trash, so
+      # the gate that says which bundles are ours is the kind of thing that has
+      # to be checked by a machine, not by whoever remembered to run `make test`.
+      # It runs a copy of install.sh against a temporary directory, so a runner
+      # is as safe a place for it as a laptop.
+      #
+      # The only step with no `working-directory: app`: it goes through the root
+      # `Makefile` so that CI and a laptop invoke the gate by the same name.
+      - name: Test the installer's quarantine gate
+        run: make test-install
 
       # Warnings are not failed builds here. This is a young codebase with a
       # dependency it does not control; a warnings-as-errors gate would spend

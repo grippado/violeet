@@ -203,6 +203,7 @@ fn harness_of(headers: &HeaderMap) -> Harness {
         None | Some("") | Some("claude-code") => Harness::ClaudeCode,
         Some("codex") => Harness::Codex,
         Some("opencode") => Harness::Opencode,
+        Some("cursor") => Harness::Cursor,
         // A harness we do not know still gets a card. `Unknown` is a real value
         // on the wire, not a failure.
         Some(_) => Harness::Unknown,
@@ -459,6 +460,10 @@ mod tests {
         assert_eq!(
             harness_of(&headers_with(HARNESS_HEADER, "codex")),
             Harness::Codex
+        );
+        assert_eq!(
+            harness_of(&headers_with(HARNESS_HEADER, "cursor")),
+            Harness::Cursor
         );
         assert_eq!(
             harness_of(&headers_with(HARNESS_HEADER, "something-else")),

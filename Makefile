@@ -40,7 +40,7 @@ build: ## Debug build of the Rust workspace
 	cargo build --workspace
 
 .PHONY: test
-test: test-rust test-swift ## Run both suites
+test: test-rust test-swift test-install ## Run every suite
 
 .PHONY: test-rust
 test-rust: ## cargo test --workspace
@@ -49,6 +49,12 @@ test-rust: ## cargo test --workspace
 .PHONY: test-swift
 test-swift: ## swift test (the app suite lives under app/)
 	cd app && swift test
+
+# Runs a copy of install.sh against a temporary directory, never the real
+# /Applications and never the real Trash, so it is safe from any checkout.
+.PHONY: test-install
+test-install: ## Check that install.sh quarantines only violeet bundles
+	app/scripts/test-install-quarantine.sh
 
 .PHONY: lint
 lint: ## clippy plus a formatting check, neither of which writes

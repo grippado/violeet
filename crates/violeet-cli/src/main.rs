@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+mod cursor_hooks;
 mod doctor;
 mod hooks;
 mod install_record;
@@ -141,6 +142,8 @@ fn main() -> ExitCode {
         },
         Some("install-hooks") => run_install(&options, &style),
         Some("uninstall-hooks") => run_uninstall(&options, &style),
+        Some("install-cursor-hooks") => run_install_cursor(&options, &style),
+        Some("uninstall-cursor-hooks") => run_uninstall_cursor(&options, &style),
         Some("install-statusline") => run_install_statusline(&options, &style),
         Some("uninstall-statusline") => run_uninstall_statusline(&options, &style),
         Some(other) => {
@@ -166,6 +169,8 @@ COMMANDS:
     doctor                Check the daemon, the hooks, and this directory
     install-hooks         Add violeet's hooks to ~/.claude/settings.json
     uninstall-hooks       Remove them again, leaving other hooks intact
+    install-cursor-hooks  Add violeet's adapter to ~/.cursor/hooks.json
+    uninstall-cursor-hooks Remove the adapter from ~/.cursor/hooks.json
     install-statusline    Wrap your status line so violeet can read the context
                           window size and your usage limits. Your status line
                           keeps rendering exactly as it does now.
@@ -586,6 +591,167 @@ fn run_uninstall(options: &Options, style: &Style) -> ExitCode {
 
     install_record::set(Some(false), None);
     println!("{} removed {removed} violeet hook entr(ies)", style.green("✓"));
+    ExitCode::SUCCESS
+}
+
+// ---------------------------------------------------------------------------
+// Cursor hooks
+// ---------------------------------------------------------------------------
+
+fn run_install_cursor(options: &Options, style: &Style) -> ExitCode {
+    let Some(hooks_path) = cursor_hooks::hooks_path() else {
+        eprintln!("violeet: HOME is not set");
+        return ExitCode::FAILURE;
+    };
+    let Some(script_path) = cursor_hooks::script_path() else {
+        eprintln!("violeet: HOME is not set");
+        return ExitCode::FAILURE;
+    };
+
+    if probe::read_discovery().is_none() {
+        eprintln!(
+            "violeet: ~/.violeet/daemon.json is missing, so I cannot tell which port \
+             the daemon is on.\n\n\
+             Start the daemon and run this again."
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let mut doc = match cursor_hooks::load(&hooks_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("violeet: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let before = doc.clone();
+    let script = script_path.to_string_lossy();
+    cursor_hooks::upsert_ours(&mut doc, &script);
+
+    if doc == before && script_path.exists() {
+        if let Ok(current) = std::fs::read_to_string(&script_path) {
+            if current == cursor_hooks::adapter_script_source() {
+                println!(
+                    "{} Cursor hooks are already installed. Nothing to do.",
+                    style.green("✓")
+                );
+                return ExitCode::SUCCESS;
+            }
+        }
+    }
+
+    println!("\n{}", style.bold(&hooks_path.display().to_string()));
+    print!(
+        "{}",
+        ui::diff(
+            &serde_json::to_string_pretty(&before).unwrap_or_default(),
+            &serde_json::to_string_pretty(&doc).unwrap_or_default(),
+            style,
+        )
+    );
+    println!("\n{} {}", style.dim("script:"), script_path.display());
+
+    if !options.yes {
+        match ui::confirm("\nWrite these changes?") {
+            Ok(true) => {}
+            Ok(false) => {
+                println!("Aborted. Nothing was written.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("violeet: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    if let Err(e) = cursor_hooks::install_script() {
+        eprintln!("violeet: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    if let Err(e) = cursor_hooks::write(&hooks_path, &doc) {
+        eprintln!("violeet: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    install_record::set_cursor(Some(true));
+    println!(
+        "{} installed {} Cursor hook events",
+        style.green("✓"),
+        cursor_hooks::EVENTS.len()
+    );
+    println!("  {} violeet doctor", style.dim("check with:"));
+    ExitCode::SUCCESS
+}
+
+fn run_uninstall_cursor(options: &Options, style: &Style) -> ExitCode {
+    let Some(hooks_path) = cursor_hooks::hooks_path() else {
+        eprintln!("violeet: HOME is not set");
+        return ExitCode::FAILURE;
+    };
+
+    if !hooks_path.exists() {
+        println!(
+            "{} no Cursor hooks file exists. Nothing to do.",
+            style.green("✓")
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let mut doc = match cursor_hooks::load(&hooks_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("violeet: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let before = doc.clone();
+    let removed = cursor_hooks::remove_ours(&mut doc);
+
+    if doc == before {
+        println!(
+            "{} no violeet Cursor hooks are installed. Nothing to do.",
+            style.green("✓")
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    println!("\n{}", style.bold(&hooks_path.display().to_string()));
+    print!(
+        "{}",
+        ui::diff(
+            &serde_json::to_string_pretty(&before).unwrap_or_default(),
+            &serde_json::to_string_pretty(&doc).unwrap_or_default(),
+            style,
+        )
+    );
+
+    if !options.yes {
+        match ui::confirm("\nWrite these changes?") {
+            Ok(true) => {}
+            Ok(false) => {
+                println!("Aborted. Nothing was written.");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!("violeet: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    if let Err(e) = cursor_hooks::write(&hooks_path, &doc) {
+        eprintln!("violeet: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    let _ = std::fs::remove_file(cursor_hooks::script_path().unwrap_or_default());
+
+    install_record::set_cursor(Some(false));
+    println!("{} removed {removed} violeet Cursor hook entr(ies)", style.green("✓"));
     ExitCode::SUCCESS
 }
 
