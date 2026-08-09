@@ -28,7 +28,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::hitl::{HitlRegistry, HitlRequest, NewHitl, Resolution};
-use crate::registry::{HookObservation, HookOutcome, Registry, Session, TitleSource};
+use crate::registry::{HookObservation, HookOutcome, Registry, Session, SessionState, TitleSource};
 use crate::titles::TitleRecord;
 use crate::wire::{
     self, AppToDaemon, DaemonToApp, HitlOrigin, HitlPending, HitlResolved, Rejected,
@@ -686,11 +686,14 @@ impl Hub {
         self.broadcast(&DaemonToApp::HitlResolved(HitlResolved {
             v: PROTOCOL_VERSION,
             ts: wire::timestamp(Utc::now()),
-            hitl_id: request.hitl_id,
-            session_id: request.session_id,
+            hitl_id: request.hitl_id.clone(),
+            session_id: request.session_id.clone(),
             origin,
             decision,
         }));
+        // The answer is not only a card being dismissed: it is the end of the
+        // wait, and the session's own state has to say so.
+        self.leave_waiting_hitl(&request.session_id, Utc::now());
         true
     }
 
@@ -709,6 +712,56 @@ impl Hub {
             // Only the app path knows what was chosen.
             decision: None,
         }));
+        // Same reason as in `resolve_hitl`. A wait that ended by timeout, or
+        // because the human answered in the terminal, ended just as completely
+        // as one answered from the panel.
+        self.leave_waiting_hitl(&request.session_id, Utc::now());
+    }
+
+    /// Take a session out of `WaitingHitl`, now that nothing is pending for it.
+    ///
+    /// Resolving a request used to be a broadcast and nothing else. The card
+    /// lost its `hitl_pending`, but the session stayed in `WaitingHitl` for the
+    /// rest of its life, and the app reads "waiting for you" from *two*
+    /// independent sources — an open request, and `state == "hitl"`. Clearing
+    /// one of them left the border lit and the card pinned to the top band of
+    /// the board, the place reserved for sessions that need a human. Worse on
+    /// reconnect: `session_telemetry` replays `session.state()`, so a client
+    /// starting up was handed `"hitl"` for a question answered hours earlier.
+    ///
+    /// The guard is the whole of the logic. One session may hold several open
+    /// requests, and leaving `WaitingHitl` while another is still parked would
+    /// clear a signal that is still true — the same lie, pointing the other way.
+    fn leave_waiting_hitl(&self, session_id: &str, now: chrono::DateTime<Utc>) {
+        // Asked before the registry lock is taken and never while holding it:
+        // the two locks are deliberately never held at once.
+        if self.has_pending_hitl(session_id) {
+            return;
+        }
+
+        let patch = {
+            let mut registry = self.lock();
+            let Some(session) = registry.session_mut(session_id) else {
+                // The session ended while the request was in flight. Nothing to
+                // correct, and the app has already been told it is gone.
+                return;
+            };
+            if session.state() != SessionState::WaitingHitl {
+                return;
+            }
+            // `Idle`, not `Working`. All this path knows is that the wait is
+            // over; whether the agent picked the work back up is the
+            // transcript's reading to make, and it makes it on the next line it
+            // sees a tool in flight.
+            if session.transition_to(SessionState::Idle, now).is_err() {
+                return;
+            }
+            let mut patch = SessionUpdated::new(session_id, now);
+            patch.state = session.state().wire_state().map(str::to_string);
+            patch
+        };
+
+        self.broadcast(&DaemonToApp::SessionUpdated(patch));
     }
 
     /// End a session: clear its permission requests, then announce the end.

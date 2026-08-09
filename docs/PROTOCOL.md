@@ -1,6 +1,6 @@
 # violeet socket protocol
 
-> **Wire version `v` = 1. Document revision 8.**
+> **Wire version `v` = 1. Document revision 9.**
 >
 > These are two different numbers and conflating them has now cost time twice:
 > two separate tracks were briefed that the protocol was "v2, frozen", read
@@ -25,7 +25,10 @@
 >   again, so `v` stays `1`. Revision 8 (2026-08-08) rewrote how
 >   `pending_agents` is derived: revision 7 named a tool that does not exist and
 >   a completion signal that never fires. Wording of an already-optional field,
->   so `v` stays `1`.
+>   so `v` stays `1`. Revision 9 (2026-08-08) wrote down that a resolution also
+>   ends the session's `hitl` *state*, which the daemon had never done: no new
+>   message and no new field, an existing one that had simply stopped being
+>   maintained, so `v` stays `1`.
 >
 > When a brief says "the protocol is at v2", it means this document's second
 > revision. The wire is still `1`.
@@ -636,6 +639,19 @@ on no other signal.
 - **`daemon_error`** — something went wrong inside the daemon (panic, malformed
   payload, socket down). It answered `500`. This exists so the invariant below
   is observable rather than silent.
+
+**A resolution also ends the wait in `session_updated.state`.** When the request
+just resolved was the *last* one open for its session, the daemon follows
+`hitl_resolved` with a `session_updated` carrying `state: "idle"`. Both messages
+are required, because a client has two independent reasons to render "waiting
+for you" — an open request, and `state == "hitl"` — and clearing one of them
+leaves the other lying. `idle` and not `working`: all this path knows is that
+the wait is over, and whether the agent resumed is the transcript's reading to
+make.
+
+The qualifier is load-bearing. One session may hold several open requests, and
+answering one of them changes nothing about the others: the state stays `hitl`
+until none is left, because until then the session really is waiting on a human.
 
 Why every failure path is `500` and never silence: see
 [ADR-004](adr/ADR-004-hitl-via-permissionrequest-sem-injecao-pty.md).
