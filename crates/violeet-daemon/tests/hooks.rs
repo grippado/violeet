@@ -161,6 +161,46 @@ impl AppClient {
         }
         panic!("no {ty} message arrived");
     }
+
+    /// Read until a `session_updated` that actually carries a state for this
+    /// session. The patches are sparse, so most of them say nothing about the
+    /// lifecycle and would otherwise be mistaken for the one under test.
+    async fn next_state_patch(&mut self, session_id: &str) -> serde_json::Value {
+        for _ in 0..16 {
+            let msg = self.next().await;
+            if msg["type"] == "session_updated"
+                && msg["session_id"] == session_id
+                && !msg["state"].is_null()
+            {
+                return msg;
+            }
+        }
+        panic!("no session_updated carrying a state arrived for {session_id}");
+    }
+
+    /// Round-trip a `request_snapshot` so the command sent before it is known to
+    /// have been handled to the end.
+    ///
+    /// Inbound lines are read and dispatched in order on one task, so a reply to
+    /// this one is proof the previous line finished — including the work that
+    /// happens *after* its broadcast, which is exactly what these tests are
+    /// asserting about.
+    async fn settle(&mut self) {
+        self.send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
+            .await;
+        self.next_of_type("session_registered").await;
+    }
+}
+
+/// What the registry believes about a session, read directly rather than off
+/// the wire.
+fn state_of(h: &Harnessed, session_id: &str) -> Option<SessionState> {
+    h.hub
+        .registry()
+        .lock()
+        .unwrap()
+        .session(session_id)
+        .map(|s| s.state())
 }
 
 fn session_start(session_id: &str, cwd: &str) -> serde_json::Value {
@@ -725,6 +765,282 @@ async fn a_permission_request_on_the_wrong_route_answers_500_rather_than_204() {
     )
     .await;
     assert_eq!(res.status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// ---------------------------------------------------------------------------
+// HITL: the wait has to end in the session's own state, not only in the card
+// ---------------------------------------------------------------------------
+//
+// The app reads "waiting for you" from two independent places: an open request,
+// and `state == "hitl"`. `hitl_resolved` clears the first. These tests are here
+// because for a long time nothing cleared the second, and the card kept its lit
+// border and its place in the top band of the board for the rest of the
+// session's life.
+
+/// The headline of LAB-8: an answer from the panel ends the wait in the state
+/// too, on the same turn, without waiting for the next hook to nudge it.
+#[tokio::test]
+async fn answering_from_the_panel_takes_the_session_out_of_waiting() {
+    let h = start().await;
+    let mut app = AppClient::connect(&h.socket_path).await;
+
+    let port = h.port;
+    let agent = tokio::spawn(async move {
+        post(
+            port,
+            "/hook/permission-request",
+            Some("tab-1"),
+            permission_payload("s1", "ls"),
+        )
+        .await
+    });
+
+    let hitl_id = app.next_of_type("hitl_pending").await["hitl_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        state_of(&h, "s1"),
+        Some(SessionState::WaitingHitl),
+        "the request is open, so the state is the true one to be in"
+    );
+
+    app.send(&format!(
+        r#"{{"type":"resolve_hitl","v":1,"ts":"x","hitl_id":"{hitl_id}","decision":{{"behavior":"allow"}}}}"#
+    ))
+    .await;
+
+    let patch = app.next_state_patch("s1").await;
+    assert_eq!(
+        patch["state"], "idle",
+        "the answer has to reach the app as a state, not only as a resolved card"
+    );
+    assert_eq!(state_of(&h, "s1"), Some(SessionState::Idle));
+
+    tokio::time::timeout(PATIENCE, agent)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// A denial is an answer. Same ending.
+#[tokio::test]
+async fn a_denial_ends_the_wait_the_same_way_an_approval_does() {
+    let h = start().await;
+    let mut app = AppClient::connect(&h.socket_path).await;
+
+    let port = h.port;
+    let agent = tokio::spawn(async move {
+        post(
+            port,
+            "/hook/permission-request",
+            Some("tab-1"),
+            permission_payload("s1", "rm -rf /"),
+        )
+        .await
+    });
+
+    let hitl_id = app.next_of_type("hitl_pending").await["hitl_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    app.send(&format!(
+        r#"{{"type":"resolve_hitl","v":1,"ts":"x","hitl_id":"{hitl_id}","decision":{{"behavior":"deny"}}}}"#
+    ))
+    .await;
+
+    assert_eq!(app.next_state_patch("s1").await["state"], "idle");
+    assert_eq!(state_of(&h, "s1"), Some(SessionState::Idle));
+
+    tokio::time::timeout(PATIENCE, agent)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// Nobody answered and the deadline passed. The human is no longer being waited
+/// on either way, so the card and the state both have to say so.
+#[tokio::test]
+async fn a_request_that_times_out_also_ends_the_wait() {
+    let h = start_with(ChronoDuration::milliseconds(150)).await;
+    let mut app = AppClient::connect(&h.socket_path).await;
+
+    let port = h.port;
+    let agent = tokio::spawn(async move {
+        post(
+            port,
+            "/hook/permission-request",
+            Some("tab-1"),
+            permission_payload("s1", "sleep 600"),
+        )
+        .await
+    });
+
+    assert_eq!(app.next_of_type("hitl_resolved").await["origin"], "timeout");
+    assert_eq!(app.next_state_patch("s1").await["state"], "idle");
+    assert_eq!(state_of(&h, "s1"), Some(SessionState::Idle));
+
+    tokio::time::timeout(PATIENCE, agent)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// The sweeper's path, which announces a resolution the registry already
+/// performed rather than performing one. It ends the wait too — driven here
+/// directly, because the deadline it reads is the one thing a test can move.
+#[tokio::test]
+async fn the_expiry_sweeper_ends_the_wait_as_well() {
+    let h = start().await;
+    let mut app = AppClient::connect(&h.socket_path).await;
+
+    let port = h.port;
+    let agent = tokio::spawn(async move {
+        post(
+            port,
+            "/hook/permission-request",
+            Some("tab-1"),
+            permission_payload("s1", "sleep 600"),
+        )
+        .await
+    });
+
+    app.next_of_type("hitl_pending").await;
+    let past_every_deadline = chrono::Utc::now() + ChronoDuration::hours(1);
+    assert_eq!(h.hub.expire_hitl(past_every_deadline), 1);
+
+    assert_eq!(app.next_of_type("hitl_resolved").await["origin"], "timeout");
+    assert_eq!(app.next_state_patch("s1").await["state"], "idle");
+    assert_eq!(state_of(&h, "s1"), Some(SessionState::Idle));
+
+    tokio::time::timeout(PATIENCE, agent)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+/// The case that decides the fix. One session can hold more than one open
+/// request, and answering one of them is not the end of the wait: the other is
+/// still parked, the human is still being waited on, and clearing the state
+/// there would be the same lie pointing the other way.
+#[tokio::test]
+async fn answering_one_of_two_open_requests_leaves_the_session_waiting() {
+    let h = start().await;
+    let mut app = AppClient::connect(&h.socket_path).await;
+
+    let port = h.port;
+    let first_agent = tokio::spawn(async move {
+        post(
+            port,
+            "/hook/permission-request",
+            Some("tab-1"),
+            permission_payload("s1", "ls"),
+        )
+        .await
+    });
+    let first = app.next_of_type("hitl_pending").await["hitl_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Opened after the first is known to be parked, so the ids below cannot be
+    // attributed to the wrong request.
+    let second_agent = tokio::spawn(async move {
+        post(
+            port,
+            "/hook/permission-request",
+            Some("tab-1"),
+            permission_payload("s1", "rm -rf build/"),
+        )
+        .await
+    });
+    let second = app.next_of_type("hitl_pending").await["hitl_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(first, second);
+
+    app.send(&format!(
+        r#"{{"type":"resolve_hitl","v":1,"ts":"x","hitl_id":"{first}","decision":{{"behavior":"allow"}}}}"#
+    ))
+    .await;
+    app.settle().await;
+
+    assert_eq!(
+        h.hub.hitl().lock().unwrap().len(),
+        1,
+        "the second request is still open"
+    );
+    assert_eq!(
+        state_of(&h, "s1"),
+        Some(SessionState::WaitingHitl),
+        "one answer must not clear a signal the other request is still holding up"
+    );
+
+    app.send(&format!(
+        r#"{{"type":"resolve_hitl","v":1,"ts":"x","hitl_id":"{second}","decision":{{"behavior":"allow"}}}}"#
+    ))
+    .await;
+    app.settle().await;
+
+    assert_eq!(
+        state_of(&h, "s1"),
+        Some(SessionState::Idle),
+        "with nothing left pending, the wait is over"
+    );
+
+    for agent in [first_agent, second_agent] {
+        tokio::time::timeout(PATIENCE, agent)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+/// The reconnect corollary. The snapshot replays `session.state()`, so a state
+/// left behind is not a transient: every client that starts up afterwards is
+/// told the session is waiting on a question answered long ago.
+#[tokio::test]
+async fn a_client_connecting_after_the_answer_is_not_told_the_session_is_waiting() {
+    let h = start().await;
+    let mut app = AppClient::connect(&h.socket_path).await;
+
+    let port = h.port;
+    let agent = tokio::spawn(async move {
+        post(
+            port,
+            "/hook/permission-request",
+            Some("tab-1"),
+            permission_payload("s1", "ls"),
+        )
+        .await
+    });
+
+    let hitl_id = app.next_of_type("hitl_pending").await["hitl_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    app.send(&format!(
+        r#"{{"type":"resolve_hitl","v":1,"ts":"x","hitl_id":"{hitl_id}","decision":{{"behavior":"allow"}}}}"#
+    ))
+    .await;
+    app.settle().await;
+
+    let mut fresh = AppClient::connect(&h.socket_path).await;
+    fresh
+        .send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
+        .await;
+    let telemetry = fresh.next_state_patch("s1").await;
+    assert_ne!(
+        telemetry["state"], "hitl",
+        "a session with nothing pending must never be replayed as waiting"
+    );
+    assert_eq!(telemetry["state"], "idle");
+
+    tokio::time::timeout(PATIENCE, agent)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------
