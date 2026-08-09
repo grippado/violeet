@@ -157,6 +157,19 @@ Measured gap: Cursor has no `hookSpecificOutput` wrapper — unlike Claude Code.
 The spike does not send `updatedInput` / `updatedPermissions` back to Cursor;
 only allow/deny/ask were exercised.
 
+## Production fixes (2026-08-09, post-merge smoke)
+
+1. **Stdin heredoc** — embedding Python in `cursor-hook.sh` via `<<'PY'` stole
+   stdin when Cursor piped JSON. Shell now `cat`s stdin into `CURSOR_HOOK_INPUT`
+   before exec.
+2. **`beforeSubmitPrompt` stdout** — Cursor expects `{"continue": true}`; silence
+   reads as failure.
+3. **Double hook load at `$HOME` workspace** — when the workspace root is
+   `$HOME`, `~/.cursor/hooks.json` is also the project hooks file; Cursor runs
+   user + project hooks → duplicate invocations. Adapter debounces identical
+   `(hook_event_name, session_id)` within 750ms via
+   `~/.violeet/cursor-hook-debounce.json`.
+
 ## Manual validation
 
 ```bash
