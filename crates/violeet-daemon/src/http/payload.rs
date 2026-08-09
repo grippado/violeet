@@ -46,6 +46,20 @@ pub enum HookEvent {
     /// cwd on a card went stale at the session's first `cd` and stayed stale.
     /// It carries no matcher and fires on every change.
     CwdChanged,
+    /// The agent finished writing a file, and told us which one and what it
+    /// swapped.
+    ///
+    /// **Not a Claude Code spelling.** Every other variant here is named after
+    /// an event Claude Code emits; this one is named after what it means,
+    /// because it exists for the harnesses whose transcripts cannot answer the
+    /// question. Claude Code records each edit's `structuredPatch` in the
+    /// transcript, so `crate::transcript` measures its diffstat there and this
+    /// event never fires for it. Cursor's transcript has **no `tool_result`
+    /// lines at all** — measured across six real transcripts on 2026-08-09: 477
+    /// `tool_use` blocks, zero results — so the file a `Write` touched is
+    /// visible but everything about the outcome is not. Its `afterFileEdit`
+    /// hook is the only channel that carries it.
+    FileEdited,
     /// Something this daemon does not know. Recorded as activity, nothing more.
     Unrecognized,
 }
@@ -64,6 +78,7 @@ impl HookEvent {
             "SessionEnd" => Self::SessionEnd,
             "PermissionRequest" => Self::PermissionRequest,
             "CwdChanged" => Self::CwdChanged,
+            "FileEdited" => Self::FileEdited,
             _ => Self::Unrecognized,
         }
     }
@@ -98,7 +113,11 @@ impl HookEvent {
             | Self::PreToolUse
             | Self::PostToolUse
             | Self::SubagentStop
-            | Self::PreCompact => Some(SessionState::Working),
+            | Self::PreCompact
+            // A file was written, so something wrote it. Same reading as
+            // `PostToolUse`, which is the event this one stands in for on a
+            // harness whose transcript cannot report a tool's outcome.
+            | Self::FileEdited => Some(SessionState::Working),
             Self::Notification | Self::Stop => Some(SessionState::Idle),
             // A directory change says where the session is, not what it is
             // doing. Mapping it to `Working` would make a `cd` in an idle
@@ -133,6 +152,61 @@ pub struct HookPayload {
     /// milliseconds, and the whole point of naming from the prompt is that the
     /// card is named before the first reply lands.
     pub prompt: Option<String>,
+    /// The file a [`HookEvent::FileEdited`] is about. Absolute.
+    pub file_path: Option<String>,
+    /// What that edit swapped, one entry per replacement.
+    pub edits: Option<Vec<HookEdit>>,
+    /// Context occupancy, in tokens, at the moment a compaction was about to
+    /// run. Only [`HookEvent::PreCompact`] carries it, and only from harnesses
+    /// whose compaction hook reports it — Claude Code's does not, which is why
+    /// this arrives on the hook channel rather than beside the status line's
+    /// window size.
+    pub context_tokens: Option<u64>,
+    /// The window that `context_tokens` is a fraction of.
+    pub context_window_size: Option<u64>,
+}
+
+/// One search-and-replace inside a [`HookEvent::FileEdited`].
+///
+/// Cursor's `afterFileEdit` sends the two strings and nothing else — no line
+/// numbers, no ranges, no unified diff. That is enough to *measure* a diffstat
+/// and not enough to locate it, which is exactly what the Files panel needs.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct HookEdit {
+    pub old_string: Option<String>,
+    pub new_string: Option<String>,
+}
+
+/// Lines added and removed by a list of edits.
+///
+/// **Measured, not estimated** — the same standard the transcript path is held
+/// to. A replacement removes the lines it matched and adds the lines it wrote,
+/// so counting both sides is the diffstat, not a guess at one.
+///
+/// The one thing it deliberately does not report is whether the file was
+/// *created*. An `afterFileEdit` with an empty `old_string` is a write at the
+/// start of a file, which is what creating a file looks like and also what
+/// prepending to an existing one looks like. The panel renders `created` as a
+/// badge, and a badge is a claim; the hook does not carry the fact, so nothing
+/// here invents it.
+pub fn diffstat(edits: &[HookEdit]) -> (u64, u64) {
+    let mut added = 0;
+    let mut removed = 0;
+    for edit in edits {
+        removed += line_count(edit.old_string.as_deref());
+        added += line_count(edit.new_string.as_deref());
+    }
+    (added, removed)
+}
+
+/// Lines in a replacement side. Absent or empty is zero — an edit that only
+/// inserts removed nothing, and saying it removed one empty line would put a
+/// number on the card that never happened.
+fn line_count(text: Option<&str>) -> u64 {
+    match text {
+        None | Some("") => 0,
+        Some(text) => text.lines().count() as u64,
+    }
 }
 
 impl HookPayload {
@@ -278,6 +352,102 @@ mod tests {
     #[test]
     fn session_start_implies_no_state_because_starting_is_a_birth_state() {
         assert_eq!(HookEvent::SessionStart.implied_state(), None);
+    }
+
+    // ---- the diffstat a hook can be held to ------------------------------
+
+    fn edit(old: &str, new: &str) -> HookEdit {
+        HookEdit {
+            old_string: Some(old.to_string()),
+            new_string: Some(new.to_string()),
+        }
+    }
+
+    /// A replacement removes what it matched and adds what it wrote. Both sides
+    /// are counted, because both sides happened.
+    #[test]
+    fn a_replacement_is_measured_on_both_sides() {
+        let (added, removed) = diffstat(&[edit("one\ntwo\nthree", "uno\ndos")]);
+        assert_eq!((added, removed), (2, 3));
+    }
+
+    /// `afterFileEdit` fires once per edit, so a file touched repeatedly must
+    /// sum rather than report only its last change.
+    #[test]
+    fn several_edits_in_one_hook_sum() {
+        let (added, removed) = diffstat(&[edit("a", "b\nc"), edit("d\ne", "f")]);
+        assert_eq!((added, removed), (3, 3));
+    }
+
+    /// An insertion removed nothing. Counting the empty side as one line would
+    /// put a removal on the card that never happened.
+    #[test]
+    fn an_insertion_removes_nothing_rather_than_one_empty_line() {
+        assert_eq!(diffstat(&[edit("", "new line")]), (1, 0));
+        assert_eq!(
+            diffstat(&[HookEdit {
+                old_string: None,
+                new_string: Some("only this".into())
+            }]),
+            (1, 0)
+        );
+    }
+
+    /// A deletion is the mirror image, and an empty hook is a no-op rather than
+    /// a panic.
+    #[test]
+    fn a_deletion_adds_nothing_and_an_empty_list_is_zero() {
+        assert_eq!(diffstat(&[edit("gone\naway", "")]), (0, 2));
+        assert_eq!(diffstat(&[]), (0, 0));
+    }
+
+    /// A trailing newline ends the last line; it does not open another one.
+    #[test]
+    fn a_trailing_newline_does_not_invent_a_line() {
+        assert_eq!(diffstat(&[edit("", "a\nb\n")]), (2, 0));
+        assert_eq!(diffstat(&[edit("", "a\nb")]), (2, 0));
+    }
+
+    /// The event violeet spells itself, and the state it implies.
+    #[test]
+    fn a_file_edit_is_a_working_session() {
+        assert_eq!(HookEvent::parse("FileEdited"), HookEvent::FileEdited);
+        assert_eq!(
+            HookEvent::FileEdited.implied_state(),
+            Some(SessionState::Working)
+        );
+    }
+
+    #[test]
+    fn a_file_edit_payload_carries_its_path_and_edits() {
+        let p: HookPayload = serde_json::from_str(
+            r#"{"session_id":"s1","hook_event_name":"FileEdited",
+                "file_path":"/repo/src/lib.rs",
+                "edits":[{"old_string":"a","new_string":"b\nc"}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(p.event(), HookEvent::FileEdited);
+        assert_eq!(p.file_path.as_deref(), Some("/repo/src/lib.rs"));
+        assert_eq!(diffstat(p.edits.as_deref().unwrap()), (2, 1));
+    }
+
+    /// The compaction hook is the only place a Cursor session's occupancy comes
+    /// from. A payload without the numbers leaves them unknown.
+    #[test]
+    fn a_precompact_payload_carries_the_context_reading_when_it_has_one() {
+        let with: HookPayload = serde_json::from_str(
+            r#"{"session_id":"s1","hook_event_name":"PreCompact",
+                "context_tokens":181000,"context_window_size":200000}"#,
+        )
+        .unwrap();
+        assert_eq!(with.context_tokens, Some(181_000));
+        assert_eq!(with.context_window_size, Some(200_000));
+
+        let without: HookPayload =
+            serde_json::from_str(r#"{"session_id":"s1","hook_event_name":"PreCompact"}"#).unwrap();
+        assert_eq!(without.context_tokens, None, "unknown, never zero");
+        assert_eq!(without.context_window_size, None);
     }
 
     /// A newer Claude Code must not break an older daemon.

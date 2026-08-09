@@ -198,6 +198,37 @@ async fn origin_for(hub: &Hub, session_id: &str, peer: SocketAddr) -> Option<cra
         .filter(|o| !o.is_empty())
 }
 
+/// Work out a transcript path for a harness whose hooks do not send one.
+///
+/// Only Cursor, and only when we do not already have one. Claude Code hands us
+/// the path on nearly every hook, so guessing for it would be replacing a fact
+/// with a search; the other harnesses have no measured layout to search.
+///
+/// Costs a `read_dir` of `~/.cursor/projects` on the hooks that reach it, which
+/// is why the early return on a session we can already place matters: hooks fire
+/// several times a turn, and only the first one for a given session pays.
+fn infer_transcript_path(
+    hub: &Hub,
+    session_id: &str,
+    harness: Harness,
+) -> Option<std::path::PathBuf> {
+    if harness != Harness::Cursor {
+        return None;
+    }
+    let already_known = hub
+        .registry()
+        .lock()
+        .map(|r| {
+            r.session(session_id)
+                .is_some_and(|s| s.transcript_path.is_some())
+        })
+        .unwrap_or(false);
+    if already_known {
+        return None;
+    }
+    crate::cursor_paths::infer_transcript_path(session_id)
+}
+
 fn harness_of(headers: &HeaderMap) -> Harness {
     match headers.get(HARNESS_HEADER).and_then(|v| v.to_str().ok()) {
         None | Some("") | Some("claude-code") => Harness::ClaudeCode,
@@ -244,15 +275,19 @@ async fn hook_event(
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
-    let mut obs = payload.observation(&session_id, tab_id_of(&headers), harness_of(&headers));
+    let harness = harness_of(&headers);
+    let mut obs = payload.observation(&session_id, tab_id_of(&headers), harness);
     if let Some(origin) = origin_for(&hub, &session_id, peer).await {
         obs = obs.with_origin(origin);
+    }
+    if obs.transcript_path.is_none() {
+        obs.transcript_path = infer_transcript_path(&hub, &session_id, harness);
     }
     // Start following the transcript before recording the hook: the reader is
     // idempotent per (session, path), so this is free once it is running, and
     // doing it first means a session is never briefly known-but-unfollowed.
     if let Some(path) = obs.transcript_path.clone() {
-        crate::transcript::follow(&hub, &session_id, &path, harness_of(&headers));
+        crate::transcript::follow(&hub, &session_id, &path, harness);
     }
     let outcome = hub.observe_hook(obs, now);
 
@@ -280,6 +315,25 @@ async fn hook_event(
         {
             hub.resolve_tui_race(&session_id, tool_name, tool_input);
         }
+    }
+
+    // A file the transcript will never mention. See `HookEvent::FileEdited`.
+    if event == HookEvent::FileEdited {
+        if let Some(path) = payload.file_path.as_deref().filter(|p| !p.is_empty()) {
+            let (added, removed) =
+                payload::diffstat(payload.edits.as_deref().unwrap_or_default());
+            hub.observe_file_edit(&session_id, path, added, removed, now);
+        }
+    }
+
+    // The one reading of context occupancy a compaction hook can give us.
+    if event == HookEvent::PreCompact {
+        hub.observe_context_window(
+            &session_id,
+            payload.context_tokens,
+            payload.context_window_size,
+            now,
+        );
     }
 
     if event == HookEvent::SessionEnd {
@@ -345,15 +399,19 @@ async fn permission_request(
 
     // Record the session first, so the app hears about it before it hears that
     // it is blocked.
-    let mut obs = payload.observation(&session_id, tab_id.clone(), harness_of(&headers));
+    let harness = harness_of(&headers);
+    let mut obs = payload.observation(&session_id, tab_id.clone(), harness);
     // Worth the ~45 ms here more than anywhere else: this is the hook that
     // makes a card say "waiting for you", and a card the user cannot locate is
     // the whole reason the origin exists.
     if let Some(origin) = origin_for(&hub, &session_id, peer).await {
         obs = obs.with_origin(origin);
     }
+    if obs.transcript_path.is_none() {
+        obs.transcript_path = infer_transcript_path(&hub, &session_id, harness);
+    }
     if let Some(path) = obs.transcript_path.clone() {
-        crate::transcript::follow(&hub, &session_id, &path, harness_of(&headers));
+        crate::transcript::follow(&hub, &session_id, &path, harness);
     }
     hub.observe_hook(obs, now);
 

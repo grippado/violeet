@@ -133,6 +133,82 @@ pub struct FileTelemetry {
     pub partial: Option<bool>,
     /// The list was cut to fit a line the client will accept.
     pub truncated: Option<bool>,
+
+    // --- the two sources the published list is composed from ---------------
+    //
+    // Held apart rather than merged on arrival because they update on different
+    // clocks and neither may erase the other. The transcript reader republishes
+    // its **whole** list on every read, so folding a hook's file into it would
+    // last exactly until the next read; and a harness with both sources at once
+    // must not have its hook edits overwritten by a transcript that never
+    // mentions them.
+    //
+    // In practice a session has one or the other: Claude Code records a
+    // `structuredPatch` per edit and sends no `afterFileEdit`, Cursor sends
+    // `afterFileEdit` and records no tool results. Keeping the merge honest
+    // anyway is what stops that from being a fact the code silently depends on.
+    /// The list as the transcript last reported it, whole.
+    pub from_transcript: Vec<violeet_proto::wire::FileChange>,
+    /// Accumulated from `afterFileEdit`-style hooks, keyed by path. Ordered by
+    /// key, which is the order the wire wants.
+    pub from_hooks: std::collections::BTreeMap<String, HookFileStat>,
+}
+
+/// One file's diffstat as accumulated from hooks.
+///
+/// `created` is absent by design and not merely unset — see
+/// [`crate::http::payload::diffstat`]. A hook that reports a replacement cannot
+/// tell creating a file from writing at the top of one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HookFileStat {
+    pub added: u64,
+    pub removed: u64,
+}
+
+impl FileTelemetry {
+    /// Record one hook-reported edit, summing into whatever that file already
+    /// had.
+    ///
+    /// Summing rather than replacing is the point: `afterFileEdit` fires once
+    /// per edit, so a file the agent touched five times arrives five times, and
+    /// keeping only the last would report the last edit as the session's whole
+    /// contribution to that file.
+    pub fn record_hook_edit(&mut self, path: &str, added: u64, removed: u64) {
+        let stat = self.from_hooks.entry(path.to_string()).or_default();
+        stat.added += added;
+        stat.removed += removed;
+    }
+
+    /// The two sources as one list, ordered by path.
+    ///
+    /// A path in both is summed, for the same reason edits to one file are:
+    /// each source measured part of what the session did to it, and the panel
+    /// asks what the session did, not who saw it.
+    pub fn merged(&self) -> Vec<violeet_proto::wire::FileChange> {
+        let mut by_path: std::collections::BTreeMap<&str, violeet_proto::wire::FileChange> =
+            std::collections::BTreeMap::new();
+
+        for change in &self.from_transcript {
+            by_path.insert(change.path.as_str(), change.clone());
+        }
+        for (path, stat) in &self.from_hooks {
+            by_path
+                .entry(path.as_str())
+                .and_modify(|c| {
+                    c.added += stat.added;
+                    c.removed += stat.removed;
+                })
+                .or_insert_with(|| violeet_proto::wire::FileChange {
+                    path: path.clone(),
+                    added: stat.added,
+                    removed: stat.removed,
+                    // Never `true` from this source. The hook does not carry it.
+                    created: false,
+                });
+        }
+
+        by_path.into_values().collect()
+    }
 }
 
 impl TokenTelemetry {
@@ -684,6 +760,94 @@ mod tests {
         let mut s = session();
         s.transition_to(SessionState::Dead, t(0)).unwrap();
         assert!(!s.is_expired(t(99_999), chrono::Duration::seconds(1)));
+    }
+
+    // ---- the two file sources -------------------------------------------
+
+    fn transcript_change(path: &str, added: u64, removed: u64, created: bool) -> violeet_proto::wire::FileChange {
+        violeet_proto::wire::FileChange {
+            path: path.into(),
+            added,
+            removed,
+            created,
+        }
+    }
+
+    /// The regression this whole split exists for.
+    ///
+    /// The transcript reader republishes its entire list on every read. For a
+    /// harness whose transcript carries no file information that list is empty
+    /// — legitimately, it has nothing to say — and before the sources were held
+    /// apart, that empty list overwrote everything the hooks had reported. The
+    /// Files panel filled on each edit and cleared moments later.
+    #[test]
+    fn an_empty_transcript_does_not_erase_what_the_hooks_reported() {
+        let mut files = FileTelemetry::default();
+        files.record_hook_edit("/repo/src/lib.rs", 12, 3);
+
+        // A read that found nothing about files, which is every read on Cursor.
+        files.from_transcript = Vec::new();
+
+        let merged = files.merged();
+        assert_eq!(merged.len(), 1, "the hook's file survives an empty read");
+        assert_eq!(merged[0].path, "/repo/src/lib.rs");
+        assert_eq!((merged[0].added, merged[0].removed), (12, 3));
+    }
+
+    /// `afterFileEdit` fires once per edit; the panel asks what the session did
+    /// to the file, not what its last edit did.
+    #[test]
+    fn repeated_edits_to_one_file_accumulate() {
+        let mut files = FileTelemetry::default();
+        files.record_hook_edit("/repo/a.rs", 10, 2);
+        files.record_hook_edit("/repo/a.rs", 5, 1);
+
+        let merged = files.merged();
+        assert_eq!(merged.len(), 1);
+        assert_eq!((merged[0].added, merged[0].removed), (15, 3));
+    }
+
+    #[test]
+    fn both_sources_appear_and_stay_ordered_by_path() {
+        let mut files = FileTelemetry::default();
+        files.from_transcript = vec![transcript_change("/repo/b.rs", 1, 0, true)];
+        files.record_hook_edit("/repo/a.rs", 2, 0);
+
+        let merged = files.merged();
+        assert_eq!(
+            merged.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
+            ["/repo/a.rs", "/repo/b.rs"],
+            "the wire wants one stable order, or every publish looks like a change"
+        );
+        assert!(merged[1].created, "the transcript's `created` is preserved");
+    }
+
+    /// One file seen by both sources measured two parts of the same work.
+    #[test]
+    fn a_file_in_both_sources_is_summed_rather_than_replaced() {
+        let mut files = FileTelemetry::default();
+        files.from_transcript = vec![transcript_change("/repo/a.rs", 4, 1, true)];
+        files.record_hook_edit("/repo/a.rs", 3, 2);
+
+        let merged = files.merged();
+        assert_eq!(merged.len(), 1);
+        assert_eq!((merged[0].added, merged[0].removed), (7, 3));
+        assert!(
+            merged[0].created,
+            "a hook that cannot report creation must not withdraw it"
+        );
+    }
+
+    /// `created` is a badge on the card, and the hook does not carry the fact.
+    #[test]
+    fn a_hook_only_file_never_claims_it_was_created() {
+        let mut files = FileTelemetry::default();
+        files.record_hook_edit("/repo/new.rs", 40, 0);
+
+        assert!(
+            !files.merged()[0].created,
+            "an empty old_string is also what prepending looks like"
+        );
     }
 
     #[test]

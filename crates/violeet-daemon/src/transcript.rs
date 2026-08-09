@@ -309,26 +309,40 @@ pub fn name_from_head(hub: &Hub, session_id: &str, path: &Path) {
 /// not arrive, and the panel stops updating with nothing on screen to say why.
 /// At roughly 120 bytes an entry this leaves the line an order of magnitude
 /// inside that limit even for a session that rewrote a monorepo.
-const MAX_FILES_ON_WIRE: usize = 500;
+pub const MAX_FILES_ON_WIRE: usize = 500;
 
 /// The file list as it goes on the wire, and whether it had to be cut.
 ///
 /// Cutting keeps the first N by path rather than by size or recency: the panel
 /// renders a tree, and a tree missing a random half is harder to read than one
 /// that stops. The flag is what keeps it honest either way.
+#[cfg(test)]
 fn wire_files(telemetry: &Telemetry) -> (Vec<WireFileChange>, bool) {
-    let truncated = telemetry.files.len() > MAX_FILES_ON_WIRE;
-    let files = telemetry
+    cut_to_wire(transcript_files(telemetry))
+}
+
+/// The transcript's own view of what the session wrote, whole and uncut.
+///
+/// Kept separate from the cut because it is now one of two sources — see
+/// `FileTelemetry` — and truncating a source before merging it would drop files
+/// the other source could have ranked above the cut.
+fn transcript_files(telemetry: &Telemetry) -> Vec<WireFileChange> {
+    telemetry
         .files
         .iter()
-        .take(MAX_FILES_ON_WIRE)
         .map(|(path, stat)| WireFileChange {
             path: path.clone(),
             added: stat.added,
             removed: stat.removed,
             created: stat.created,
         })
-        .collect();
+        .collect()
+}
+
+/// Cut a merged list down to what one message may carry.
+fn cut_to_wire(mut files: Vec<WireFileChange>) -> (Vec<WireFileChange>, bool) {
+    let truncated = files.len() > MAX_FILES_ON_WIRE;
+    files.truncate(MAX_FILES_ON_WIRE);
     (files, truncated)
 }
 
@@ -413,7 +427,13 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool, en
         // session working in one file produces a tool result every few seconds
         // and this is the largest field on the wire.
         {
-            let (files, truncated) = wire_files(telemetry);
+            // The transcript owns its source and only its source. Publishing
+            // the merge is what keeps a hook-reported edit alive across a read
+            // that never mentioned it — before this, a Cursor session's Files
+            // panel was cleared by the next transcript read after every edit,
+            // because that reader legitimately had nothing to say about files.
+            session.files.from_transcript = transcript_files(telemetry);
+            let (files, truncated) = cut_to_wire(session.files.merged());
             if session.files.files != files {
                 session.files.files = files.clone();
                 patch.files = Some(Some(files));
