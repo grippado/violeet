@@ -119,8 +119,18 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     /// Built from the app's own environment rather than from SwiftTerm's
     /// defaults: those omit `PATH` entirely, which a login shell recovers but
     /// anything else launched in this tab would not.
-    static func environment(tabID: String, socketPath: String) -> [String] {
-        var variables = ProcessInfo.processInfo.environment
+    ///
+    /// `inheriting` defaults to that copy and exists so a test can hand in an
+    /// environment that contains the variables being stripped. Reaching the
+    /// real path would mean `setenv` on the test process, which is global state
+    /// shared with every test running in parallel; a defaulted parameter costs
+    /// one word at the single production call site instead.
+    static func environment(
+        tabID: String,
+        socketPath: String,
+        inheriting inherited: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String] {
+        var variables = inherited
 
         // Whatever agent launched *violeet* must not be inherited by the agents
         // violeet launches.
@@ -134,11 +144,33 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         // transcript is where every number on a card comes from, so violeet was
         // blinding itself: no tokens, no title, no last action.
         //
+        // The same copy also carries *presentation* preferences that belonged to
+        // whoever launched the app, which is a second, unrelated failure with
+        // the same cause. Measured 2026-08-09 on a running build: the `Violeet`
+        // app at pid 43373 held `NO_COLOR=1`, `FORCE_COLOR=0` and
+        // `TERM_PROGRAM=iTerm.app`, and the pair was read again, unchanged, at
+        // every step down the chain — app 43373 → tab shell 43409 → `claude`
+        // 52081. Every tab of that window came up colourless.
+        //
+        // The emulator was ruled out rather than assumed. Inside an affected
+        // tab, `printf '\033[31mR\033[32mG\033[34mB\033[0m\n'; tput colors`
+        // printed R/G/B in colour and answered `256`: SwiftTerm renders colour
+        // fine, and `TERM`, `COLORTERM` and `installColors` are all correct.
+        // The programs were choosing not to emit colour, because the
+        // environment told them not to.
+        //
+        // What was *not* determined: which process put `NO_COLOR` and
+        // `FORCE_COLOR` into the app's environment. The app had been reparented
+        // to `launchd` by the time it was inspected, so the launcher was gone.
+        // This repo's `Makefile` and iTerm were both checked and neither sets
+        // them. Left as unknown on purpose — the fix does not depend on knowing.
+        //
         // Stripping is safe because the child is a **login** shell. Anything
         // the user actually configured — in `.zprofile`, `.zshrc`, direnv — is
-        // put back by the shell a moment later. The only thing lost is state
-        // that belonged to a different process.
-        for name in Self.inheritedAgentState {
+        // put back by the shell a moment later, `NO_COLOR` included, so a user
+        // who genuinely wants colourless tabs still gets them. The only thing
+        // lost is what leaked in from another process.
+        for name in Self.strippedFromInheritedEnvironment {
             variables.removeValue(forKey: name)
         }
 
@@ -183,6 +215,38 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         "VIOLEET_TAB_ID",
         "VIOLEET_SOCKET",
     ]
+
+    /// Presentation preferences that belong to the terminal a program is
+    /// *writing to*, not to the one it was launched from.
+    ///
+    /// Kept as a second constant rather than folded into `inheritedAgentState`,
+    /// and the reason is the doc comment on that one: it says "variables that
+    /// describe *a* session and must never describe another", which is a rule
+    /// about session identity. `NO_COLOR` describes no session at all — it is a
+    /// user preference about output, and it leaked here the same way session
+    /// state did, by being in the environment of whatever opened the app.
+    /// Putting it in that set would leave the next reader with a set whose name
+    /// and comment no longer match half its contents, and they would infer the
+    /// wrong rule about what else belongs there. Two names, one strip loop.
+    ///
+    /// Both are informal conventions rather than standards, and programs read
+    /// them inconsistently, which is precisely why they must not survive the
+    /// hop: a value chosen for the shell that opened violeet says nothing about
+    /// the tab violeet is opening. `TERM` and `COLORTERM` are set explicitly a
+    /// few lines below, so the tab describes itself.
+    static let inheritedPresentationPreference: Set<String> = [
+        // https://no-color.org — any value at all means "no colour".
+        "NO_COLOR",
+        // The npm-ecosystem counterpart. `FORCE_COLOR=0` is the off switch, and
+        // it was the one measured at pid 43373 on 2026-08-09.
+        "FORCE_COLOR",
+    ]
+
+    /// Everything removed from the inherited copy, in one place so the strip
+    /// loop has a single source and neither list can be forgotten at the use
+    /// site.
+    static let strippedFromInheritedEnvironment: Set<String> =
+        inheritedAgentState.union(inheritedPresentationPreference)
 
     static func resolveShell(_ override: String) -> String {
         guard !override.isEmpty, FileManager.default.isExecutableFile(atPath: override) else {
