@@ -20,6 +20,7 @@ pub enum Harness {
     ClaudeCode,
     Codex,
     Opencode,
+    Cursor,
     /// We saw a session but could not tell what is driving it. Rendered
     /// generically; never dropped.
     Unknown,
@@ -32,6 +33,7 @@ impl Harness {
             Harness::ClaudeCode => "claude-code",
             Harness::Codex => "codex",
             Harness::Opencode => "opencode",
+            Harness::Cursor => "cursor",
             Harness::Unknown => "unknown",
         }
     }
@@ -689,6 +691,7 @@ mod tests {
         assert_eq!(Harness::ClaudeCode.as_wire(), "claude-code");
         assert_eq!(Harness::Codex.as_wire(), "codex");
         assert_eq!(Harness::Opencode.as_wire(), "opencode");
+        assert_eq!(Harness::Cursor.as_wire(), "cursor");
         assert_eq!(Harness::Unknown.as_wire(), "unknown");
     }
 }

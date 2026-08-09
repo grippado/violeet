@@ -143,7 +143,7 @@ A new agent session became known to the daemon.
 |---|---|---|---|
 | `session_id` | string | yes | |
 | `tab_id` | string \| null | yes | `null` when the session could not be bound to a tab (agent started outside violeet). |
-| `agent` | string | yes | `claude-code` \| `codex` \| `opencode` \| `unknown`. Values outside this list are rendered generically, not dropped. |
+| `agent` | string | yes | `claude-code` \| `codex` \| `opencode` \| `cursor` \| `unknown`. Values outside this list are rendered generically, not dropped. |
 | `cwd` | string \| null | yes | `null` when the session was first seen through a hook that carried no working directory. Never `""` — an empty string renders as an empty path instead of as *unknown*. |
 | `title` | string \| null | yes | `null` until the daemon has something real to name it with. Never a placeholder. |
 | `model` | string \| null | yes | `null` when unknown. |

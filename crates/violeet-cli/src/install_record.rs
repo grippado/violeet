@@ -17,6 +17,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Record {
     pub hooks: bool,
+    pub cursor_hooks: bool,
     pub statusline: bool,
 }
 
@@ -29,28 +30,47 @@ pub fn read() -> Option<Record> {
     let v: Value = serde_json::from_str(&text).ok()?;
     Some(Record {
         hooks: v.get("hooks").and_then(Value::as_bool).unwrap_or(false),
+        cursor_hooks: v
+            .get("cursor_hooks")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         statusline: v.get("statusline").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
-/// Set one flag, preserving the other.
-///
-/// Read-modify-write rather than overwrite: `install-hooks` and
-/// `install-statusline` are separate commands run at different times, and one
-/// must not erase the other's record.
+/// Set Claude Code hooks flag, preserving the others.
 pub fn set(hooks: Option<bool>, statusline: Option<bool>) {
     let Some(path) = path() else { return };
     let current = read().unwrap_or_default();
 
     let body = serde_json::json!({
         "hooks": hooks.unwrap_or(current.hooks),
+        "cursor_hooks": current.cursor_hooks,
         "statusline": statusline.unwrap_or(current.statusline),
     });
 
+    write_record(&path, &body);
+}
+
+/// Set Cursor hooks flag, preserving the others.
+pub fn set_cursor(cursor_hooks: Option<bool>) {
+    let Some(path) = path() else { return };
+    let current = read().unwrap_or_default();
+
+    let body = serde_json::json!({
+        "hooks": current.hooks,
+        "cursor_hooks": cursor_hooks.unwrap_or(current.cursor_hooks),
+        "statusline": current.statusline,
+    });
+
+    write_record(&path, &body);
+}
+
+fn write_record(path: &PathBuf, body: &Value) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     // Best effort throughout: failing to record costs a diagnostic, and must
     // never fail an install that otherwise succeeded.
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&body).unwrap_or_default() + "\n");
+    let _ = std::fs::write(path, serde_json::to_string_pretty(body).unwrap_or_default() + "\n");
 }
