@@ -1142,3 +1142,106 @@ async fn a_late_client_sees_pending_requests_in_its_snapshot() {
     );
     assert_eq!(hitl["session_id"], "s1");
 }
+
+// ---------------------------------------------------------------------------
+// The model of a Cursor session (LAB-73)
+// ---------------------------------------------------------------------------
+//
+// Reading it out of Cursor's database is covered by unit tests in
+// `crate::cursor_model`, against a fixture. What those cannot reach is the far
+// end: that a model which had to be looked up reaches the app as a patch, and
+// that it obeys the same rules as every other field on the card.
+
+#[tokio::test]
+async fn a_looked_up_model_reaches_the_app_as_a_patch() {
+    let h = start().await;
+    let mut app = AppClient::connect(&h.socket_path).await;
+
+    post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        session_start("s1", "/repo"),
+    )
+    .await;
+
+    assert!(
+        h.hub.model_is_unknown("s1"),
+        "a session nobody has looked up yet has no model"
+    );
+
+    assert!(h.hub.observe_model("s1", "composer-2.5", chrono::Utc::now()));
+
+    let patch = loop {
+        let msg = app.next().await;
+        if msg["type"] == "session_updated" && !msg["model"].is_null() {
+            break msg;
+        }
+    };
+    assert_eq!(patch["session_id"], "s1");
+    assert_eq!(patch["model"], "composer-2.5");
+    assert!(!h.hub.model_is_unknown("s1"));
+}
+
+/// The patches are sparse. Re-publishing a model the app already has would be
+/// a message that says nothing, on a path that runs once per turn.
+#[tokio::test]
+async fn the_same_model_twice_is_not_sent_twice() {
+    let h = start().await;
+
+    post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        session_start("s1", "/repo"),
+    )
+    .await;
+
+    assert!(h.hub.observe_model("s1", "composer-2.5", chrono::Utc::now()));
+    assert!(
+        !h.hub.observe_model("s1", "composer-2.5", chrono::Utc::now()),
+        "an unchanged model is not news"
+    );
+    assert!(
+        h.hub.observe_model("s1", "claude-opus-5", chrono::Utc::now()),
+        "a switch is news"
+    );
+}
+
+/// Same rule as every other telemetry channel: it decorates a card, it does not
+/// conjure one.
+#[tokio::test]
+async fn a_model_never_registers_a_session_on_its_own() {
+    let h = start().await;
+
+    assert!(!h.hub.observe_model("never-announced", "composer-2.5", chrono::Utc::now()));
+    assert!(
+        h.hub
+            .registry()
+            .lock()
+            .unwrap()
+            .session("never-announced")
+            .is_none()
+    );
+}
+
+/// An empty string is not a model name, and would render as a blank line where
+/// a name belongs.
+#[tokio::test]
+async fn an_empty_model_is_refused_rather_than_published() {
+    let h = start().await;
+
+    post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        session_start("s1", "/repo"),
+    )
+    .await;
+
+    assert!(!h.hub.observe_model("s1", "", chrono::Utc::now()));
+    assert!(h.hub.model_is_unknown("s1"));
+}

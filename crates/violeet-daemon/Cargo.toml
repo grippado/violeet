@@ -36,6 +36,12 @@ tokio = { version = "1", features = [
     "signal",
 ] }
 axum = "0.8.9"
+
+# Read-only access to Cursor's own tracking database, which is the only place
+# the model of a Cursor session is recorded. Linked against the system SQLite
+# rather than bundled: macOS always ships one, and vendoring a copy to read a
+# single column would be the larger cost.
+rusqlite = "0.32"
 tower-http = { version = "0.7.0", features = ["catch-panic"] }
 
 [dev-dependencies]

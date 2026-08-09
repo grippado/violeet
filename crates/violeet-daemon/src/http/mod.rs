@@ -198,6 +198,49 @@ async fn origin_for(hub: &Hub, session_id: &str, peer: SocketAddr) -> Option<cra
         .filter(|o| !o.is_empty())
 }
 
+/// Look up and publish a Cursor session's model, when it is worth looking.
+///
+/// Cursor is the only harness that never states its model: not in the
+/// transcript, not on any hook, and it has no status line. The name lives in a
+/// database Cursor keeps for itself, so it costs a query rather than a field.
+///
+/// **When**, and the reasoning is entirely about not paying on every hook:
+///
+/// - while the model is unknown, because a card with a blank model line is the
+///   problem being solved and hooks fire several times a turn, so the first one
+///   to arrive fixes it;
+/// - on `Stop`, once per turn, which is what catches a model the user switched
+///   between turns. Anything finer would query during the turn to notice a
+///   change that cannot happen mid-turn anyway.
+///
+/// Off the runtime thread: the query opens a file another process is writing
+/// to, and waits up to `BUSY_TIMEOUT` if it is locked. That is short, but it is
+/// not zero, and a hook handler is not the place to find out.
+async fn name_the_model(
+    hub: &Hub,
+    session_id: &str,
+    harness: Harness,
+    event: HookEvent,
+    now: chrono::DateTime<Utc>,
+) {
+    if harness != Harness::Cursor {
+        return;
+    }
+    if !(event == HookEvent::Stop || hub.model_is_unknown(session_id)) {
+        return;
+    }
+
+    let owned = session_id.to_string();
+    let found = tokio::task::spawn_blocking(move || crate::cursor_model::model_for_session(&owned))
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(model) = found {
+        hub.observe_model(session_id, &model, now);
+    }
+}
+
 fn harness_of(headers: &HeaderMap) -> Harness {
     match headers.get(HARNESS_HEADER).and_then(|v| v.to_str().ok()) {
         None | Some("") | Some("claude-code") => Harness::ClaudeCode,
@@ -255,6 +298,10 @@ async fn hook_event(
         crate::transcript::follow(&hub, &session_id, &path);
     }
     let outcome = hub.observe_hook(obs, now);
+
+    // Cursor names its model nowhere we are told, so it is looked up. See
+    // `crate::cursor_model`.
+    name_the_model(&hub, &session_id, harness_of(&headers), event, now).await;
 
     // Name the session from what the user just typed. This runs on the hook
     // rather than off the transcript because it has to be on screen before the
