@@ -300,6 +300,19 @@ pub struct Session {
     /// ever increments it. `None` means the daemon has not told the app anything
     /// yet, which is not the same as having told it zero — see the wire field.
     pub pending_agents: Option<u64>,
+    /// What the session is asking, **as last published**.
+    ///
+    /// Held to keep the patch sparse, like `files` and `pending_agents`, and
+    /// never the source of anything: the question is decided afresh from the
+    /// transcript on every read.
+    ///
+    /// Two `Option`s, and they are two different facts. The outer `None` means
+    /// the daemon has told the app nothing, because no stop point has been read
+    /// for this session — it does not know whether there is a question. The
+    /// inner `None` is the positive claim "not asking", which is what closes a
+    /// panel the app opened. Collapsing them would make "I never looked"
+    /// indistinguishable from "I looked and it is quiet".
+    pub answer_request: Option<Option<violeet_proto::wire::AnswerRequest>>,
 }
 
 impl Session {
@@ -332,6 +345,7 @@ impl Session {
             tokens: TokenTelemetry::unknown(),
             files: FileTelemetry::default(),
             pending_agents: None,
+            answer_request: None,
         }
     }
 

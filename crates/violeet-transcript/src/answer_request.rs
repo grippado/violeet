@@ -267,6 +267,21 @@ pub enum Signal {
     Lexicon,
 }
 
+impl Signal {
+    /// The name this signal goes on the wire under.
+    ///
+    /// Here and not at the producer: `docs/PROTOCOL.md` says clients must not
+    /// re-derive the signal, and a spelling that lived next to the wire type
+    /// would be a second name for the rule that fired, free to drift from the
+    /// one the rule calls itself.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::QuestionMark => "question_mark",
+            Self::Lexicon => "lexicon",
+        }
+    }
+}
+
 impl AnswerRequestConfig {
     /// Run the rule over the prose of one assistant message.
     ///
