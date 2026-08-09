@@ -42,10 +42,25 @@ version_of() {
 # says a bundle is ours to move. Compared case-insensitively because Spotlight
 # answers for `violeet.app` and `Violeet.app` alike, and a bundle that is not
 # ours belongs to someone who did not run this installer.
+# Both sides are lowered, not just the left one. Comparing a normalised name
+# against a raw constant works only while the constant happens to be lowercase:
+# the day `BUNDLE_NAME` becomes `Violeet.app` to match the product name, this
+# returns false for everything, quarantine turns into a silent no-op, and the
+# duplicate bundles it exists to clean up come back with no error to say so.
+# Failing shut is the safe direction for moving other people's files and the
+# wrong direction for doing the job.
+#
+# `LC_ALL=C` because `[:upper:]`/`[:lower:]` resolve through the locale, and in
+# `tr_TR` an `I` lowers to `ı` rather than `i`. `violeet` has an `i`, so on a
+# Turkish machine a `VIOLEET.APP` off a case-insensitive volume would stop being
+# recognised as ours and the old copy would stay on disk.
+#
+# Not `${name,,}`: the shebang is `env bash` and the bash on macOS is 3.2.
 is_ours() {
-    local name
+    local name lower
     name="$(basename "$1")"
-    [[ "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" == "$BUNDLE_NAME" ]]
+    lower="$(printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    [[ "$lower" == "$(printf '%s' "$BUNDLE_NAME" | LC_ALL=C tr '[:upper:]' '[:lower:]')" ]]
 }
 
 # ---------------------------------------------------------------------------
