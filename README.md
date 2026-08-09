@@ -4,6 +4,12 @@
 Named after the colour it has always used, and shipping with
 [Violeeter](https://github.com/grippado/violeeter), that colour as a palette anyone can take.
 
+Violeet and Violeeter share one identity: the product is Violeet, the portable
+theme is Violeeter, and the wordmark uses
+[Akaya Telivigala](https://fonts.google.com/specimen/Akaya+Telivigala?preview.lang=shu_Latn).
+See the [brand identity guide](https://github.com/grippado/violeeter/blob/main/docs/BRAND_IDENTITY.md)
+for logo, typography, colour and usage rules.
+
 
 **This `violeet`:** a native macOS terminal built for running several AI coding agents (Claude Code, Codex, opencode) as tabs in a single window, instead of scattering them across six terminal windows you lose track of. Tabs name themselves from what the agent is actually working on. A SwiftUI sidebar keeps one card per session showing its state, how full its context window is, and, the reason this exists, any permission request currently blocking that agent, answerable from the sidebar without switching tabs. It is the sibling of [aitop](https://github.com/grippado/aitop), which monitors agent sessions read-only from a TUI; `violeet` is where you actually run them.
 

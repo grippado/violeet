@@ -6,6 +6,9 @@
 <title>Violeet: a terminal for watching agents work</title>
 <meta name="description" id="meta-description" content="A macOS terminal built for running several coding agents at once: every session on a board, permission requests surfaced, and the files each one wrote.">
 <link rel="stylesheet" href="violeeter.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Akaya+Telivigala&display=swap" rel="stylesheet">
 <!-- The copy, in four languages. In <head> and not deferred: the strings have
      to exist before the page is translated, and translating happens as soon as
      the body is parsed. It is one small file, so this costs a parse, not a
@@ -86,7 +89,7 @@
     :root:not([data-theme="light"]) .inline-mark.only-light { display: none; }
   }
 
-  .brand-name { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
+  .brand-name { font-family: "Akaya Telivigala", cursive; font-size: 1.55rem; font-weight: 400; letter-spacing: 0; }
   /* The logo is a link, and inherits rather than turning link-coloured: a
      wordmark that changes colour because it became clickable has stopped being
      the wordmark. The mark and the name share one hit area, so the gap between
@@ -452,7 +455,7 @@ app/scripts/install.sh</pre>
 
 <footer data-i18n="footer">
   Violeet and Violeeter are MIT licensed. Built by
-  <a href="https://github.com/grippado">grippado</a>.
+  <a href="https://github.com/grippado">grippado</a>. <a href="https://github.com/grippado/violeeter/blob/main/docs/BRAND_IDENTITY.md">Brand identity</a>.
 </footer>
 
 </div>

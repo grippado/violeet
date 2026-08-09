@@ -61,7 +61,7 @@ window.VIOLEET_I18N = {
     "install.lede": "macOS, Apple silicon and Intel. Builds are ad-hoc signed, so the first launch needs the quarantine flag cleared.",
     "install.daemon": "The daemon that watches sessions installs separately and runs under <code>launchd</code>. It is optional: with it stopped, Violeet is still a terminal, and the board simply says so.",
 
-    "footer": "Violeet and Violeeter are MIT licensed. Built by <a href=\"https://github.com/grippado\">grippado</a>."
+    "footer": "Violeet and Violeeter are MIT licensed. Built by <a href=\"https://github.com/grippado\">grippado</a>. <a href=\"https://github.com/grippado/violeeter/blob/main/docs/BRAND_IDENTITY.md\">Brand identity</a>."
   },
 
   pt: {
@@ -113,7 +113,7 @@ window.VIOLEET_I18N = {
     "install.lede": "macOS, Apple silicon e Intel. Os builds são assinados ad-hoc, então a primeira abertura exige limpar a flag de quarentena.",
     "install.daemon": "O daemon que observa as sessões se instala à parte e roda sob <code>launchd</code>. Ele é opcional: com ele parado, o Violeet continua sendo um terminal, e o painel simplesmente diz isso.",
 
-    "footer": "Violeet e Violeeter são licenciados sob MIT. Feito por <a href=\"https://github.com/grippado\">grippado</a>."
+    "footer": "Violeet e Violeeter são licenciados sob MIT. Feito por <a href=\"https://github.com/grippado\">grippado</a>. <a href=\"https://github.com/grippado/violeeter/blob/main/docs/BRAND_IDENTITY.md\">Identidade da marca</a>."
   },
 
   es: {
@@ -165,7 +165,7 @@ window.VIOLEET_I18N = {
     "install.lede": "macOS, Apple silicon e Intel. Los builds están firmados ad-hoc, así que el primer arranque exige quitar la marca de cuarentena.",
     "install.daemon": "El daemon que observa las sesiones se instala aparte y corre bajo <code>launchd</code>. Es opcional: con él detenido, Violeet sigue siendo una terminal, y el panel simplemente lo dice.",
 
-    "footer": "Violeet y Violeeter tienen licencia MIT. Hecho por <a href=\"https://github.com/grippado\">grippado</a>."
+    "footer": "Violeet y Violeeter tienen licencia MIT. Hecho por <a href=\"https://github.com/grippado\">grippado</a>. <a href=\"https://github.com/grippado/violeeter/blob/main/docs/BRAND_IDENTITY.md\">Identidad de marca</a>."
   },
 
   de: {
@@ -217,6 +217,6 @@ window.VIOLEET_I18N = {
     "install.lede": "macOS, Apple Silicon und Intel. Die Builds sind ad-hoc signiert, der erste Start braucht also ein entferntes Quarantäne-Flag.",
     "install.daemon": "Der Daemon, der die Sitzungen beobachtet, wird separat installiert und läuft unter <code>launchd</code>. Er ist optional: steht er still, ist Violeet immer noch ein Terminal, und das Board sagt genau das.",
 
-    "footer": "Violeet und Violeeter stehen unter MIT-Lizenz. Gebaut von <a href=\"https://github.com/grippado\">grippado</a>."
+    "footer": "Violeet und Violeeter stehen unter MIT-Lizenz. Gebaut von <a href=\"https://github.com/grippado\">grippado</a>. <a href=\"https://github.com/grippado/violeeter/blob/main/docs/BRAND_IDENTITY.md\">Markenidentität</a>."
   }
 };
