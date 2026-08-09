@@ -38,6 +38,16 @@ version_of() {
     defaults read "$1/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "?"
 }
 
+# Discovery walks over paths nobody typed, so the name is the only thing that
+# says a bundle is ours to move. Compared case-insensitively because Spotlight
+# answers for `violeet.app` and `Violeet.app` alike, and a bundle that is not
+# ours belongs to someone who did not run this installer.
+is_ours() {
+    local name
+    name="$(basename "$1")"
+    [[ "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" == "$BUNDLE_NAME" ]]
+}
+
 # ---------------------------------------------------------------------------
 # 1. Work out what to install
 # ---------------------------------------------------------------------------
@@ -76,19 +86,26 @@ echo "==> installing ${NEW_VERSION}"
 # ---------------------------------------------------------------------------
 #
 # `mdfind` finds what Spotlight can open, which is the whole point — a bundle
-# Spotlight has never indexed cannot be the one it launches. The fixed paths
-# are there because a *just*-created bundle may not be indexed yet, and because
-# `~/Applications` is where the copy that caused this actually was.
+# Spotlight has never indexed cannot be the one it launches.
+#
+# This block used to also glob `${HOME}/Applications/*iterm*.app` and
+# `${INSTALL_DIR}/*iterm*.app`, inherited from the fork this script came from.
+# Those two lines had nothing to do with violeet: they hunted for somebody
+# else's terminal and moved whatever they found to the Trash. On this machine
+# they never fired, but by accident and not by design — the glob is
+# case-sensitive and the real bundle is named `iTerm.app`. Under `nocaseglob`,
+# after a bundle rename, or on any other machine, installing violeet would have
+# trashed a terminal nobody asked it to touch. They are gone, and no fixed path
+# replaces them. What replaces them is `is_ours`: whatever discovery turns up,
+# the only bundles this script may move are the ones named after it.
 
 declare -a FOUND=()
 while IFS= read -r path; do
-    [[ -d "$path" ]] && FOUND+=("$path")
+    [[ -d "$path" ]] && is_ours "$path" && FOUND+=("$path")
 done < <(
     {
         mdfind -name "violeet.app" 2>/dev/null || true
         mdfind -name "Violeet.app" 2>/dev/null || true
-        ls -d "${HOME}/Applications/"*iterm*.app 2>/dev/null || true
-        ls -d "${INSTALL_DIR}/"*iterm*.app 2>/dev/null || true
     } | sort -u
 )
 
@@ -101,6 +118,10 @@ QUARANTINED=0
 # `${FOUND[@]+"${FOUND[@]}"}` expands to nothing at all when the array is empty.
 for path in ${FOUND[@]+"${FOUND[@]}"}; do
     [[ -n "$path" ]] || continue
+    # Belt and braces. Discovery already refuses anything not named like our
+    # bundle, but this loop is the thing that actually moves files, so it asks
+    # again rather than trusting how the array was filled.
+    is_ours "$path" || continue
     # The one being installed, and the place it is going, are not strays.
     [[ "$path" == "$TARGET" ]] && continue
     [[ "$path" == "$BUNDLE" ]] && continue
