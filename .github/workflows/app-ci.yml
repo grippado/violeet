@@ -64,6 +64,14 @@ jobs:
         working-directory: app
         run: swift test
 
+      # The installer discovers paths and moves what it finds to the Trash, so
+      # the gate that says which bundles are ours is the kind of thing that has
+      # to be checked by a machine, not by whoever remembered to run `make test`.
+      # It runs a copy of install.sh against a temporary directory, so a runner
+      # is as safe a place for it as a laptop.
+      - name: Test the installer's quarantine gate
+        run: make test-install
+
       # Warnings are not failed builds here. This is a young codebase with a
       # dependency it does not control; a warnings-as-errors gate would spend
       # its first month failing on SwiftTerm.
