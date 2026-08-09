@@ -67,9 +67,14 @@ enum DirectoryListing {
         let url = URL(fileURLWithPath: directory)
         let contents: [URL]
         do {
+            // No properties prefetched. `.isDirectoryKey` used to be asked for
+            // here, to feed the `resourceValues` read below. Nothing below
+            // reads a resource value now, so keeping it would populate a cache
+            // nobody consults — and, worse, leave a hint pointing the next
+            // reader back at the call that got the symlink wrong.
             contents = try fileManager.contentsOfDirectory(
                 at: url,
-                includingPropertiesForKeys: [.isDirectoryKey],
+                includingPropertiesForKeys: nil,
                 options: []
             )
         } catch {
@@ -77,12 +82,54 @@ enum DirectoryListing {
         }
 
         let entries = contents.map { child -> DirectoryEntry in
-            // `resourceValues` resolves the symlink, so a link to a directory
-            // expands like the directory it points at — which is what the name
-            // in the tree looks like it should do. Loops are possible in
-            // principle and harmless in practice: nothing here walks, so a
-            // cycle costs a click per level rather than a hang.
-            let isDirectory = (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            // A link to a directory opens like the directory it points at —
+            // what the name in the tree looks like it should do. So the answer
+            // we want is the *target's*, not the link's.
+            //
+            // This used to read `child.resourceValues(forKeys: [.isDirectoryKey])`
+            // under a comment asserting that the call resolves the link. It does
+            // not, and never did. Measured three ways — inside the test host,
+            // in a compiled binary, and in a `swift` script — it answers `false`
+            // for every symlink: to a directory, to a file, through a chain, or
+            // dangling. It makes no difference whether the URL still carries the
+            // cache `contentsOfDirectory(at:includingPropertiesForKeys:)`
+            // populates or is rebuilt fresh from the path; that cache was
+            // suspected first and cleared by measurement.
+            //
+            // What hid it was the test, not the cache. `#expect(x == true)` is
+            // swallowed by the `swift-testing` package version pinned here, so
+            // the guarding test could not fail; a `stderr` probe printed
+            // `isDirectory -> false` for a link to a directory while that test
+            // reported a pass. See the long note in DirectoryListingTests for
+            // the measurement and for the assertion shape that replaced it.
+            //
+            // `fileExists(atPath:isDirectory:)` is `stat(2)`: it follows the
+            // link, and follows a chain of them, and answers about whatever it
+            // lands on. That gets every case right at one syscall per entry:
+            //
+            //   - broken link      → does not exist → `false`. Not a directory,
+            //                        and not an error either: a dangling link
+            //                        is a real thing to show in a tree, it just
+            //                        does not open.
+            //   - cycle, self-loop → the kernel gives up at MAXSYMLINKS and
+            //                        returns ELOOP, which arrives here as "does
+            //                        not exist" → `false`. The bound is the
+            //                        kernel's, so no loop of ours to hang in.
+            //   - link to a file   → `false`, unchanged.
+            //   - relative target  → resolved against the link's own directory
+            //                        by the kernel, same as absolute. Nothing
+            //                        for us to join by hand.
+            //
+            // `false` is also the conservative answer for anything unforeseen:
+            // an entry we mislabel as a file is a row that will not expand, and
+            // an entry we mislabel as a directory is a row that expands into a
+            // lie. `resolvingSymlinksInPath()` was the other candidate and is
+            // worse — it is a path transformation, not a lookup, so it answers
+            // for a path that may not exist and would still need this `stat`
+            // afterwards.
+            var isDirectoryFlag: ObjCBool = false
+            let exists = fileManager.fileExists(atPath: child.path, isDirectory: &isDirectoryFlag)
+            let isDirectory = exists && isDirectoryFlag.boolValue
             return DirectoryEntry(
                 name: child.lastPathComponent,
                 path: child.path,
