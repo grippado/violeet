@@ -29,6 +29,11 @@
 // looks like is not a second opinion on anything; the daemon was never asked
 // and has no answer to disagree with.
 //
+// That argument is no longer only here. This is the second place in the app that
+// shells out to `git`, so the rule behind it was written down as an addendum to
+// `docs/adr/ADR-002` — "reading git is allowed; computing telemetry is not" —
+// rather than reconstructed from scratch in every file that needs it.
+//
 // Nothing in this file knows that, though, and that is deliberate. It parses
 // unified diff text. Whether that text came from `git diff`, from `git diff
 // --cached`, from a `.patch` on disk or from a conflict rehearsal in LAB-26,
@@ -115,13 +120,33 @@ struct DiffHunk: Equatable {
 
     let lines: [DiffLine]
 
+    /// The body ran out before the `@@` counts were spent.
+    ///
+    /// The header promises `oldCount`/`newCount` lines and the parser stops at
+    /// whatever cannot belong to a hunk, so `lines` can be shorter than the
+    /// promise — a cut patch, or the next file's header arriving early. Without
+    /// this flag the shortfall is invisible: the hunk reads as a complete,
+    /// smaller change, which is the "silent failure" `docs/PROTOCOL.md` names
+    /// when it insists a client mark a partial list rather than present it as
+    /// the whole truth.
+    let isTruncated: Bool
+
+    /// Lines that are not context, which is what a `+n −n` for this hunk counts.
+    ///
+    /// Stored rather than computed. The values cannot drift — `lines` is a `let`
+    /// — and the reader of these is a scrolling list that asks per row, where an
+    /// O(n) property read inside a `body` turns one scroll into O(n²).
+    let addedCount: Int
+    let removedCount: Int
+
     init(
         oldStart: Int,
         oldCount: Int,
         newStart: Int,
         newCount: Int,
         heading: String = "",
-        lines: [DiffLine]
+        lines: [DiffLine],
+        isTruncated: Bool = false
     ) {
         self.oldStart = oldStart
         self.oldCount = oldCount
@@ -129,11 +154,20 @@ struct DiffHunk: Equatable {
         self.newCount = newCount
         self.heading = heading
         self.lines = lines
-    }
+        self.isTruncated = isTruncated
 
-    /// Lines that are not context, which is what a `+n −n` for this hunk counts.
-    var addedCount: Int { lines.filter { $0.origin == .added }.count }
-    var removedCount: Int { lines.filter { $0.origin == .removed }.count }
+        var added = 0
+        var removed = 0
+        for line in lines {
+            switch line.origin {
+            case .added: added += 1
+            case .removed: removed += 1
+            case .context: break
+            }
+        }
+        self.addedCount = added
+        self.removedCount = removed
+    }
 }
 
 /// What happened to a file, as the diff header declares it.
@@ -150,6 +184,30 @@ enum DiffFileStatus: Equatable {
 }
 
 /// A file's diff, or the honest admission that it has none to show.
+///
+/// The argument written on `binary` below — that "nothing to show" and
+/// "identical" are different sentences — has a third sibling, and the review of
+/// LAB-6 is what noticed the argument had only been carried half the way. A
+/// patch can describe a file this parser cannot read: a combined `diff --cc`
+/// from a conflicted merge, a hunk header it cannot parse, a change that is
+/// nothing but a file mode. Every one of those used to arrive as `.text([])`,
+/// which is the same value a genuinely unchanged file produces. **A file in
+/// conflict was being presented as a file that is identical.**
+///
+/// The alternative considered was to keep no marker and let the surface guess
+/// from `status` and emptiness. Rejected: it collapses three distinct states
+/// into one value, so no consumer can tell them apart however carefully it is
+/// written, which is precisely the failure `docs/PROTOCOL.md` legislates against
+/// with `files_partial` and `files_truncated`.
+///
+/// The three states, after this:
+///
+/// - `.text(hunks)` with `hunks` empty — the patch really said nothing changed
+///   in the text. `FileDiff.status` says whether that is a rename with no edit,
+///   an empty new file, or an unchanged one.
+/// - `.text(hunks)` with some hunk `isTruncated` — we read part of it and know
+///   the rest is missing.
+/// - `.unsupported(reason:)` — there was a file here and we cannot show it.
 enum DiffContent: Equatable {
     /// Hunks, in the order the patch listed them.
     case text([DiffHunk])
@@ -161,6 +219,14 @@ enum DiffContent: Equatable {
     /// different things for them. Folding them together is how a reader ends up
     /// staring at an empty pane wondering whether it is broken.
     case binary
+
+    /// There was a file, and we do not know how to show it.
+    ///
+    /// `reason` is for the reader, not for a switch: it is the one sentence a
+    /// surface can put in the pane so that "we cannot read this" is legible as
+    /// itself, and not as "there is nothing here". Matching on its text would be
+    /// building a parser on top of an apology — the case is the signal.
+    case unsupported(reason: String)
 }
 
 /// One file, as one diff describes it.
@@ -172,11 +238,26 @@ struct FileDiff: Equatable {
     let status: DiffFileStatus
     let content: DiffContent
 
+    /// `+n −n` for the whole file. Stored for the same reason as on `DiffHunk`.
+    let addedCount: Int
+    let removedCount: Int
+
     init(oldPath: String?, newPath: String?, status: DiffFileStatus, content: DiffContent) {
         self.oldPath = oldPath
         self.newPath = newPath
         self.status = status
         self.content = content
+
+        var added = 0
+        var removed = 0
+        if case .text(let hunks) = content {
+            for hunk in hunks {
+                added += hunk.addedCount
+                removed += hunk.removedCount
+            }
+        }
+        self.addedCount = added
+        self.removedCount = removed
     }
 
     /// The path to put on a header, preferring where the file is now.
@@ -192,6 +273,19 @@ struct FileDiff: Equatable {
 
     var isBinary: Bool { content == .binary }
 
-    var addedCount: Int { hunks.reduce(0) { $0 + $1.addedCount } }
-    var removedCount: Int { hunks.reduce(0) { $0 + $1.removedCount } }
+    /// The sentence to show instead of a diff, when there is one.
+    var unsupportedReason: String? {
+        if case .unsupported(let reason) = content { return reason }
+        return nil
+    }
+
+    /// Anything we know we are not showing in full: a file we cannot read at
+    /// all, or a hunk whose body was cut short.
+    ///
+    /// One question a surface can ask, so that marking partiality is not eight
+    /// separate things each caller has to remember to check.
+    var isPartial: Bool {
+        if case .unsupported = content { return true }
+        return hunks.contains { $0.isTruncated }
+    }
 }

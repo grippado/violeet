@@ -323,7 +323,7 @@ struct UnifiedDiffParserTests {
         #expect(files[1].hunks[0].lines.count == 2)
     }
 
-    @Test("a malformed hunk header is skipped, not fatal")
+    @Test("a malformed hunk header is not fatal, and not silent either")
     func malformedHunkHeader() {
         let patch = """
             --- a/x
@@ -334,7 +334,285 @@ struct UnifiedDiffParserTests {
             +b
             """
         let file = UnifiedDiffParser.parse(patch)[0]
+        // The file survives, with its name. What it does not do is come back
+        // looking like a complete diff of one hunk when the patch described two:
+        // showing the readable half without saying the other half was lost is
+        // the failure this marker exists for.
+        #expect(file.displayPath == "x")
+        #expect(file.isPartial)
+        #expect(file.unsupportedReason != nil)
+        #expect(file.hunks.isEmpty)
+    }
+
+    @Test("several malformed headers in a row still produce one honest file")
+    func severalMalformedHunkHeaders() {
+        let patch = """
+            --- a/x
+            +++ b/x
+            @@ nonsense @@
+            @@ also nonsense @@
+            @@ -oops +oops @@
+            """
+        let files = UnifiedDiffParser.parse(patch)
+        #expect(files.count == 1)
+        #expect(files[0].isPartial)
+        // First reason wins; a reader does not need to be told three times.
+        #expect(files[0].unsupportedReason == UnifiedDiffParser.badHunkHeaderReason)
+    }
+
+    // MARK: - Saying "we could not read this"
+
+    @Test("a conflicted merge is not a file without changes")
+    func combinedDiff() {
+        // Verbatim `git diff` output from a merge that conflicted.
+        let patch = """
+            diff --cc f.txt
+            index 797be14,0c02ccc..0000000
+            --- a/f.txt
+            +++ b/f.txt
+            @@@ -1,3 -1,3 +1,7 @@@
+              a
+            ++<<<<<<< HEAD
+             +Y
+            ++=======
+            + X
+            ++>>>>>>> side
+              c
+            """
+        let files = UnifiedDiffParser.parse(patch)
+        #expect(files.count == 1)
+        let file = files[0]
+        #expect(file.displayPath == "f.txt")
+        // The whole point: this must not be `.text([])`, which is what an
+        // unchanged file produces.
+        #expect(file.content != .text([]))
+        #expect(file.content == .unsupported(reason: UnifiedDiffParser.combinedReason))
+        #expect(file.isPartial)
+        #expect(file.isBinary == false)
+    }
+
+    @Test("a combined hunk header alone is enough to know we cannot show it")
+    func combinedHunkHeaderWithoutCcHeader() {
+        // `git diff -c` and pasted fragments reach us without the `diff --cc`.
+        let patch = """
+            --- a/f.txt
+            +++ b/f.txt
+            @@@ -1,3 -1,3 +1,7 @@@
+              a
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.content == .unsupported(reason: UnifiedDiffParser.combinedReason))
+    }
+
+    @Test("a mode change is a change, and does not read as an identical file")
+    func modeOnlyChange() {
+        let patch = """
+            diff --git a/run.sh b/run.sh
+            old mode 100644
+            new mode 100755
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.displayPath == "run.sh")
+        #expect(file.content == .unsupported(reason: UnifiedDiffParser.modeOnlyReason))
+    }
+
+    @Test("a rename with no hunk at all is an empty text diff, not a failure")
+    func renameWithoutHunks() {
+        // git omits the `@@` entirely at 100% similarity. This is the shape that
+        // used to be indistinguishable from "we could not read the file".
+        let patch = """
+            diff --git a/old/name.swift b/new/name.swift
+            similarity index 100%
+            rename from old/name.swift
+            rename to new/name.swift
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.status == .renamed)
+        #expect(file.oldPath == "old/name.swift")
+        #expect(file.newPath == "new/name.swift")
+        // Empty *and* honest: the patch really said the text did not change.
+        #expect(file.content == .text([]))
+        #expect(file.isPartial == false)
+        #expect(file.unsupportedReason == nil)
+        #expect(file.addedCount == 0)
+
+        // And it is a different value from a file we failed to read, which is
+        // the whole distinction.
+        let unreadable = FileDiff(
+            oldPath: "old/name.swift", newPath: "new/name.swift", status: .renamed,
+            content: .unsupported(reason: "nope"))
+        #expect(unreadable.content != file.content)
+        #expect(unreadable.isPartial)
+    }
+
+    @Test("a hunk cut off by the end of the text says it was cut off")
+    func truncatedByEndOfText() {
+        let patch = """
+            --- a/x
+            +++ b/x
+            @@ -1,4 +1,4 @@
+             one
+            -two
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
         #expect(file.hunks.count == 1)
         #expect(file.hunks[0].lines.count == 2)
+        // The header promised four lines each side and the text ended. Before
+        // this flag existed, that returned a hunk indistinguishable from a
+        // complete one.
+        #expect(file.hunks[0].isTruncated)
+        #expect(file.isPartial)
+    }
+
+    @Test("a hunk that spends its counts exactly is not truncated")
+    func completeHunkIsNotTruncated() {
+        let patch = """
+            --- a/x
+            +++ b/x
+            @@ -1,2 +1,2 @@
+             kept
+            -a
+            +b
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.hunks[0].isTruncated == false)
+        #expect(file.isPartial == false)
+    }
+
+    @Test("a truncated hunk does not eat the next file in a patch with no git header")
+    func truncatedHunkWithoutGitHeader() {
+        // The `diff -u` form of `truncatedHunk`. `--- ` and `+++ ` begin with
+        // `-` and `+`, so before the fix they were read as a removal and an
+        // addition: file `y` vanished and its header became two lines of `x`.
+        let patch = """
+            --- old/x\t2026-08-09 12:00:00
+            +++ new/x\t2026-08-09 12:00:00
+            @@ -1,4 +1,4 @@
+             one
+            --- old/y\t2026-08-09 12:00:00
+            +++ new/y\t2026-08-09 12:00:00
+            @@ -1 +1 @@
+            -c
+            +d
+            """
+        let files = UnifiedDiffParser.parse(patch)
+        #expect(files.count == 2)
+        #expect(files.map(\.displayPath) == ["new/x", "new/y"])
+        #expect(files[0].hunks[0].lines.map(\.text) == ["one"])
+        #expect(files[0].hunks[0].isTruncated)
+        #expect(files[1].hunks[0].lines.map(\.text) == ["c", "d"])
+        #expect(files[1].hunks[0].isTruncated == false)
+    }
+
+    @Test("a removed line that looks like a header is still a removed line")
+    func bodyLineLookingLikeAHeader() {
+        // `-- x` removed arrives as `--- x`. Only the `---`/`+++` *pair* means a
+        // file boundary, so this must stay content.
+        let patch = """
+            --- a/q.sql
+            +++ b/q.sql
+            @@ -1,2 +1,2 @@
+            --- a comment
+             select 1
+            +++ a comment
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.displayPath == "q.sql")
+        #expect(file.hunks.count == 1)
+        #expect(file.hunks[0].lines.map(\.text) == ["-- a comment", "select 1", "++ a comment"])
+    }
+
+    // MARK: - Paths that are not simple
+
+    @Test("a quoted path with a space keeps its space")
+    func quotedPathWithSpace() {
+        let patch = """
+            diff --git "a/dir/my file.txt" "b/dir/my file.txt"
+            --- "a/dir/my file.txt"
+            +++ "b/dir/my file.txt"
+            @@ -1 +1 @@
+            -a
+            +b
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.displayPath == "dir/my file.txt")
+        #expect(file.oldPath == "dir/my file.txt")
+    }
+
+    @Test("an unquoted path with a space is split on the b/, as the comment says")
+    func unquotedPathWithSpace() {
+        // No `---`/`+++` here, so the `diff --git` line is the only source and
+        // its splitting is observable.
+        let patch = "diff --git a/my file.txt b/my file.txt\nnew file mode 100644\n"
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.displayPath == "my file.txt")
+        #expect(file.oldPath == "my file.txt")
+    }
+
+    @Test("an accented path arrives with its accents, not with git's octal escapes")
+    func quotedPathWithOctalEscapes() {
+        // What `git diff` writes for `src/coração.swift`.
+        let patch = """
+            diff --git "a/src/cora\\303\\247\\303\\243o.swift" "b/src/cora\\303\\247\\303\\243o.swift"
+            --- "a/src/cora\\303\\247\\303\\243o.swift"
+            +++ "b/src/cora\\303\\247\\303\\243o.swift"
+            @@ -1 +1 @@
+            -a
+            +b
+            """
+        let file = UnifiedDiffParser.parse(patch)[0]
+        #expect(file.displayPath == "src/coração.swift")
+    }
+
+    @Test("a real directory named a keeps its name")
+    func pathBeginningWithA() {
+        // `stripPrefix` removes exactly one leading component, which is right
+        // because git writes a real `a/` directory as `a/a/…`. Pinned so the
+        // known-wrong case — a bare `--- a/thing` for a file genuinely at
+        // `a/thing` in a patch with no git header — is documented rather than
+        // discovered.
+        let patch = """
+            diff --git a/a/thing.txt b/a/thing.txt
+            --- a/a/thing.txt
+            +++ b/a/thing.txt
+            @@ -1 +1 @@
+            -x
+            +y
+            """
+        #expect(UnifiedDiffParser.parse(patch)[0].displayPath == "a/thing.txt")
+    }
+
+    // MARK: - Headers that arrive alone
+
+    @Test("a +++ with no --- above it belongs to nothing and loses nothing")
+    func orphanNewPath() {
+        let patch = """
+            +++ b/x
+            @@ -1 +1 @@
+            -a
+            +b
+            """
+        // No file was ever opened, so there is nothing to attach the hunk to and
+        // nothing is invented.
+        #expect(UnifiedDiffParser.parse(patch).isEmpty)
+    }
+
+    @Test("two --- in a row are two files, the first with nothing to show")
+    func twoOldPathsInARow() {
+        let patch = """
+            --- a/x
+            --- a/y
+            +++ b/y
+            @@ -1 +1 @@
+            -a
+            +b
+            """
+        let files = UnifiedDiffParser.parse(patch)
+        #expect(files.count == 2)
+        #expect(files[0].oldPath == "x")
+        #expect(files[0].newPath == nil)
+        #expect(files[0].status == .removed)
+        #expect(files[1].displayPath == "y")
+        #expect(files[1].hunks.count == 1)
     }
 }

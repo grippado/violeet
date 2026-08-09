@@ -155,4 +155,26 @@ struct DiffPairingTests {
         let file = FileDiff(oldPath: "x.png", newPath: "x.png", status: .modified, content: .binary)
         #expect(DiffPairing.rows(for: file).isEmpty)
     }
+
+    @Test("three kinds of nothing pair to nothing, and stay three kinds")
+    func emptyRowsDoNotFlattenTheReasons() {
+        // Pairing has no rows to make in any of these, which is correct and is
+        // also why the pairing layer must not be where the distinction is kept:
+        // whatever draws the empty pane has to ask `content`, not `rows`.
+        let identical = FileDiff(oldPath: "x", newPath: "x", status: .modified, content: .text([]))
+        let binary = FileDiff(oldPath: "x", newPath: "x", status: .modified, content: .binary)
+        let unreadable = FileDiff(
+            oldPath: "x", newPath: "x", status: .modified,
+            content: .unsupported(reason: "combined diff"))
+
+        for file in [identical, binary, unreadable] {
+            #expect(DiffPairing.rows(for: file).isEmpty)
+        }
+        #expect(identical.content != binary.content)
+        #expect(identical.content != unreadable.content)
+        #expect(binary.content != unreadable.content)
+        #expect(identical.isPartial == false)
+        #expect(binary.isPartial == false)
+        #expect(unreadable.isPartial)
+    }
 }

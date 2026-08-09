@@ -1,18 +1,12 @@
-// Moving through hunks, and the invariant that nothing moves the file.
+// Moving through hunks.
 //
-// Two things are pinned here. The first is the boundary behaviour: this
-// navigation refuses at the ends instead of wrapping, because "I have seen all
-// of it" is the state a reviewer is trying to reach and a silent wrap makes
-// reaching it unobservable.
+// What is pinned here is the boundary behaviour: this navigation refuses at the
+// ends instead of wrapping, because "I have seen all of it" is the state a
+// reviewer is trying to reach and a silent wrap makes reaching it unobservable.
 //
-// The second is the product invariant, and it is the reason the last suite in
-// this file exists at all: **a diff is read, never written**. The types are
-// built so that mutating one is not expressible — every stored property is a
-// `let`, so its key path is a `KeyPath` and not a `WritableKeyPath`, and that
-// difference is observable at runtime. Which makes the test almost free, and an
-// almost-free test of the invariant a whole feature rests on is a test worth
-// having: the day somebody relaxes a `let` to a `var` to make a view easier,
-// this suite says so before a reviewer has to notice.
+// The product invariant that a diff is read and never written used to be tested
+// at the bottom of this file, where its name did not appear on anything a
+// reader browses. It lives in `DiffImmutabilityTests.swift` now.
 
 import Testing
 
@@ -107,6 +101,25 @@ struct HunkNavigationTests {
         #expect(HunkNavigation(file: binary).index == nil)
     }
 
+    @Test("a file with no name at all still has a path to show, even an empty one")
+    func displayPathWithNeitherSide() {
+        // Not reachable from the parser — it refuses a file with no path — but
+        // `FileDiff` is constructible by hand and a crash here would be a crash
+        // in a header.
+        let nameless = FileDiff(
+            oldPath: nil, newPath: nil, status: .modified, content: .text([]))
+        #expect(nameless.displayPath == "")
+        #expect(HunkNavigation(file: nameless).index == nil)
+    }
+
+    @Test("jumping inside an empty diff refuses instead of inventing a hunk")
+    func movingWithNoHunks() {
+        let nav = HunkNavigation(hunkCount: 0)
+        #expect(nav.moving(to: 0) == nav)
+        #expect(nav.moving(to: 1) == nav)
+        #expect(nav.moving(to: 0).index == nil)
+    }
+
     @Test("moving does not touch what came before it")
     func movingIsAValue() {
         let start = HunkNavigation(hunkCount: 3)
@@ -115,64 +128,5 @@ struct HunkNavigationTests {
         // old position must keep it.
         #expect(start.index == 0)
         #expect(moved.index == 2)
-    }
-}
-
-@Suite("A diff cannot be edited")
-struct DiffImmutabilityTests {
-    /// A `let` property's key path is a `KeyPath`; a `var`'s is a
-    /// `WritableKeyPath`. The cast is the assertion.
-    @Test("no line, hunk or file exposes a writable property")
-    func nothingIsWritable() {
-        let lineKeys: [AnyKeyPath] = [
-            \DiffLine.origin, \DiffLine.text, \DiffLine.oldNumber, \DiffLine.newNumber,
-            \DiffLine.lacksTrailingNewline,
-        ]
-        let hunkKeys: [AnyKeyPath] = [
-            \DiffHunk.oldStart, \DiffHunk.oldCount, \DiffHunk.newStart, \DiffHunk.newCount,
-            \DiffHunk.heading, \DiffHunk.lines,
-        ]
-        let fileKeys: [AnyKeyPath] = [
-            \FileDiff.oldPath, \FileDiff.newPath, \FileDiff.status, \FileDiff.content,
-        ]
-        let rowKeys: [AnyKeyPath] = [\DiffRow.left, \DiffRow.right]
-        let navKeys: [AnyKeyPath] = [\HunkNavigation.hunkCount, \HunkNavigation.index]
-
-        for key in lineKeys + hunkKeys + fileKeys + rowKeys + navKeys {
-            #expect(!isWritable(key), "a property became writable: \(key)")
-        }
-    }
-
-    /// A key path erased to `AnyKeyPath` keeps its writability in its dynamic
-    /// type, which is how one check covers every root and value type in the
-    /// module without having to name either. Reading the type's name rather
-    /// than casting is what makes that possible: a cast needs both types
-    /// spelled out, and there are eighteen pairs here.
-    private func isWritable(_ key: AnyKeyPath) -> Bool {
-        let name = String(describing: type(of: key))
-        return name.hasPrefix("Writable") || name.hasPrefix("ReferenceWritable")
-    }
-
-    /// Reading a diff produces values, and the values a caller already holds do
-    /// not change underneath them when it is read again.
-    @Test("parsing the same patch twice gives equal, independent values")
-    func parsingIsPure() {
-        let patch = """
-            --- a/x
-            +++ b/x
-            @@ -1,2 +1,2 @@
-             kept
-            -a
-            +b
-            """
-        let first = UnifiedDiffParser.parse(patch)
-        let second = UnifiedDiffParser.parse(patch)
-        #expect(first == second)
-
-        // Nothing downstream can reach back into what it was handed.
-        let rows = DiffPairing.rows(for: first[0])
-        _ = HunkNavigation(file: first[0]).next()
-        #expect(first == UnifiedDiffParser.parse(patch))
-        #expect(rows.isEmpty == false)
     }
 }
