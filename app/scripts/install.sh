@@ -32,7 +32,11 @@ readonly TARGET="${INSTALL_DIR}/${BUNDLE_NAME}"
 readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 here() { cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd; }
-readonly APP_DIR="$(here)"
+# Assigned and marked read-only on separate lines: `readonly x="$(f)"` throws
+# away the exit status of `f`, so a failing `cd` here would go unnoticed under
+# `set -e` (SC2155).
+APP_DIR="$(here)"
+readonly APP_DIR
 
 version_of() {
     defaults read "$1/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "?"
@@ -69,6 +73,11 @@ is_ours() {
 
 SOURCE="${1:-}"
 if [[ -z "$SOURCE" ]]; then
+    # `ls -t` rather than `find`, deliberately: everything in `app/dist` is
+    # named by `package.sh`, so the names are ours and hold no newline, and the
+    # only thing wanted here is "the newest", which `find` cannot order without
+    # a `stat` and a `sort` for a case that cannot arise (SC2012).
+    # shellcheck disable=SC2012
     SOURCE="$(ls -t "${APP_DIR}"/dist/*.zip 2>/dev/null | head -1 || true)"
     if [[ -z "$SOURCE" ]]; then
         echo "no build to install: pass a path, or run scripts/package.sh first" >&2
@@ -93,7 +102,8 @@ if [[ ! -d "$BUNDLE" ]]; then
     exit 1
 fi
 
-readonly NEW_VERSION="$(version_of "$BUNDLE")"
+NEW_VERSION="$(version_of "$BUNDLE")"
+readonly NEW_VERSION
 echo "==> installing ${NEW_VERSION}"
 
 # ---------------------------------------------------------------------------
@@ -172,7 +182,23 @@ echo "==> ${TARGET} is ${NEW_VERSION}"
 [[ "$QUARANTINED" -gt 0 ]] && echo "==> ${QUARANTINED} older copies moved to the Trash"
 
 # The check that matters: after all that, is there exactly one?
-REMAINING="$(mdfind -name "violeet.app" 2>/dev/null | grep -c . || true)"
+#
+# Counted through `is_ours`, not by counting the lines Spotlight answered with.
+# `mdfind -name` matches `kMDItemFSName` by substring, and macOS strips the
+# extension from the display name of every application bundle, so the raw answer
+# includes neighbours that merely contain the name: a third-party
+# `My violeet.app` on the machine made this count 2 and printed
+# "re-run after it reindexes" after a perfect install, forever. The same shape
+# hid the opposite error too, since a neighbour could pad the count while a real
+# duplicate went unnoticed. Passing every answer through the same gate that
+# decides what may be moved makes the number mean what the message claims it
+# means: how many real violeet bundles Spotlight can still see.
+REMAINING=0
+while IFS= read -r path; do
+    if is_ours "$path"; then
+        REMAINING=$((REMAINING + 1))
+    fi
+done < <(mdfind -name "violeet.app" 2>/dev/null || true)
 if [[ "$REMAINING" -gt 1 ]]; then
     echo "!!  Spotlight still knows ${REMAINING} bundles; re-run after it reindexes" >&2
 fi
