@@ -582,3 +582,63 @@ async fn a_session_pending_on_the_closed_tab_dies_with_it() {
     assert_eq!(msg["session_id"], "s1");
     assert_eq!(msg["reason"], "tab_closed");
 }
+
+/// The question survives a reconnect, and so does the silence about a session
+/// nobody looked at.
+///
+/// A client that connects while a session is holding a question gets it from the
+/// snapshot or not at all: `session_registered` has no field for it, and the
+/// next `session_updated` for an idle session may never come. Without this the
+/// one card with an action attached to it comes back as plain idle — the same
+/// failure the field exists to fix, only on reconnect.
+#[tokio::test]
+async fn a_snapshot_replays_the_question_a_session_is_holding() {
+    let h = start().await;
+    {
+        let mut r = h.hub.registry().lock().unwrap();
+        r.observe_hook(
+            HookObservation::new("asking", Harness::ClaudeCode),
+            Utc::now(),
+        );
+        r.observe_hook(
+            HookObservation::new("unlooked", Harness::ClaudeCode),
+            Utc::now(),
+        );
+        r.session_mut("asking").unwrap().answer_request =
+            Some(Some(violeet_proto::wire::AnswerRequest {
+                signal: "question_mark".into(),
+                question: "Sigo pelo primeiro?".into(),
+                context: Vec::new(),
+                context_truncated: false,
+                question_truncated: false,
+            }));
+        // `unlooked` keeps its birth value: the daemon has read no stop point
+        // for it and has nothing to say in either direction.
+    }
+
+    let mut client = Client::connect(&h.path).await;
+    client
+        .send(r#"{"type":"request_snapshot","v":1,"ts":"x"}"#)
+        .await;
+
+    // Each live session replays twice: a registration, then telemetry.
+    let mut seen: std::collections::HashMap<String, serde_json::Value> = Default::default();
+    for _ in 0..4 {
+        let msg = client.next().await;
+        if msg["type"] == "session_updated" {
+            seen.insert(msg["session_id"].as_str().unwrap().to_string(), msg);
+        }
+    }
+
+    let asking = seen
+        .get("asking")
+        .expect("telemetry for the asking session");
+    assert_eq!(asking["answer_request"]["signal"], "question_mark");
+    assert_eq!(asking["answer_request"]["question"], "Sigo pelo primeiro?");
+
+    let unlooked = seen.get("unlooked").expect("telemetry for the other one");
+    assert!(
+        unlooked.get("answer_request").is_none(),
+        "absent, not null: the daemon never looked at this one"
+    );
+}

@@ -63,7 +63,27 @@ pub enum TranscriptEvent {
     /// Emitted once per `message.id`, however many lines the reply spanned.
     AssistantTurn(AssistantTurn),
     /// The user said something.
-    UserTurn { at: Option<String> },
+    ///
+    /// `text` is the prose of the line, when it has any, and `human` is
+    /// [`answer_request::user_line_is_human_stop`] read at parse time — a
+    /// `<task-notification>`, a slash command's caveat and an interrupt all
+    /// arrive as `user` lines and none of them is a person typing. Both are here
+    /// because the excerpt in `answer_request` needs the words and the rule
+    /// needs to know who wrote them; deciding it again downstream would be a
+    /// second implementation of the same predicate.
+    UserTurn {
+        at: Option<String>,
+        text: Option<String>,
+        human: bool,
+    },
+    /// Claude Code's `Stop` hook fired: the turn ended.
+    ///
+    /// The `system`/`stop_hook_summary` line, which is the only mark in the file
+    /// of the moment a reply was finished rather than merely written. Modelled
+    /// rather than left in [`TranscriptEvent::Other`] because `answer_request`
+    /// is decided *at* a stop point and nowhere else: the same prose mid-reply
+    /// is not a question waiting on anybody.
+    StopPoint { at: Option<String> },
     /// A tool was invoked.
     ToolUse(ToolUse),
     /// A tool call came back. Correlates with [`ToolUse::id`].
@@ -126,7 +146,8 @@ impl TranscriptEvent {
     pub fn timestamp(&self) -> Option<&str> {
         match self {
             Self::AssistantTurn(t) => t.at.as_deref(),
-            Self::UserTurn { at } => at.as_deref(),
+            Self::UserTurn { at, .. } => at.as_deref(),
+            Self::StopPoint { at } => at.as_deref(),
             Self::ToolUse(t) => t.at.as_deref(),
             Self::ToolResult { at, .. } => at.as_deref(),
             Self::AgentLaunched { at, .. } => at.as_deref(),
@@ -145,6 +166,13 @@ pub struct AssistantTurn {
     pub model: Option<String>,
     pub usage: Usage,
     pub at: Option<String>,
+    /// The `text` blocks of *this line*, joined, when it has any.
+    ///
+    /// One reply is several lines sharing a `message.id`, so this is a fragment
+    /// of a message and not a message: [`Telemetry`] joins the fragments back
+    /// together by id. `None` for a line that carried only `thinking` or
+    /// `tool_use`, which is a different fact from an empty reply.
+    pub text: Option<String>,
 }
 
 /// A `usage` block, exactly as measured.
@@ -399,6 +427,25 @@ pub struct Telemetry {
     launched: std::collections::HashSet<String>,
     /// Keys whose `<task-notification>` has been read. Never removed either.
     finished: std::collections::HashSet<String>,
+    /// The detector has run at least once on this session.
+    ///
+    /// The difference between "not asking" and "never looked", which is the
+    /// difference the wire field is built around. It turns `true` at the first
+    /// stop point and never back: a daemon that met the session already stopped
+    /// sees no stop point, keeps this `false`, and says nothing rather than
+    /// claiming the session is quiet.
+    answer_observed: bool,
+    /// The question on screen right now, if there is one.
+    answer_pending: Option<PendingAnswer>,
+    /// The assistant message being assembled: its `message.id` and its prose so
+    /// far. One reply is several lines, and only the whole of it is the
+    /// question.
+    current_assistant: Option<(Option<String>, String)>,
+    /// The turns before it, oldest first, bounded to what an excerpt can use.
+    recent_turns: std::collections::VecDeque<ContextMessage>,
+    /// Something older than `recent_turns` was dropped, so an excerpt built from
+    /// it cannot claim to cover the conversation.
+    recent_dropped: bool,
     /// `task-id` → the key its launch was filed under.
     ///
     /// A launch is keyed by its `tool-use-id` when it has one, and a dynamic
@@ -441,6 +488,60 @@ pub struct Telemetry {
 /// that stops writing altogether, where "the next read is simply right" never
 /// arrives because there is no next line.
 pub const AGENT_WAIT_MAX_SECS: i64 = 30 * 60;
+
+/// A question the session is waiting on an answer to, and which rule saw it.
+///
+/// The signal travels with the request rather than being derived again by
+/// whoever publishes it: `docs/PROTOCOL.md` says clients must not re-derive it,
+/// and a producer that recomputed it here would be the first client to break
+/// that rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAnswer {
+    pub signal: Signal,
+    pub request: AnswerRequest,
+}
+
+/// How much of one turn is kept for the excerpt, in characters.
+///
+/// A message longer than the whole excerpt budget can never be taken by
+/// [`AnswerRequestConfig::build_request`], which refuses to split one — so
+/// keeping more of it than the length that makes it refuse is memory spent to
+/// change nothing. One character over the budget preserves the decision exactly
+/// while bounding what a session can hold.
+///
+/// ## What one live session can hold, and what is not bounded
+///
+/// This is the field that made `Telemetry` big, and `Telemetry` is cloned once
+/// per debounce window per session (`watch.rs`, and again in the daemon's
+/// `finalize`), so the ceiling is worth writing down. **Derived from the caps in
+/// this file, not measured on a heap profile** — no allocation profiling was
+/// run, and the numbers below are upper bounds on the strings, not on the
+/// process.
+///
+/// Bounded:
+///
+/// - `recent_turns` — at most `context_max_messages` (12) entries of
+///   `KEPT_CHARS_PER_TURN` (6001) **characters** each. Characters, because
+///   [`Telemetry::remember_turn`] cuts with `chars().take(…)`, so the byte
+///   ceiling is 4× that: 12 × 6001 × 4 ≈ **281 KiB** worst case, and roughly a
+///   quarter of it for the Portuguese and English prose this actually holds.
+/// - `answer_pending.request.context` — a copy of a prefix of `recent_turns`,
+///   itself capped at `context_char_budget` (6000) characters in total by
+///   [`AnswerRequestConfig::build_request`]: ≤ 24 KiB worst case.
+///
+/// Not bounded here, and stated rather than glossed:
+///
+/// - `current_assistant` and `answer_pending.request.question` both hold one
+///   whole assistant message, capped by nothing in this crate. `MAX_QUESTION_BYTES`
+///   (128 KiB) is a *wire* cap applied on the way out, in the daemon's
+///   `wire_answer`, so the in-memory copy may legitimately exceed it. What
+///   limits them in practice is how long one reply can be, which was not
+///   measured.
+///
+/// So: the ring is the part with a number, and it is small enough that a clone
+/// per debounce is not what would justify an `Arc` — if the clone ever shows up
+/// in a profile, the message being assembled is the part to look at first.
+const KEPT_CHARS_PER_TURN: usize = ANSWER_REQUEST.context_char_budget + 1;
 
 impl Telemetry {
     pub fn new() -> Self {
@@ -497,11 +598,30 @@ impl Telemetry {
                         turn.usage.cache_creation_input_tokens,
                     );
                 }
+
+                // Prose, joined by `message.id`. Also the moment a question
+                // stops being open: the agent is writing again, so whatever it
+                // asked before belongs to a turn that is over.
+                self.note_assistant_text(turn.message_id.as_deref(), turn.text.as_deref());
             }
 
-            TranscriptEvent::UserTurn { .. } => {
+            TranscriptEvent::UserTurn { text, human, .. } => {
                 self.turn_count += 1;
+                // A user line ends the wait whoever wrote it. A person answered,
+                // or a notification arrived and the stop was never a person's to
+                // begin with — the two are different reasons and the same
+                // outcome, which is why `human` only decides whether the words
+                // go into the excerpt as a turn worth showing.
+                self.close_assistant_message();
+                if *human {
+                    if let Some(text) = text {
+                        self.remember_turn("user", text);
+                    }
+                }
+                self.answer_pending = None;
             }
+
+            TranscriptEvent::StopPoint { .. } => self.decide_answer_request(),
 
             TranscriptEvent::AiTitle { text, .. } => {
                 self.ai_title = Some(text.clone());
@@ -518,6 +638,12 @@ impl Telemetry {
                     self.open_tools.push((id.clone(), label));
                 }
                 self.refresh_in_flight();
+                // A tool call is the agent back at work, and an agent at work is
+                // not waiting on an answer. Erring towards clearing is the
+                // asymmetry this field is calibrated on: a question dropped too
+                // early comes back on the next stop point, a question left up
+                // never corrects itself.
+                self.answer_pending = None;
             }
 
             TranscriptEvent::ToolResult {
@@ -596,6 +722,103 @@ impl Telemetry {
 
             TranscriptEvent::Other { .. } => {}
         }
+    }
+
+    // ---- answer_request -------------------------------------------------
+    //
+    // The producer side of `docs/PROTOCOL.md` § `answer_request`, as a state
+    // machine over the same events everything else here folds. The rule itself
+    // is not reimplemented: it is [`ANSWER_REQUEST`], calibrated and measured in
+    // `answer_request.rs`, called once, at a stop point.
+
+    /// What this session is asking, if it is asking, if we ever looked.
+    ///
+    /// **Three states, and the outer `Option` is the one that is easy to lose.**
+    /// `None` means no stop point has been read for this session, so there is
+    /// nothing to claim in either direction — a session met already stopped, or
+    /// one running without the `Stop` hook that writes the line, lands here.
+    /// `Some(None)` is the positive claim "stopped, and asked nothing";
+    /// `Some(Some(_))` is a question on screen.
+    pub fn answer_request(&self) -> Option<Option<&PendingAnswer>> {
+        self.answer_observed.then(|| self.answer_pending.as_ref())
+    }
+
+    /// Fold one assistant line's prose into the message being assembled.
+    fn note_assistant_text(&mut self, message_id: Option<&str>, text: Option<&str>) {
+        let same_message = match &self.current_assistant {
+            // A line with no id cannot be correlated with anything, so it opens
+            // its own message rather than joining whatever came before it.
+            Some((current, _)) => message_id.is_some() && current.as_deref() == message_id,
+            None => false,
+        };
+        if !same_message {
+            self.close_assistant_message();
+            self.current_assistant = Some((message_id.map(str::to_string), String::new()));
+        }
+        if let (Some((_, buffer)), Some(text)) = (self.current_assistant.as_mut(), text) {
+            if !text.trim().is_empty() {
+                if !buffer.is_empty() {
+                    buffer.push_str("\n\n");
+                }
+                buffer.push_str(text);
+            }
+        }
+        // The agent is writing, so whatever it asked before is answered, taken
+        // back, or superseded.
+        self.answer_pending = None;
+    }
+
+    /// Move the assembled assistant message into the excerpt history.
+    fn close_assistant_message(&mut self) {
+        if let Some((_, text)) = self.current_assistant.take() {
+            if !text.trim().is_empty() {
+                self.remember_turn("assistant", &text);
+            }
+        }
+    }
+
+    /// Keep one turn for the excerpt, dropping the oldest when full.
+    fn remember_turn(&mut self, role: &'static str, text: &str) {
+        if self.recent_turns.len() >= ANSWER_REQUEST.context_max_messages {
+            self.recent_turns.pop_front();
+            self.recent_dropped = true;
+        }
+        self.recent_turns.push_back(ContextMessage {
+            role,
+            text: text.chars().take(KEPT_CHARS_PER_TURN).collect(),
+        });
+    }
+
+    /// Run the rule at a stop point, which is the only place it runs.
+    ///
+    /// `human_stop` is passed as `true`, and that is a decision rather than an
+    /// oversight. Live, the line that says whether a person got the keyboard has
+    /// not been written yet — the probe that measured this rule defaults the
+    /// same way when no `user` line follows. What corrects it is the next line:
+    /// a `<task-notification>` is a `UserTurn` and clears the question, and the
+    /// reader folds a whole batch of new lines before publishing, so a stop that
+    /// was never a person's is normally corrected before it reaches the wire.
+    fn decide_answer_request(&mut self) {
+        self.answer_observed = true;
+        let question = self
+            .current_assistant
+            .as_ref()
+            .map(|(_, text)| text.clone())
+            .unwrap_or_default();
+
+        self.answer_pending = match ANSWER_REQUEST.evaluate(&question, true) {
+            Ok(signal) => {
+                let earlier: Vec<ContextMessage> = self.recent_turns.iter().cloned().collect();
+                // `cwd` is for the drafting payload and has no wire field; the
+                // daemon knows the directory and does not need it from here.
+                let mut request = ANSWER_REQUEST.build_request(&question, &earlier, None);
+                // What the ring dropped is missing from the excerpt too, and
+                // only this side knows it happened.
+                request.context_truncated |= self.recent_dropped;
+                Some(PendingAnswer { signal, request })
+            }
+            Err(_) => None,
+        };
     }
 
     /// How many background agents this session is waiting on, **derived**.
@@ -794,6 +1017,7 @@ mod tests {
                 output_tokens: Some(output),
             },
             at: Some("2026-07-31T22:00:00Z".into()),
+            text: None,
         })
     }
 
@@ -870,6 +1094,7 @@ mod tests {
                 output_tokens: Some(0),
             },
             at: None,
+            text: None,
         }));
 
         assert_eq!(t.cumulative_input_tokens, Some(0));
@@ -883,6 +1108,7 @@ mod tests {
             model: None,
             usage: Usage::default(),
             at: None,
+            text: None,
         }));
         assert_eq!(empty.cumulative_input_tokens, None);
         assert_eq!(empty.context_window_used_tokens, None);
@@ -899,6 +1125,7 @@ mod tests {
                 ..Usage::default()
             },
             at: None,
+            text: None,
         }));
 
         assert_eq!(t.context_window_size_tokens, None);
@@ -1321,6 +1548,206 @@ mod tests {
             t.pending_agents(now()),
             0,
             "the launch was already answered, whatever order it is read in"
+        );
+    }
+
+    // ---- answer_request: the three states --------------------------------
+
+    fn said(id: &str, text: &str) -> TranscriptEvent {
+        TranscriptEvent::AssistantTurn(AssistantTurn {
+            message_id: Some(id.into()),
+            model: None,
+            usage: Usage::default(),
+            at: None,
+            text: Some(text.into()),
+        })
+    }
+
+    fn typed(text: &str) -> TranscriptEvent {
+        TranscriptEvent::UserTurn {
+            at: None,
+            text: Some(text.into()),
+            human: true,
+        }
+    }
+
+    fn stopped() -> TranscriptEvent {
+        TranscriptEvent::StopPoint { at: None }
+    }
+
+    /// Absent is not `null`, and this is the distinction the whole field is
+    /// built on: a session no stop point has been read for is one the daemon
+    /// knows nothing about, and it must not claim there is no question.
+    #[test]
+    fn a_session_never_stopped_says_nothing_about_a_question() {
+        let mut t = Telemetry::new();
+        assert!(t.answer_request().is_none(), "nothing read yet");
+
+        t.apply(&typed("compara as duas rotas"));
+        t.apply(&said("m1", "Achei dois caminhos. Sigo pelo primeiro?"));
+        assert!(
+            t.answer_request().is_none(),
+            "the words are written but the turn has not ended: nothing is waiting on anybody yet"
+        );
+    }
+
+    /// A question in prose, at a stop point, with the conversation that led to
+    /// it — the case `state: idle` cannot express.
+    #[test]
+    fn a_question_at_a_stop_point_becomes_a_request_with_its_context() {
+        let mut t = Telemetry::new();
+        t.apply(&typed("compara as duas rotas"));
+        t.apply(&said("m1", "A primeira lê do fim do arquivo."));
+        t.apply(&typed("e a segunda?"));
+        t.apply(&said("m2", "A segunda relê tudo.\n\nSigo pela primeira?"));
+        t.apply(&stopped());
+
+        let pending = t
+            .answer_request()
+            .expect("observed")
+            .expect("asking")
+            .clone();
+        assert_eq!(pending.signal, Signal::QuestionMark);
+        assert_eq!(
+            pending.request.question,
+            "A segunda relê tudo.\n\nSigo pela primeira?"
+        );
+        assert_eq!(
+            pending
+                .request
+                .context
+                .iter()
+                .map(|m| m.role)
+                .collect::<Vec<_>>(),
+            vec!["user", "assistant", "user"],
+            "oldest first, and the asking message is not repeated in its own excerpt"
+        );
+        assert!(!pending.request.context_truncated);
+    }
+
+    /// Observed and quiet is a claim worth making: it is what closes a panel the
+    /// app opened, and it is not the same as never having looked.
+    #[test]
+    fn a_stop_with_nothing_asked_is_an_explicit_no_question() {
+        let mut t = Telemetry::new();
+        t.apply(&typed("faz o corte"));
+        t.apply(&said("m1", "Feito. Os dois arquivos foram atualizados."));
+        t.apply(&stopped());
+
+        assert_eq!(
+            t.answer_request().map(|p| p.is_none()),
+            Some(true),
+            "observed, and asking nothing"
+        );
+    }
+
+    /// The three readings side by side, on one session, in the order they
+    /// happen. Absent, then an object, then `null` — and the test exists because
+    /// the wire field is worthless if any two of them collapse.
+    #[test]
+    fn the_three_states_follow_one_another_and_stay_distinct() {
+        let mut t = Telemetry::new();
+        assert!(t.answer_request().is_none(), "1. never looked");
+
+        t.apply(&said("m1", "Sigo pelo primeiro?"));
+        t.apply(&stopped());
+        assert!(
+            t.answer_request().flatten().is_some(),
+            "2. a question on screen"
+        );
+
+        t.apply(&typed("sim, pode seguir"));
+        assert_eq!(
+            t.answer_request().map(|p| p.is_none()),
+            Some(true),
+            "3. answered: still observed, no longer asking"
+        );
+    }
+
+    /// The agent going back to work ends the wait as surely as an answer does.
+    #[test]
+    fn the_agent_picking_the_work_back_up_closes_the_question() {
+        let mut t = Telemetry::new();
+        t.apply(&said("m1", "Quer que eu siga?"));
+        t.apply(&stopped());
+        assert!(t.answer_request().flatten().is_some());
+
+        t.apply(&TranscriptEvent::ToolUse(ToolUse {
+            id: Some("toolu_1".into()),
+            name: "Edit".into(),
+            summary: None,
+            at: None,
+            writes_untracked: false,
+        }));
+        assert_eq!(
+            t.answer_request().map(|p| p.is_none()),
+            Some(true),
+            "a tool in flight is an agent working, not one waiting"
+        );
+    }
+
+    /// A background agent reporting in is a `user` line and not a person. It
+    /// closes the wait — the stop was never a human's — and its text does not
+    /// enter the excerpt as something somebody said.
+    #[test]
+    fn a_notification_closes_the_wait_without_joining_the_conversation() {
+        let mut t = Telemetry::new();
+        t.apply(&typed("dispara os agentes"));
+        t.apply(&said("m1", "Disparei. Quer que eu acompanhe?"));
+        t.apply(&stopped());
+        assert!(t.answer_request().flatten().is_some());
+
+        t.apply(&TranscriptEvent::UserTurn {
+            at: None,
+            text: Some("<task-notification>done</task-notification>".into()),
+            human: false,
+        });
+        assert_eq!(t.answer_request().map(|p| p.is_none()), Some(true));
+
+        t.apply(&said("m2", "E aí, sigo?"));
+        t.apply(&stopped());
+        let pending = t.answer_request().flatten().expect("asking again");
+        assert!(
+            !pending
+                .request
+                .context
+                .iter()
+                .any(|m| m.text.contains("task-notification")),
+            "a notification is not a turn of the conversation"
+        );
+    }
+
+    /// One reply is several lines under one `message.id`, and only the whole of
+    /// it is the question: the `?` lands on the last line.
+    #[test]
+    fn one_reply_written_over_several_lines_is_read_as_one_question() {
+        let mut t = Telemetry::new();
+        t.apply(&said("m1", "Achei dois caminhos para o corte."));
+        t.apply(&said("m1", "Sigo pelo primeiro?"));
+        t.apply(&stopped());
+
+        let pending = t.answer_request().flatten().expect("asking");
+        assert_eq!(
+            pending.request.question,
+            "Achei dois caminhos para o corte.\n\nSigo pelo primeiro?"
+        );
+    }
+
+    /// An excerpt that lost the beginning of the conversation says so. The ring
+    /// is what dropped it, and only the ring knows.
+    #[test]
+    fn an_excerpt_over_a_dropped_history_is_marked_truncated() {
+        let mut t = Telemetry::new();
+        for i in 0..ANSWER_REQUEST.context_max_messages + 4 {
+            t.apply(&typed(&format!("turno {i}")));
+        }
+        t.apply(&said("m1", "Sigo?"));
+        t.apply(&stopped());
+
+        let pending = t.answer_request().flatten().expect("asking");
+        assert!(
+            pending.request.context_truncated,
+            "older turns were dropped before the excerpt was built"
         );
     }
 }

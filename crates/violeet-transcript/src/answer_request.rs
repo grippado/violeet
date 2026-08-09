@@ -267,12 +267,32 @@ pub enum Signal {
     Lexicon,
 }
 
+impl Signal {
+    /// The name this signal goes on the wire under.
+    ///
+    /// Here and not at the producer: `docs/PROTOCOL.md` says clients must not
+    /// re-derive the signal, and a spelling that lived next to the wire type
+    /// would be a second name for the rule that fired, free to drift from the
+    /// one the rule calls itself.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::QuestionMark => "question_mark",
+            Self::Lexicon => "lexicon",
+        }
+    }
+}
+
 impl AnswerRequestConfig {
     /// Run the rule over the prose of one assistant message.
     ///
     /// `human_stop` is the caller's answer to "did a person get handed the
-    /// keyboard here?". The daemon knows this from session state; a caller that
-    /// only has the file can get it from [`user_line_is_human_stop`].
+    /// keyboard here?". Live, the daemon does not know yet — the line that would
+    /// say so has not been written — so it passes `true` at the stop point and
+    /// lets the next event correct it (see
+    /// `violeet_transcript::Telemetry::decide_answer_request`, which holds the
+    /// rationale). A caller reading a file that is already complete can answer
+    /// it properly, from [`user_line_is_human_stop`] over the following `user`
+    /// line; that is what `examples/answer_request_probe.rs` does.
     pub fn evaluate(&self, text: &str, human_stop: bool) -> Result<Signal, Declined> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
