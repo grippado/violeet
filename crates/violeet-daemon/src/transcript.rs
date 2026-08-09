@@ -41,10 +41,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use violeet_transcript::{watch_shared, ClaudeCodeReader, Telemetry, TranscriptSession, WatchHandle};
+use violeet_transcript::{watch_shared, ClaudeCodeReader, CursorReader, Telemetry, TranscriptSession, WatchHandle};
 use chrono::Utc;
 
-use crate::registry::{SessionState, TitleSource};
+use crate::registry::{Harness, SessionState, TitleSource};
 use crate::socket::Hub;
 use crate::wire::{self, DaemonToApp, FileChange as WireFileChange, SessionUpdated};
 
@@ -103,13 +103,25 @@ impl TranscriptSupervisor {
 /// event, so this is called constantly and must be free when nothing changed.
 /// A session whose path *changes* is re-followed, and the old watcher is
 /// dropped by the replacement.
-pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
+///
+/// `hook_harness` is what the current hook claims. When the session is already
+/// in the registry, its stored harness wins — the first hook may call `follow`
+/// before `observe_hook` registers the session.
+pub fn follow(hub: &Hub, session_id: &str, path: &Path, hook_harness: Harness) {
     {
         let supervisor = lock(hub.transcripts());
         if supervisor.is_following(session_id, path) {
             return;
         }
     }
+
+    let harness = {
+        let registry = lock(hub.registry());
+        registry
+            .session(session_id)
+            .map(|s| s.harness)
+            .unwrap_or(hook_harness)
+    };
 
     // Always from the start. This used to read from the end of a transcript
     // that already existed, and the reasoning was about the wrong thing.
@@ -138,7 +150,10 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
     // transcript a moment before Claude Code creates it.
     let from_end = false;
 
-    let reader = Box::new(ClaudeCodeReader::new());
+    let reader: Box<dyn violeet_transcript::TranscriptReader> = match harness {
+        Harness::Cursor => Box::new(CursorReader::new()),
+        _ => Box::new(ClaudeCodeReader::new()),
+    };
     let (handle, updates, shared) = match watch_shared(path, reader, from_end) {
         Ok(pair) => pair,
         Err(e) => {

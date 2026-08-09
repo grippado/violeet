@@ -252,7 +252,7 @@ async fn hook_event(
     // idempotent per (session, path), so this is free once it is running, and
     // doing it first means a session is never briefly known-but-unfollowed.
     if let Some(path) = obs.transcript_path.clone() {
-        crate::transcript::follow(&hub, &session_id, &path);
+        crate::transcript::follow(&hub, &session_id, &path, harness_of(&headers));
     }
     let outcome = hub.observe_hook(obs, now);
 
@@ -353,7 +353,7 @@ async fn permission_request(
         obs = obs.with_origin(origin);
     }
     if let Some(path) = obs.transcript_path.clone() {
-        crate::transcript::follow(&hub, &session_id, &path);
+        crate::transcript::follow(&hub, &session_id, &path, harness_of(&headers));
     }
     hub.observe_hook(obs, now);
 

@@ -51,6 +51,21 @@ fn hub_with_session(session_id: &str) -> Hub {
     hub
 }
 
+fn hub_with_cursor_session(session_id: &str) -> Hub {
+    let hub = Hub::new(Registry::with_default_ttl());
+    let obs = HookObservation::new(session_id, Harness::Cursor);
+    hub.observe_hook(obs, chrono::Utc::now());
+    hub
+}
+
+/// Cursor agent JSONL: `role`/`message`, `Shell` instead of `Bash`.
+fn cursor_tool_call(id: &str) -> String {
+    format!(
+        r#"{{"role":"assistant","timestamp":"2026-08-09T20:00:00Z","message":{{"id":"{id}","model":"composer-2","content":[{{"type":"tool_use","name":"Shell","input":{{"command":"cargo test","description":"run tests"}}}}],"usage":{{"input_tokens":1000,"cache_read_input_tokens":50000,"output_tokens":40}}}}}}
+"#
+    )
+}
+
 fn state_of(hub: &Hub, session_id: &str) -> Option<SessionState> {
     let registry = hub.registry().lock().unwrap();
     registry.session(session_id).map(|s| s.state())
@@ -77,7 +92,7 @@ fn a_tool_in_flight_without_a_pending_hitl_reads_as_working() {
     append(&path, &tool_call("m1", "toolu_1"));
 
     let hub = hub_with_session("s-working");
-    transcript::follow(&hub, "s-working", &path);
+    transcript::follow(&hub, "s-working", &path, Harness::ClaudeCode);
 
     // `follow` reads from the end, so the line already there is history.
     // Appending is what the reader must react to.
@@ -110,6 +125,44 @@ fn a_tool_in_flight_without_a_pending_hitl_reads_as_working() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// Cursor harness selects the Cursor reader, not Claude Code's `type` lines.
+#[test]
+fn cursor_harness_populates_telemetry_from_cursor_jsonl() {
+    let path = temp("cursor");
+    append(&path, &cursor_tool_call("gen-1"));
+
+    let hub = hub_with_cursor_session("s-cursor");
+    transcript::follow(&hub, "s-cursor", &path, Harness::Cursor);
+
+    append(&path, &cursor_tool_call("gen-2"));
+
+    assert!(
+        eventually(|| {
+            hub.registry()
+                .lock()
+                .unwrap()
+                .session("s-cursor")
+                .and_then(|s| s.last_action.as_deref())
+                .is_some_and(|a| a.starts_with("Shell"))
+        }),
+        "expected Shell last_action, got {:?}",
+        hub.registry().lock().unwrap().session("s-cursor").and_then(|s| s.last_action.clone())
+    );
+
+    let registry = hub.registry().lock().unwrap();
+    let session = registry.session("s-cursor").unwrap();
+    assert_eq!(session.model.as_deref(), Some("composer-2"));
+    assert_eq!(session.tokens.context_window_used_tokens, Some(51_000));
+    assert_eq!(session.tokens.cumulative_output_tokens, Some(80));
+    assert!(session
+        .last_action
+        .as_deref()
+        .is_some_and(|a| a.starts_with("Shell")));
+    drop(registry);
+
+    let _ = std::fs::remove_file(&path);
+}
+
 /// The same transcript, with a permission request open, reads as blocked.
 ///
 /// This is the assertion the whole integration exists for: the *file is
@@ -135,7 +188,7 @@ fn the_same_transcript_reads_as_waiting_hitl_when_a_request_is_open() {
     );
     assert!(hub.has_pending_hitl("s-hitl"));
 
-    transcript::follow(&hub, "s-hitl", &path);
+    transcript::follow(&hub, "s-hitl", &path, Harness::ClaudeCode);
     append(&path, &tool_call("m2", "toolu_2"));
 
     assert!(
@@ -160,7 +213,7 @@ fn a_transcript_with_no_tool_in_flight_leaves_the_state_alone() {
     hub.observe_hook(obs, chrono::Utc::now());
     assert_eq!(state_of(&hub, "s-quiet"), Some(SessionState::Idle));
 
-    transcript::follow(&hub, "s-quiet", &path);
+    transcript::follow(&hub, "s-quiet", &path, Harness::ClaudeCode);
     // A plain assistant turn: usage, no tool call.
     append(
         &path,
@@ -194,9 +247,9 @@ fn following_is_idempotent_and_released_when_the_session_ends() {
     let path = temp("lifecycle");
     let hub = hub_with_session("s-life");
 
-    transcript::follow(&hub, "s-life", &path);
-    transcript::follow(&hub, "s-life", &path);
-    transcript::follow(&hub, "s-life", &path);
+    transcript::follow(&hub, "s-life", &path, Harness::ClaudeCode);
+    transcript::follow(&hub, "s-life", &path, Harness::ClaudeCode);
+    transcript::follow(&hub, "s-life", &path, Harness::ClaudeCode);
 
     assert_eq!(
         hub.transcripts().lock().unwrap().len(),
@@ -224,7 +277,7 @@ fn an_unwatchable_transcript_does_not_take_the_session_down() {
     let hub = hub_with_session("s-missing");
     let missing = PathBuf::from("/nonexistent-directory-violeet/transcript.jsonl");
 
-    transcript::follow(&hub, "s-missing", &missing);
+    transcript::follow(&hub, "s-missing", &missing, Harness::ClaudeCode);
 
     assert!(
         state_of(&hub, "s-missing").is_some(),
@@ -244,7 +297,7 @@ fn the_final_lines_are_read_before_the_watch_is_dropped() {
     let path = temp("final-flush");
     let hub = hub_with_session("s-final");
 
-    transcript::follow(&hub, "s-final", &path);
+    transcript::follow(&hub, "s-final", &path, Harness::ClaudeCode);
     append(&path, &tool_call("m1", "toolu_1"));
 
     assert!(
@@ -343,7 +396,7 @@ fn pending_agents(hub: &Hub, session_id: &str) -> Option<Option<u64>> {
 fn a_session_waiting_on_an_agent_reports_it_while_still_reading_idle() {
     let path = temp("pending-agents");
     let hub = hub_with_session("s-agents");
-    transcript::follow(&hub, "s-agents", &path);
+    transcript::follow(&hub, "s-agents", &path, Harness::ClaudeCode);
 
     append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
     append(&path, &agent_launch("m2", "toolu_b", "agent_b"));
@@ -378,7 +431,7 @@ fn a_session_waiting_on_an_agent_reports_it_while_still_reading_idle() {
 fn a_completion_the_hooks_never_reported_still_clears_the_count() {
     let path = temp("pending-agents-recovery");
     let hub = hub_with_session("s-recover");
-    transcript::follow(&hub, "s-recover", &path);
+    transcript::follow(&hub, "s-recover", &path, Harness::ClaudeCode);
 
     append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
     assert!(
@@ -415,7 +468,7 @@ fn a_session_with_no_agents_publishes_zero_and_not_silence() {
         "nothing read yet: the app has not been told anything"
     );
 
-    transcript::follow(&hub, "s-zero", &path);
+    transcript::follow(&hub, "s-zero", &path, Harness::ClaudeCode);
     append(&path, &tool_call("m1", "toolu_1"));
 
     assert!(
@@ -434,7 +487,7 @@ fn a_session_with_no_agents_publishes_zero_and_not_silence() {
 fn a_notification_delivered_as_an_attachment_clears_the_count() {
     let path = temp("pending-agents-attachment");
     let hub = hub_with_session("s-attach");
-    transcript::follow(&hub, "s-attach", &path);
+    transcript::follow(&hub, "s-attach", &path, Harness::ClaudeCode);
 
     append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
     assert!(
@@ -463,7 +516,7 @@ fn a_notification_delivered_as_an_attachment_clears_the_count() {
 fn an_agent_that_never_reported_stops_being_counted_once_it_is_too_old() {
     let path = temp("pending-agents-abandoned");
     let hub = hub_with_session("s-old");
-    transcript::follow(&hub, "s-old", &path);
+    transcript::follow(&hub, "s-old", &path, Harness::ClaudeCode);
 
     // Two launches, one recent and one abandoned 45 minutes ago.
     append(
@@ -491,7 +544,7 @@ fn an_agent_that_never_reported_stops_being_counted_once_it_is_too_old() {
 fn a_session_that_ends_stops_waiting_on_whatever_was_still_out() {
     let path = temp("pending-agents-sessionend");
     let hub = hub_with_session("s-end");
-    transcript::follow(&hub, "s-end", &path);
+    transcript::follow(&hub, "s-end", &path, Harness::ClaudeCode);
 
     append(&path, &agent_launch("m1", "toolu_a", "agent_a"));
     assert!(
