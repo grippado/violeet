@@ -564,3 +564,224 @@ fn a_session_that_ends_stops_waiting_on_whatever_was_still_out() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+// ---- answer_request: the question the state cannot carry -------------------
+
+/// An assistant reply, in prose, with no tool call in it — the shape a question
+/// actually has and the one the transcript reader used to have no opinion about.
+fn assistant_says(msg_id: &str, text: &str) -> String {
+    let at = chrono::Utc::now().to_rfc3339();
+    format!(
+        r#"{{"type":"assistant","uuid":"u","sessionId":"s","timestamp":"{at}","message":{{"id":"{msg_id}","model":"claude-opus-5","content":[{{"type":"text","text":"{text}"}}],"usage":{{"input_tokens":10,"output_tokens":5}}}}}}
+"#
+    )
+}
+
+/// The `Stop` hook's own line: the end of the turn, as Claude Code writes it.
+fn stop_point() -> String {
+    let at = chrono::Utc::now().to_rfc3339();
+    format!(
+        r#"{{"type":"system","subtype":"stop_hook_summary","uuid":"u","sessionId":"s","timestamp":"{at}"}}
+"#
+    )
+}
+
+fn user_says(text: &str) -> String {
+    let at = chrono::Utc::now().to_rfc3339();
+    format!(
+        r#"{{"type":"user","uuid":"u","sessionId":"s","timestamp":"{at}","message":{{"role":"user","content":"{text}"}}}}
+"#
+    )
+}
+
+/// Three states, read off the registry exactly as the wire carries them: `None`
+/// is absent, `Some(None)` is `null`, `Some(Some(_))` is the question.
+fn answer_request(
+    hub: &Hub,
+    session_id: &str,
+) -> Option<Option<Option<violeet_proto::wire::AnswerRequest>>> {
+    let registry = hub.registry().lock().unwrap();
+    registry
+        .session(session_id)
+        .map(|s| s.answer_request.clone())
+}
+
+/// The bug, end to end. `Stop` maps to `Idle` and the transcript correction only
+/// fires with a tool in flight, which a question in prose never has — so a
+/// session genuinely waiting on a written answer read as plain idle.
+///
+/// What is asserted is not the state: `idle` is the contract. It is that the app
+/// now has the one field that tells this session apart from one that finished.
+#[test]
+fn a_question_in_prose_reaches_the_registry_as_an_object() {
+    let path = temp("answer-request");
+    let hub = hub_with_session("s-asking");
+    transcript::follow(&hub, "s-asking", &path, Harness::ClaudeCode);
+
+    append(&path, &user_says("compara as duas rotas"));
+    append(
+        &path,
+        &assistant_says(
+            "m1",
+            "Achei dois caminhos para o corte. Sigo pelo primeiro?",
+        ),
+    );
+    append(&path, &stop_point());
+
+    assert!(
+        eventually(|| matches!(answer_request(&hub, "s-asking"), Some(Some(Some(_))))),
+        "the question never landed: {:?}",
+        answer_request(&hub, "s-asking")
+    );
+
+    let asked = answer_request(&hub, "s-asking")
+        .flatten()
+        .flatten()
+        .expect("an object");
+    assert_eq!(asked.signal, "question_mark");
+    assert_eq!(
+        asked.question,
+        "Achei dois caminhos para o corte. Sigo pelo primeiro?"
+    );
+    assert_eq!(
+        asked.context.first().map(|m| m.text.as_str()),
+        Some("compara as duas rotas"),
+        "the excerpt carries the turn that led to the question"
+    );
+
+    // And the state is untouched: this is a field, not a fifth state. The
+    // session here was never sent a `Stop` hook, so it is still `Starting` — and
+    // reading a question out of the transcript moved it nowhere.
+    assert_eq!(state_of(&hub, "s-asking"), Some(SessionState::Starting));
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The answer ends the wait. `null` and not silence: silence would mean
+/// *unchanged*, and the panel the app opened would never learn to close.
+#[test]
+fn an_answered_question_becomes_an_explicit_null() {
+    let path = temp("answer-request-answered");
+    let hub = hub_with_session("s-answered");
+    transcript::follow(&hub, "s-answered", &path, Harness::ClaudeCode);
+
+    append(&path, &assistant_says("m1", "Sigo pelo primeiro?"));
+    append(&path, &stop_point());
+    assert!(
+        eventually(|| matches!(answer_request(&hub, "s-answered"), Some(Some(Some(_))))),
+        "the question never landed"
+    );
+
+    append(&path, &user_says("sim, pode seguir"));
+    assert!(
+        eventually(|| answer_request(&hub, "s-answered") == Some(Some(None))),
+        "the wait never ended: {:?}",
+        answer_request(&hub, "s-answered")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A session that stopped having finished says so. This is the reading that
+/// separates "quiet" from "never looked", and it is a claim the daemon is
+/// entitled to make: it read the stop point itself.
+#[test]
+fn a_session_that_stopped_without_asking_publishes_null() {
+    let path = temp("answer-request-quiet");
+    let hub = hub_with_session("s-quiet");
+    transcript::follow(&hub, "s-quiet", &path, Harness::ClaudeCode);
+
+    append(
+        &path,
+        &assistant_says("m1", "Feito. Os dois arquivos foram atualizados."),
+    );
+    append(&path, &stop_point());
+
+    assert!(
+        eventually(|| answer_request(&hub, "s-quiet") == Some(Some(None))),
+        "an observed session with nothing asked must say so: {:?}",
+        answer_request(&hub, "s-quiet")
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// **The state that is easy to lose.** A session the detector never ran on — no
+/// stop point in the file — publishes nothing at all. A `null` here would tell
+/// the app "there is no question" about a session the daemon never saw stop.
+#[test]
+fn a_session_with_no_stop_point_publishes_nothing_at_all() {
+    let path = temp("answer-request-unobserved");
+    let hub = hub_with_session("s-unobserved");
+    transcript::follow(&hub, "s-unobserved", &path, Harness::ClaudeCode);
+
+    // A whole turn's worth of file, and not one stop point in it.
+    append(&path, &user_says("compara as duas rotas"));
+    append(&path, &assistant_says("m1", "Achei dois caminhos. Sigo?"));
+
+    // Wait for the read to have happened at all, on a field that does move.
+    assert!(
+        eventually(|| {
+            let registry = hub.registry().lock().unwrap();
+            registry
+                .session("s-unobserved")
+                .is_some_and(|s| s.tokens.cumulative_output_tokens.is_some())
+        }),
+        "the transcript was never read"
+    );
+
+    assert_eq!(
+        answer_request(&hub, "s-unobserved"),
+        Some(None),
+        "never observed is not the same as observed and quiet"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The two blocked readings at the same instant: a tool in flight *and* a
+/// permission request open. ADR-004 says the HITL card outranks everything, and
+/// the way this field respects that is by not competing — it says nothing.
+///
+/// The assertion follows from the code (no stop point, so the detector never
+/// ran) but nothing pinned it, and this is the corner where a future "publish
+/// null when the session is blocked" would look reasonable and would be a lie:
+/// the daemon has not looked for a question here, and `null` claims it has.
+#[test]
+fn a_tool_in_flight_under_a_pending_hitl_publishes_no_question_at_all() {
+    let path = temp("answer-request-hitl");
+    append(&path, &tool_call("m1", "toolu_1"));
+
+    let hub = hub_with_session("s-asking-hitl");
+    let (_request, _rx) = hub.open_hitl(
+        violeet_daemon::hitl::NewHitl {
+            session_id: "s-asking-hitl".to_string(),
+            tab_id: None,
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "cargo test"}),
+            permission_suggestions: serde_json::Value::Array(Vec::new()),
+        },
+        chrono::Utc::now(),
+    );
+    assert!(hub.has_pending_hitl("s-asking-hitl"));
+
+    transcript::follow(&hub, "s-asking-hitl", &path, Harness::ClaudeCode);
+    append(&path, &tool_call("m2", "toolu_2"));
+
+    assert!(
+        eventually(|| state_of(&hub, "s-asking-hitl") == Some(SessionState::WaitingHitl)),
+        "expected waiting_hitl, got {:?}",
+        state_of(&hub, "s-asking-hitl")
+    );
+
+    // Both readings, at the same instant: the HITL is open and the question
+    // field was never published — absent, not `null`.
+    assert!(hub.has_pending_hitl("s-asking-hitl"));
+    assert_eq!(
+        answer_request(&hub, "s-asking-hitl"),
+        Some(None),
+        "a blocked session is not a session we read a stop point for"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}

@@ -41,12 +41,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use violeet_transcript::{watch_shared, ClaudeCodeReader, CursorReader, Telemetry, TranscriptSession, WatchHandle};
+use violeet_transcript::{
+    watch_shared, ClaudeCodeReader, CursorReader, PendingAnswer, Telemetry, TranscriptSession,
+    WatchHandle,
+};
 use chrono::Utc;
 
 use crate::registry::{Harness, SessionState, TitleSource};
 use crate::socket::Hub;
-use crate::wire::{self, DaemonToApp, FileChange as WireFileChange, SessionUpdated};
+use crate::wire::{
+    self, AnswerContextMessage as WireAnswerContext, AnswerRequest as WireAnswerRequest,
+    DaemonToApp, FileChange as WireFileChange, SessionUpdated, MAX_QUESTION_BYTES,
+};
 
 /// How long to sit on updates before publishing. One reply's worth of appends
 /// arrives well inside this.
@@ -368,6 +374,77 @@ fn pending_on_wire(counted: u64, partial: bool, ending: bool) -> Option<u64> {
     }
 }
 
+/// What `answer_request` goes on the wire as, given what the transcript knows.
+///
+/// A pure function for the same reason `pending_on_wire` is one: it decides what
+/// the daemon *claims*, and that is worth reading on its own. The return is the
+/// patch value itself — `None` publishes nothing, `Some(None)` publishes `null`,
+/// `Some(Some(_))` publishes the question.
+///
+/// - **Never observed** — no stop point has been read for this session, so
+///   there is nothing to say in either direction and the field stays absent.
+///   This is also the whole guard against a partial read: unlike a count, a
+///   question cannot be under-read into a plausible zero, because a daemon that
+///   met the session already stopped has no stop point at all and lands here.
+/// - **Ending** — the `SessionEnd` path, and only for a session we did observe.
+///   A session that is gone is not waiting on an answer, whatever the last
+///   question in the file was, and a card the app is about to drop must not keep
+///   a question that nobody can answer any more.
+/// - **Otherwise** — the transcript's current reading, `null` included, because
+///   "asked nothing" is the claim that lets the app close a panel it opened.
+fn answer_on_wire(
+    observed: Option<Option<&PendingAnswer>>,
+    ending: bool,
+) -> Option<Option<WireAnswerRequest>> {
+    match (observed, ending) {
+        (None, _) => None,
+        (Some(_), true) => Some(None),
+        (Some(pending), false) => Some(pending.map(wire_answer)),
+    }
+}
+
+/// The detector's request as the protocol spells it.
+///
+/// The only thing added here is the cap, which is a wire concern: the length
+/// lives in `violeet-proto` because a receiver needs the same number to check
+/// that `question_truncated` is telling the truth.
+fn wire_answer(pending: &PendingAnswer) -> WireAnswerRequest {
+    let (question, question_truncated) = cap_question(&pending.request.question);
+    WireAnswerRequest {
+        signal: pending.signal.as_wire().to_string(),
+        question,
+        context: pending
+            .request
+            .context
+            .iter()
+            .map(|message| WireAnswerContext {
+                role: message.role.to_string(),
+                text: message.text.clone(),
+            })
+            .collect(),
+        context_truncated: pending.request.context_truncated,
+        question_truncated,
+    }
+}
+
+/// Cut the question to [`MAX_QUESTION_BYTES`], on a character boundary.
+///
+/// The boundary is not politeness: the cap is in bytes and the questions are in
+/// Portuguese, so a naive slice would split a `ç` and produce a string that is
+/// not valid UTF-8 — a panic here, and a line the app cannot decode if it were
+/// not. Cutting short of the cap is the honest direction, and the flag says it
+/// happened either way.
+fn cap_question(question: &str) -> (String, bool) {
+    if question.len() <= MAX_QUESTION_BYTES {
+        return (question.to_string(), false);
+    }
+    let mut end = MAX_QUESTION_BYTES;
+    while end > 0 && !question.is_char_boundary(end) {
+        end -= 1;
+    }
+    (question[..end].to_string(), true)
+}
+
 fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool, ending: bool) {
     let now = Utc::now();
 
@@ -496,6 +573,32 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool, en
                 session.pending_agents = pending;
                 patch.pending_agents = Some(pending);
                 anything = true;
+            }
+        }
+
+        // --- the question on screen ------------------------------------------
+        //
+        // `Stop` maps to `Idle` and cannot say whether the agent stopped having
+        // finished or stopped having *asked*, because it is the same hook either
+        // way. The transcript can: the rule in `violeet_transcript::answer_
+        // request` runs at each stop point, and this publishes its reading.
+        //
+        // Three states, and the outer `Option` carries the one that is easy to
+        // lose. Nothing is published for a session no stop point has been read
+        // for — the app must never be told "no question" about a session this
+        // daemon never looked at, which is the `None`-becomes-zero mistake in
+        // its second form. See `answer_on_wire`.
+        //
+        // Precedence is not decided here. `answer_request` outranks
+        // `pending_agents` on the *client*, which already implements it; the
+        // daemon publishes both readings and neither suppresses the other.
+        {
+            if let Some(asked) = answer_on_wire(telemetry.answer_request(), ending) {
+                if session.answer_request.as_ref() != Some(&asked) {
+                    session.answer_request = Some(asked.clone());
+                    patch.answer_request = Some(asked);
+                    anything = true;
+                }
             }
         }
 
@@ -669,5 +772,123 @@ mod tests {
             Some(0),
             "even a partial read: the session is gone either way"
         );
+    }
+
+    // ---- the question on the wire ---------------------------------------
+
+    fn asked(question: &str) -> Telemetry {
+        let mut t = Telemetry::new();
+        t.apply(&violeet_transcript::TranscriptEvent::AssistantTurn(
+            violeet_transcript::AssistantTurn {
+                message_id: Some("m1".into()),
+                model: None,
+                usage: violeet_transcript::Usage::default(),
+                at: None,
+                text: Some(question.into()),
+            },
+        ));
+        t.apply(&violeet_transcript::TranscriptEvent::StopPoint { at: None });
+        t
+    }
+
+    /// The three states, on the wire, distinct — and the first one is the one a
+    /// producer loses by accident: a session no stop point has been read for
+    /// must publish **nothing**, not `null`. `null` is a claim, and the daemon
+    /// has no basis for it.
+    #[test]
+    fn a_session_no_stop_point_was_read_for_publishes_nothing() {
+        let fresh = Telemetry::new();
+        assert_eq!(answer_on_wire(fresh.answer_request(), false), None);
+    }
+
+    #[test]
+    fn a_stop_with_no_question_publishes_an_explicit_null() {
+        let quiet = asked("Feito, os dois arquivos foram atualizados.");
+        assert_eq!(
+            answer_on_wire(quiet.answer_request(), false),
+            Some(None),
+            "observed and quiet is what lets the app close the panel"
+        );
+    }
+
+    #[test]
+    fn a_question_publishes_the_object_with_the_signal_that_fired() {
+        let asking = asked("Achei dois caminhos.\n\nSigo pelo primeiro?");
+        let wire = answer_on_wire(asking.answer_request(), false)
+            .expect("published")
+            .expect("an object");
+        assert_eq!(wire.signal, "question_mark");
+        assert_eq!(wire.question, "Achei dois caminhos.\n\nSigo pelo primeiro?");
+        assert!(!wire.question_truncated);
+    }
+
+    /// A session that is gone waits on nobody — but only one it was watching.
+    /// Publishing `null` for a session it never observed would be the same
+    /// unfounded claim, made on the way out.
+    #[test]
+    fn a_session_that_ends_stops_asking_only_if_it_was_ever_observed() {
+        let asking = asked("Sigo pelo primeiro?");
+        assert_eq!(answer_on_wire(asking.answer_request(), true), Some(None));
+
+        let never = Telemetry::new();
+        assert_eq!(answer_on_wire(never.answer_request(), true), None);
+    }
+
+    /// The cap is in bytes and the questions are in Portuguese. A naive slice
+    /// would split a `ç` and panic; cutting short of the cap is the honest
+    /// direction, and the flag says it happened.
+    #[test]
+    fn an_oversized_question_is_cut_on_a_character_boundary_and_says_so() {
+        let long = "ç".repeat(MAX_QUESTION_BYTES);
+        let (cut, truncated) = cap_question(&long);
+        assert!(truncated);
+        assert!(cut.len() <= MAX_QUESTION_BYTES);
+        assert!(
+            cut.chars().all(|c| c == 'ç'),
+            "a cut in the middle of a character is not a shorter string, it is a broken one"
+        );
+
+        let short = "Sigo pelo primeiro?";
+        assert_eq!(cap_question(short), (short.to_string(), false));
+    }
+
+    /// The two sides of the comparison, one byte apart. The test above only
+    /// proves the far side of the cap; an off-by-one here would either truncate
+    /// a question that fits — and claim so on the wire — or let one byte past
+    /// the limit the receiver checks against.
+    #[test]
+    fn the_cap_is_exact_on_both_sides_of_the_limit() {
+        let exactly = "a".repeat(MAX_QUESTION_BYTES);
+        assert_eq!(
+            cap_question(&exactly),
+            (exactly.clone(), false),
+            "a question that is exactly the limit fits and is not truncated"
+        );
+
+        let one_over = "a".repeat(MAX_QUESTION_BYTES + 1);
+        let (cut, truncated) = cap_question(&one_over);
+        assert!(truncated);
+        assert_eq!(cut.len(), MAX_QUESTION_BYTES);
+    }
+
+    /// The limit falling *inside* a character, which is the case the byte cap
+    /// and the UTF-8 content only produce together. `ç` is two bytes, so this
+    /// string is one byte over the cap and the cut index lands between them:
+    /// backing off to the boundary is what keeps the result a string instead of
+    /// a panic, and it costs the whole character rather than half of it.
+    #[test]
+    fn a_character_straddling_the_limit_is_dropped_whole() {
+        let straddling = format!("{}ç", "a".repeat(MAX_QUESTION_BYTES - 1));
+        assert_eq!(straddling.len(), MAX_QUESTION_BYTES + 1);
+
+        let (cut, truncated) = cap_question(&straddling);
+        assert!(truncated);
+        assert_eq!(
+            cut.len(),
+            MAX_QUESTION_BYTES - 1,
+            "cutting short of the cap is the honest direction; cutting at it \
+             would split the ç"
+        );
+        assert!(cut.chars().all(|c| c == 'a'));
     }
 }

@@ -48,7 +48,32 @@ impl TranscriptReader for CursorReader {
 
         match object.get("role").and_then(Value::as_str) {
             Some("assistant") => parse_assistant(object.get("message"), at),
-            Some("user") => vec![TranscriptEvent::UserTurn { at }],
+            // `human: true`, always, and it is a claim about Cursor rather than
+            // a default.
+            //
+            // In Claude Code the flag exists because several things arrive as
+            // `user` lines without a person having typed anything: a
+            // `<task-notification>`, a slash command's caveat, an interrupt.
+            // `answer_request` needs to tell those apart from a real reply, so
+            // `user_line_is_human_stop` decides it at parse time.
+            //
+            // Cursor emits none of those. Its transcript carries `user` lines
+            // only for what was submitted through the composer, and there is an
+            // external witness to that: the `beforeSubmitPrompt` hook fires on
+            // submission and nowhere else, which is why violeet can name a
+            // Cursor session from the prompt at all. Attached context, such as
+            // the `<manually_attached_skills>` block seen in real transcripts,
+            // rides *inside* a message the person still chose to send.
+            //
+            // The honest failure mode if Cursor ever starts injecting its own
+            // `user` lines: this would call them human and an `answer_request`
+            // would close on a line nobody wrote. That is a measurable claim,
+            // and the place it would be caught is `docs/TRANSCRIPT_FORMAT.md`.
+            Some("user") => vec![TranscriptEvent::UserTurn {
+                at,
+                text: user_text(object.get("message")),
+                human: true,
+            }],
             Some("") | None => Vec::new(),
             other => vec![TranscriptEvent::Other {
                 kind: other.unwrap_or("unknown").to_string(),
@@ -81,6 +106,10 @@ fn parse_assistant(message: Option<&Value>, at: Option<String>) -> Vec<Transcrip
             .map(parse_usage)
             .unwrap_or_default(),
         at: at.clone(),
+        // Same joining rule as the user side, against the same `content` array.
+        // `None` for a line that carried only `tool_use`, which is a different
+        // fact from an empty reply.
+        text: message.and_then(|m| joined_text_blocks(m.get("content"))),
     })];
 
     events.extend(
@@ -133,6 +162,40 @@ fn tool_uses(content: Option<&Value>, at: Option<String>) -> Vec<ToolUse> {
 
 fn message_field(message: Option<&Value>, key: &str) -> Option<String> {
     string_at(message?.as_object()?.get(key))
+}
+
+/// The prose of a `user` line, when it has any.
+///
+/// Cursor's `message.content` is the same shape as Claude Code's — an array of
+/// typed blocks — so this joins the `text` ones and ignores the rest, which is
+/// what [`crate::claude_code`] does for the same reason: a line whose prose
+/// arrived in two blocks must not shrink on the way into an excerpt.
+fn user_text(message: Option<&Value>) -> Option<String> {
+    let content = message?.as_object()?.get("content")?;
+    if let Some(s) = content.as_str() {
+        return (!s.trim().is_empty()).then(|| s.to_string());
+    }
+    joined_text_blocks(Some(content))
+}
+
+/// Every `text` block of a content array, joined, or `None` when there are none.
+///
+/// `None` and `Some("")` are different answers: no text block at all is a line
+/// that only invoked tools, and that is not the same as a reply that said
+/// nothing.
+fn joined_text_blocks(content: Option<&Value>) -> Option<String> {
+    let blocks = content?.as_array()?;
+    let joined = blocks
+        .iter()
+        .filter_map(|block| {
+            let o = block.as_object()?;
+            (o.get("type").and_then(Value::as_str) == Some("text"))
+                .then(|| o.get("text").and_then(Value::as_str))
+                .flatten()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!joined.trim().is_empty()).then_some(joined)
 }
 
 fn summarize_input(input: Option<&Value>) -> Option<String> {
@@ -231,6 +294,57 @@ mod tests {
         let line = r#"{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}"#;
         let events = reader().parse_line(line);
         assert!(matches!(events.as_slice(), [TranscriptEvent::UserTurn { .. }]));
+    }
+
+    /// A Cursor `user` line is a person, and the line remembers what they said.
+    ///
+    /// Both halves matter downstream: `answer_request` closes a wait on a human
+    /// line, and it quotes `text` in the excerpt it sends the app. A line that
+    /// reported one without the other would either never close the wait or
+    /// close it with nothing to show.
+    #[test]
+    fn a_user_line_is_human_and_carries_its_prose() {
+        let line = r#"{"role":"user","message":{"content":[{"type":"text","text":"add the cursor reader"}]}}"#;
+
+        let events = reader().parse_line(line);
+        let Some(TranscriptEvent::UserTurn { text, human, .. }) = events.first() else {
+            panic!("expected a user turn, got {events:?}");
+        };
+        assert!(
+            *human,
+            "Cursor emits `user` lines only for what the composer submitted"
+        );
+        assert_eq!(text.as_deref(), Some("add the cursor reader"));
+    }
+
+    /// Prose split across blocks is joined, not truncated at the first one.
+    #[test]
+    fn prose_in_several_blocks_arrives_whole() {
+        let line = r#"{"role":"user","message":{"content":[{"type":"text","text":"first"},{"type":"text","text":"second"}]}}"#;
+
+        let Some(TranscriptEvent::UserTurn { text, .. }) = reader().parse_line(line).pop() else {
+            panic!("expected a user turn");
+        };
+        assert_eq!(text.as_deref(), Some("first\nsecond"));
+    }
+
+    /// No text block at all is `None`, not `Some("")`: a line that only invoked
+    /// a tool is a different fact from a reply that said nothing.
+    #[test]
+    fn a_line_with_no_prose_reports_none_rather_than_empty() {
+        let user = r#"{"role":"user","message":{"content":[]}}"#;
+        let Some(TranscriptEvent::UserTurn { text, .. }) = reader().parse_line(user).pop() else {
+            panic!("expected a user turn");
+        };
+        assert_eq!(text, None);
+
+        let assistant = r#"{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"/a"}}]}}"#;
+        let Some(TranscriptEvent::AssistantTurn(turn)) =
+            reader().parse_line(assistant).into_iter().next()
+        else {
+            panic!("expected an assistant turn");
+        };
+        assert_eq!(turn.text, None, "a tool-only line said nothing");
     }
 
     #[test]

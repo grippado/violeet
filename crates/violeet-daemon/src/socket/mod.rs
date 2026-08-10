@@ -746,6 +746,18 @@ impl Hub {
         if session.files.truncated.is_some() {
             patch.files_truncated = Some(session.files.truncated);
         }
+        // The question the session is holding, replayed like everything else.
+        // Without this a client that connects while a session waits on an answer
+        // sees a plain idle card: the daemon knows about the question, the app
+        // does not, and the one card with an action attached to it sorts with
+        // the ones that have none.
+        //
+        // The three states survive the replay because the stored value has them:
+        // an untouched `None` sends nothing, `Some(None)` sends `null` — we
+        // looked and there is no question — and `Some(Some(_))` sends it.
+        if let Some(asked) = &session.answer_request {
+            patch.answer_request = Some(asked.clone());
+        }
         patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
 
         (!patch.is_empty()).then_some(DaemonToApp::SessionUpdated(patch))

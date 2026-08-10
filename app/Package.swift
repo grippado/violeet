@@ -1,9 +1,9 @@
 // swift-tools-version: 6.0
 //
 // 6.0 and not 5.9 because swift-testing is only wired into the test target from
-// 6.0 onward. Under 5.9 `import Testing` does not resolve outside a full Xcode
-// install, and the suite sat in the repository uncompiled and unrun for several
-// rounds — which is worse than having no tests, because it reads as coverage.
+// 6.0 onward. Under 5.9 `import Testing` does not resolve at all, and the suite
+// sat in the repository uncompiled and unrun for several rounds — which is worse
+// than having no tests, because it reads as coverage.
 //
 // This manifest is what builds the app and what runs its tests. The shipped
 // .app bundle is assembled by `scripts/package.sh` from the binary this
@@ -16,21 +16,21 @@ let package = Package(
     name: "Violeet",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.15.0"),
-        // swift-testing as a package, not from the toolchain.
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.15.0")
+        // No swift-testing package here: `Testing` comes from the toolchain.
         //
-        // Measured on this machine: Command Line Tools ships only
-        // `libTestingMacros.dylib`, not the `Testing` library itself, so
-        // `import Testing` does not resolve without a full Xcode install. The
-        // suite sat in this repository uncompiled and unrun for several rounds
-        // because of it, which is worse than having no tests — it reads as
-        // coverage.
+        // It used to be taken as a package because Command Line Tools shipped
+        // only `libTestingMacros.dylib` and not the `Testing` library itself, so
+        // `import Testing` did not resolve without a full Xcode install. That is
+        // no longer the trade being made: the package has since started warning
+        // on every single `@Test` and `@Suite` in the suite — 381 deprecations,
+        // measured — telling us to drop it because Swift 6 bundles its own.
         //
-        // Taking it as a package rather than requiring Xcode keeps `swift test`
-        // runnable in CI, which builds per-arch precisely to avoid needing the
-        // full toolchain. It warns that Swift 6 bundles its own; that warning is
-        // for people who have Xcode.
-        .package(url: "https://github.com/swiftlang/swift-testing", from: "0.10.0")
+        // CI is the machine that runs the tests, and it selects Xcode 16.4
+        // (`.github/workflows/app-ci.yml`), whose toolchain has `Testing`. The
+        // cost is that a contributor with only Command Line Tools can build and
+        // package but cannot `swift test` — which is what the CI comment on the
+        // test step already says about `XCTest`, and CI is where that gate runs.
     ],
     targets: [
         .executableTarget(
@@ -66,7 +66,6 @@ let package = Package(
             name: "VioleetTests",
             dependencies: [
                 "Violeet",
-                .product(name: "Testing", package: "swift-testing"),
             ],
             path: "Tests/VioleetTests",
             swiftSettings: [.swiftLanguageMode(.v5)]

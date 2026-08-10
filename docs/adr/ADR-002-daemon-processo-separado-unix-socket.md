@@ -85,6 +85,51 @@ stops updating the moment the agent ships an event we have not enumerated — an
 the symptom would be a stale card with no error anywhere, which is the worst
 shape a failure can take.
 
+### Addendum, 2026-08-09: reading git is allowed; computing telemetry is not
+
+**The decision stands unchanged.** What follows fixes a wording that was precise
+enough while there was one caller and stops being so now that there are two.
+
+"The daemon owns the HTTP hook endpoint, the registry, and **all computation**"
+was written when nothing in the app shelled out to anything. Two places now run
+`git` directly: `app/Sources/Violeet/Model/FileHistory.swift`, which runs
+`git log -1` for an editor tab, and the LAB-6 diff core, whose intended producer
+is `git diff` for the file the reader has open. Read literally, "all computation"
+forbids both, and neither is the thing this ADR was defending against.
+
+The rule the ADR is actually enforcing, stated so it does not have to be
+reconstructed from first principles in every new file:
+
+> **The app may ask git about the working tree. The app may not recompute a
+> number the daemon observed being made.**
+
+The distinction is provenance, not tooling. `context_tokens`, `context_window`
+and the per-file `+n −n` are *observations of a session*: the daemon read them
+out of a transcript as they happened, and a second measurement taken later from
+the checkout would disagree — `docs/PROTOCOL.md` spells out why, at length, for
+`files`. An app that recomputed them would be a second opinion on a fact it did
+not witness, and the two opinions would drift with no way to tell which was
+stale.
+
+The content of a diff is not in that category. The daemon never had it: it sums
+`structuredPatch` to two integers and discards *which* line changed. There is no
+daemon answer for the app to disagree with, so reading it locally creates no
+second source of truth.
+
+Two limits, so this does not become a licence:
+
+- It covers reads of the working tree that produce **content**, not counts. A
+  diff's text, a file's last commit, a branch name. The moment the app is
+  tempted to derive a session metric from git, it is on the wrong side of the
+  line, whatever the mechanism.
+- Where a daemon field already exists, the daemon field wins. The app renders it
+  and does not check it.
+
+The convention for recording this in code stays what `FileHistory` established:
+a header comment on the file that shells out, saying which of the two categories
+it is in. This addendum exists so that argument is made once here instead of
+rebuilt, slightly differently, in each new file.
+
 ## Consequences
 
 **Good**

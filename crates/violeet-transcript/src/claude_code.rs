@@ -108,6 +108,12 @@ impl TranscriptReader for ClaudeCodeReader {
                         file,
                     }];
                 }
+                // Who wrote this line is decided once, here, by the predicate
+                // `answer_request` already owns — a notification, a slash
+                // command's caveat and an interrupt all arrive as `user` lines
+                // and none of them is a person at the keyboard.
+                let human = crate::answer_request::user_line_is_human_stop(&value);
+                let text = user_text(object.get("message"));
                 // A background agent reporting in. It is a `user` line and
                 // counts as a turn like any other — the session did wake up —
                 // but it is also what closes the wait, so both events are
@@ -119,10 +125,14 @@ impl TranscriptReader for ClaudeCodeReader {
                             task_id,
                             at: at.clone(),
                         },
-                        TranscriptEvent::UserTurn { at },
+                        TranscriptEvent::UserTurn {
+                            at,
+                            text,
+                            human: false,
+                        },
                     ];
                 }
-                vec![TranscriptEvent::UserTurn { at }]
+                vec![TranscriptEvent::UserTurn { at, text, human }]
             }
 
             "system" => {
@@ -138,12 +148,15 @@ impl TranscriptReader for ClaudeCodeReader {
                         at,
                     })];
                 }
+                let subtype = object.get("subtype").and_then(Value::as_str);
+                // The `Stop` hook's own footprint in the file, and the only mark
+                // of where a turn ended. Measured on this machine's corpus: 915
+                // of them across 442 transcripts, beside 919 `turn_duration`.
+                if subtype == Some(STOP_HOOK_SUMMARY) {
+                    return vec![TranscriptEvent::StopPoint { at }];
+                }
                 vec![TranscriptEvent::Other {
-                    kind: object
-                        .get("subtype")
-                        .and_then(Value::as_str)
-                        .unwrap_or("system")
-                        .to_string(),
+                    kind: subtype.unwrap_or("system").to_string(),
                     at,
                 }]
             }
@@ -201,6 +214,40 @@ impl TranscriptReader for ClaudeCodeReader {
     }
 }
 
+/// The `system` subtype Claude Code writes when the `Stop` hook fires.
+const STOP_HOOK_SUMMARY: &str = "stop_hook_summary";
+
+/// The `text` blocks of one `assistant` line, joined.
+///
+/// A fragment of a reply and not a reply: the message continues on the next
+/// line, under the same `message.id`, and putting it back together is
+/// [`crate::Telemetry`]'s job because only it sees more than one line.
+fn assistant_text(message: Option<&serde_json::Map<String, Value>>) -> Option<String> {
+    joined_text_blocks(message?.get("content")?.as_array()?)
+}
+
+/// Every `text` block of one line, joined — the one spelling of the join.
+///
+/// Shared by [`assistant_text`] and [`user_text`] on purpose, because they used
+/// to disagree: the assistant side joined all the blocks and the user side
+/// returned at the first non-blank one. The difference was silent and it was not
+/// a decision — nothing in `docs/TRANSCRIPT_FORMAT.md` or in the history of
+/// either function records a measurement behind it. Its cost is specific: a
+/// `user` line whose prose arrived in two blocks shrank on the way into the
+/// excerpt, so it could start fitting a budget it did not fit, and reach the app
+/// as a whole message with `context_truncated: false`. `user_line_is_human_stop`
+/// already concatenated every block, so the predicate and the remembered text
+/// were reading different lines.
+fn joined_text_blocks(blocks: &[Value]) -> Option<String> {
+    let joined = blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|b| b.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!joined.trim().is_empty()).then_some(joined)
+}
+
 /// One `assistant` line: always a turn, plus any tools it invoked.
 ///
 /// The turn is emitted even when `usage` is missing or malformed — the model
@@ -222,6 +269,7 @@ fn parse_assistant(message: Option<&Value>, at: Option<String>) -> Vec<Transcrip
             .map(parse_usage)
             .unwrap_or_default(),
         at: at.clone(),
+        text: assistant_text(message),
     })];
 
     // Every `tool_use` in the line, not just the first. One block per line is
@@ -663,22 +711,15 @@ pub fn scan_head(path: &std::path::Path) -> std::io::Result<HeadScan> {
 
 /// The text of a user message, whether the content is a bare string or the
 /// block form.
+///
+/// The block form goes through [`joined_text_blocks`], the same join the
+/// assistant side uses — see the note there for why the two must not drift.
 fn user_text(message: Option<&Value>) -> Option<String> {
     let content = message?.get("content")?;
     if let Some(s) = content.as_str() {
         return (!s.trim().is_empty()).then(|| s.to_string());
     }
-    let blocks = content.as_array()?;
-    for block in blocks {
-        if block.get("type").and_then(Value::as_str) == Some("text") {
-            if let Some(t) = string_at(block.get("text")) {
-                if !t.trim().is_empty() {
-                    return Some(t);
-                }
-            }
-        }
-    }
-    None
+    joined_text_blocks(content.as_array()?)
 }
 
 fn string_at(value: Option<&Value>) -> Option<String> {
@@ -1196,5 +1237,131 @@ mod tests {
             })
             .expect("a tool use");
         assert!(!tool.writes_untracked);
+    }
+
+    // ---- what `answer_request` needs off the line ------------------------
+
+    /// The `Stop` hook's own line, modelled. Everything about a question hangs
+    /// off this: the same prose mid-reply is not a question waiting on anybody.
+    #[test]
+    fn a_stop_hook_summary_line_is_a_stop_point() {
+        let line = r#"{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-08-09T10:00:00Z","uuid":"u","sessionId":"s"}"#;
+        match reader().parse_line(line).as_slice() {
+            [TranscriptEvent::StopPoint { at }] => {
+                assert_eq!(at.as_deref(), Some("2026-08-09T10:00:00Z"));
+            }
+            other => panic!("expected a stop point, got {other:?}"),
+        }
+    }
+
+    /// Another `system` subtype stays unmodelled. The arm must not turn every
+    /// system line into the end of a turn.
+    #[test]
+    fn another_system_subtype_is_not_a_stop_point() {
+        let line =
+            r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-08-09T10:00:00Z"}"#;
+        assert!(
+            matches!(reader().parse_line(line).as_slice(), [TranscriptEvent::Other { kind, .. }] if kind == "turn_duration"),
+        );
+    }
+
+    /// The prose of one assistant line, without the `thinking` beside it.
+    #[test]
+    fn an_assistant_line_carries_its_text_and_not_its_thinking() {
+        let line = r#"{"type":"assistant","timestamp":"2026-08-09T10:00:00Z","message":{"id":"m1","model":"claude-sonnet-5","content":[{"type":"thinking","thinking":"deixa eu ver"},{"type":"text","text":"Sigo pelo primeiro?"}],"usage":{"input_tokens":1}}}"#;
+        match reader().parse_line(line).first() {
+            Some(TranscriptEvent::AssistantTurn(turn)) => {
+                assert_eq!(turn.text.as_deref(), Some("Sigo pelo primeiro?"));
+            }
+            other => panic!("expected a turn, got {other:?}"),
+        }
+    }
+
+    /// Several `text` blocks on one line, with a `thinking` before them and a
+    /// `tool_use` after — every block kind `docs/TRANSCRIPT_FORMAT.md` counts,
+    /// on a single line.
+    ///
+    /// That document measured **one block per line** on the reference corpus
+    /// (227 `thinking` + 252 `text` + 324 `tool_use` = exactly 803 `assistant`
+    /// lines), so this shape is the one the parser tolerates rather than the one
+    /// it was measured against — which is precisely why it needs its own test.
+    /// A replay of that corpus would not notice if the join broke, and the join
+    /// is what makes the whole reply the question.
+    #[test]
+    fn several_text_blocks_on_one_line_are_joined_and_the_other_kinds_are_not() {
+        let line = r#"{"type":"assistant","timestamp":"2026-08-09T10:00:00Z","message":{"id":"m1","model":"claude-sonnet-5","content":[{"type":"thinking","thinking":"deixa eu ver"},{"type":"text","text":"Achei dois caminhos."},{"type":"text","text":"Sigo pelo primeiro?"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}],"usage":{"input_tokens":1}}}"#;
+        let events = reader().parse_line(line);
+
+        match events.first() {
+            Some(TranscriptEvent::AssistantTurn(turn)) => assert_eq!(
+                turn.text.as_deref(),
+                Some("Achei dois caminhos.\n\nSigo pelo primeiro?"),
+                "the reply is the blocks together; the thinking and the tool \
+                 call are not prose"
+            ),
+            other => panic!("expected a turn, got {other:?}"),
+        }
+        let tool_ids: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                TranscriptEvent::ToolUse(t) => t.id.as_deref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_ids,
+            ["toolu_1"],
+            "the tool call on the same line is still its own event"
+        );
+    }
+
+    /// The same join on the `user` side, which is the half that used to keep
+    /// only the first block. A message that shrinks silently reaches the excerpt
+    /// looking whole, with nothing marking `context_truncated`.
+    #[test]
+    fn a_user_line_in_blocks_keeps_every_block_like_the_assistant_side() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"compara as duas rotas"},{"type":"text","text":"e me diz qual é mais barata"}]}}"#;
+        match reader().parse_line(line).as_slice() {
+            [TranscriptEvent::UserTurn { text, .. }] => assert_eq!(
+                text.as_deref(),
+                Some("compara as duas rotas\n\ne me diz qual é mais barata")
+            ),
+            other => panic!("expected a turn, got {other:?}"),
+        }
+    }
+
+    /// A tool-only line has no prose, and `None` is not the same as an empty
+    /// reply: it is a line that said nothing, and the message continues.
+    #[test]
+    fn an_assistant_line_with_only_a_tool_call_carries_no_text() {
+        let line = r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_1","name":"Edit","input":{}}],"usage":{}}}"#;
+        match reader().parse_line(line).first() {
+            Some(TranscriptEvent::AssistantTurn(turn)) => assert_eq!(turn.text, None),
+            other => panic!("expected a turn, got {other:?}"),
+        }
+    }
+
+    /// Who typed it is decided at parse time, by the predicate the rule already
+    /// owns. A person and a notification are both `user` lines and only one of
+    /// them is somebody at the keyboard.
+    #[test]
+    fn a_user_line_says_whether_a_person_wrote_it() {
+        let typed = r#"{"type":"user","message":{"role":"user","content":"segue com o próximo"}}"#;
+        match reader().parse_line(typed).as_slice() {
+            [TranscriptEvent::UserTurn { text, human, .. }] => {
+                assert_eq!(text.as_deref(), Some("segue com o próximo"));
+                assert!(*human);
+            }
+            other => panic!("expected a turn, got {other:?}"),
+        }
+
+        let notified = r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_019w8QYpAvui7VXTjMpnhzjo</tool-use-id>\n<status>completed</status>\n</task-notification>"}}"#;
+        let events = reader().parse_line(notified);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TranscriptEvent::UserTurn { human, .. } if !*human)),
+            "a notification is not a person: {events:?}"
+        );
     }
 }
