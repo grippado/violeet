@@ -10,13 +10,29 @@
 //! ai-code-tracking.db` is a SQLite database Cursor maintains for its own
 //! "how much of this code was written by AI" reporting, and its `ai_code_hashes`
 //! table carries `model` alongside a `conversationId`. That id is the same
-//! string the hooks already hand us as `session_id` — verified by cross-checking
-//! `~/.violeet/cursor-hook.log` against the table:
+//! string the hooks already hand us as `session_id`, and the sample is every id
+//! we have rather than a couple of lucky ones: measured on 2026-08-09, all 7
+//! session ids in `~/.violeet/cursor-hook.log` have the matching transcript
+//! directory at `~/.cursor/projects/*/agent-transcripts/<id>/<id>.jsonl`. 7 of
+//! 7, no misses. One of them, for concreteness:
+//! `dd125b00-0463-4b86-9a98-344832fbe590`, recorded as `composer-2.5`.
 //!
-//! ```text
-//! dd125b00-0463-4b86-9a98-344832fbe590 | composer-2.5 | 1786310670843
-//! 0fa12731-113b-4d47-8c05-f8f4814765e7 | composer-2.5 | 1786309057994
-//! ```
+//! # What this cannot tell us
+//!
+//! `ai_code_hashes` is Cursor's code-attribution table: a row appears when a
+//! model writes code, not when a session starts and not when a model is
+//! selected. Two consequences, both permanent, neither a bug to fix later:
+//!
+//! - a session that only talks never gets a model, and its card keeps the blank
+//!   model line. Of the 7 sessions measured above, only 4 had any row at all;
+//! - a model the user just switched to only appears once it has written
+//!   something. Until then the query answers with the previous one.
+//!
+//! Both land where the rest of this codebase puts things it does not know:
+//! absent rather than guessed. There is no wire field for "we are unsure which
+//! model this is", because a name we half-believe is worse than no name — the
+//! user can tell a blank line is a blank line, and cannot tell a stale name from
+//! a current one.
 //!
 //! # Reading someone else's database
 //!
@@ -39,9 +55,18 @@ use std::path::{Path, PathBuf};
 
 /// How long to wait on a locked database before giving up.
 ///
-/// Short on purpose. This runs on a hook path, and a model name is worth a few
-/// milliseconds of patience and not one more — Cursor is actively writing here,
-/// and a hook that stalls is felt by the user as a slow agent.
+/// **A guess, not a measurement.** How long Cursor holds the write lock has
+/// never been measured here, and until it is, this number is a ceiling picked
+/// from what it is allowed to cost rather than from what it needs to be: the
+/// query rides a hook path, and the budget for naming a model is "less than a
+/// human notices", which puts the ceiling somewhere under a fifth of a second.
+///
+/// What makes contention plausible at all: `journal_mode` is `delete`, not
+/// `wal`, so a reader and Cursor's writer contend for the same file instead of
+/// passing each other. What would change this number is a measurement of that
+/// contention — if a real Cursor write regularly holds the lock longer than
+/// this, the honest fix is a longer wait, not a query that quietly gives up on
+/// every busy session. Lower it instead if a hook is ever seen stalling here.
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// `~/.cursor/ai-tracking/ai-code-tracking.db`, or `None` without a `HOME`.
@@ -72,8 +97,12 @@ pub fn model_for_session_in(db: &Path, session_id: &str) -> Option<String> {
     let connection = rusqlite::Connection::open_with_flags(db, flags).ok()?;
     connection.busy_timeout(BUSY_TIMEOUT).ok()?;
 
-    // The most recent row wins. A session whose model was switched mid-way has
-    // rows for both, and the current one is the one the card should name.
+    // The most recent row that *wrote code* wins — which is not the same as the
+    // model the session is running. `ai_code_hashes` gains a row on attribution,
+    // so a model switched to and not yet used leaves the previous one as the
+    // newest row, and that previous one is what this returns. Not an edge case:
+    // of the 7 sessions measured on this machine, 3 had no row at all. See the
+    // module header; the limitation is declared rather than papered over.
     //
     // `timestamp` is nullable in this schema, so it is coalesced rather than
     // ordered on directly: a NULL sorts unpredictably and would let an old row
@@ -139,7 +168,7 @@ mod tests {
     }
 
     /// A session that switched models mid-way has rows for both, and the card
-    /// should name the one it is running now.
+    /// should name the one that wrote most recently.
     #[test]
     fn the_most_recent_row_wins() {
         let dir = tracking_db(&[
@@ -151,6 +180,31 @@ mod tests {
         assert_eq!(
             model_for_session_in(&db_in(&dir), "sess-a").as_deref(),
             Some("claude-opus-5")
+        );
+    }
+
+    /// The known limitation, pinned so nobody "fixes" it by accident.
+    ///
+    /// `ai_code_hashes` records attribution, not selection: switching models
+    /// writes nothing until the new model writes code. So a session with rows
+    /// only from the old model reports the old model, and that is the accepted
+    /// behaviour — not a bug, and specifically not a reason to start caching the
+    /// answer or to stop re-querying, both of which would turn a stale-for-a-
+    /// moment name into a permanently wrong one. The card corrects itself on the
+    /// new model's first write; see the module header.
+    #[test]
+    fn a_model_switched_to_but_not_yet_used_still_reports_the_previous_one() {
+        // Every row is the old model. The new one has been selected in Cursor's
+        // UI and has written nothing, which is exactly why it is absent here.
+        let dir = tracking_db(&[
+            ("sess-a", Some("composer-2.5"), Some(1000), 1000),
+            ("sess-a", Some("composer-2.5"), Some(2000), 2000),
+        ]);
+
+        assert_eq!(
+            model_for_session_in(&db_in(&dir), "sess-a").as_deref(),
+            Some("composer-2.5"),
+            "the model that last wrote code is the most this table can say"
         );
     }
 

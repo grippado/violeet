@@ -41,6 +41,14 @@ axum = "0.8.9"
 # the model of a Cursor session is recorded. Linked against the system SQLite
 # rather than bundled: macOS always ships one, and vendoring a copy to read a
 # single column would be the larger cost.
+#
+# Two alternatives to the dependency itself, both rejected. Parsing the SQLite
+# file format by hand needs no dependency but does need b-tree traversal and
+# overflow-page handling against a file another process is writing, which is a
+# lot of code that can only fail silently and wrongly. Getting the model from
+# some other Cursor channel is not available: it is in no transcript line, on no
+# hook payload, and Cursor ships no status line — measured, see
+# `src/cursor_model.rs`.
 rusqlite = "0.32"
 tower-http = { version = "0.7.0", features = ["catch-panic"] }
 
