@@ -524,6 +524,48 @@ impl Hub {
         true
     }
 
+    /// Set a session's model, if this is news.
+    ///
+    /// Separate from `observe_statusline`, which carries the model as one field
+    /// among many from a channel Cursor does not have. This one exists for a
+    /// model that had to be looked up rather than received, and it is the whole
+    /// of what that lookup can tell us.
+    pub fn observe_model(&self, session_id: &str, model: &str, now: chrono::DateTime<Utc>) -> bool {
+        if model.is_empty() {
+            return false;
+        }
+
+        let patch = {
+            let mut registry = self.lock();
+            // Not a registration channel. A model for a session no hook
+            // announced has no card to put it on.
+            let Some(session) = registry.session_mut(session_id) else {
+                return false;
+            };
+            if session.model.as_deref() == Some(model) {
+                return false;
+            }
+
+            session.model = Some(model.to_string());
+            let mut patch = SessionUpdated::new(session_id, now);
+            patch.model = Some(Some(model.to_string()));
+            patch
+        };
+
+        self.broadcast(&DaemonToApp::SessionUpdated(patch));
+        true
+    }
+
+    /// Whether we still have no model for this session.
+    ///
+    /// Read before paying for a lookup, so the common case — a session whose
+    /// model we already know — costs a lock and nothing else.
+    pub fn model_is_unknown(&self, session_id: &str) -> bool {
+        self.lock()
+            .session(session_id)
+            .is_some_and(|s| s.model.is_none())
+    }
+
     /// The `hitl_pending` message for a request as it stands.
     fn hitl_pending(request: &HitlRequest) -> DaemonToApp {
         DaemonToApp::HitlPending(HitlPending {
