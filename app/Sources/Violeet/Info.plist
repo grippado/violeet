@@ -58,6 +58,24 @@
 	<false/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!--
+	  The microphone key is here for a process violeet does not contain: an
+	  agent running in a tab. TCC does not ask the process that opens the
+	  device, it asks the responsible process, and for anything spawned into a
+	  PTY that is this bundle. Claude Code's `/voice` inside a tab therefore
+	  fails against violeet's Info.plist, not against its own — and it fails
+	  silently, with no prompt and no error, which is why the missing key reads
+	  as a broken dictation feature rather than as a missing permission.
+
+	  Kept even though no Swift code in this app touches AVCaptureDevice: the
+	  alternative is to declare it only once the app itself records audio, which
+	  gets the ordering backwards. The bundle is the permission boundary for
+	  every tab, so it declares what the tabs need. The user-facing string says
+	  "agents in tabs" for the same reason — the consent dialog names violeet,
+	  and a string about violeet recording would be a lie.
+	-->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>violeet precisa do microfone para que agentes rodando nas abas usem ditado por voz.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<!--
