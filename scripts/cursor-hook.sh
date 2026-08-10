@@ -22,6 +22,7 @@ HOME = sys.argv[1]
 DISCOVERY = os.path.join(HOME, ".violeet", "daemon.json")
 HARNESS_HEADER = "x-violeet-harness"
 CURSOR_HARNESS = "cursor"
+TAB_ID_HEADER = "x-violeet-tab-id"
 
 EVENT_MAP = {
     "sessionStart": "SessionStart",
@@ -152,12 +153,21 @@ def to_daemon_payload(data):
 def post(port, path, body, permission=False):
     url = f"http://127.0.0.1:{port}{path}"
     data = json.dumps(body).encode("utf-8")
+    # `VIOLEET_TAB_ID` is what binds a session to the tab it runs in (ADR-003).
+    # violeet exports it into every tab it opens, and Cursor's hook command
+    # inherits the environment of the agent process, so it is simply read here.
+    #
+    # Without it every Cursor session arrives unbound and lands in Elsewhere,
+    # even one running inside a violeet tab — which is what happened before this
+    # line existed. Sent always, empty included, exactly like the installed
+    # Claude Code hook: the daemon reads `""` as "no tab" rather than as a tab.
     req = urllib.request.Request(
         url,
         data=data,
         headers={
             "Content-Type": "application/json",
             HARNESS_HEADER: CURSOR_HARNESS,
+            TAB_ID_HEADER: os.environ.get("VIOLEET_TAB_ID", ""),
         },
         method="POST",
     )
