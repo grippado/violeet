@@ -12,15 +12,15 @@
 
 use std::time::Duration;
 
-use violeet_daemon::hitl::HitlRegistry;
-use violeet_daemon::http::{HookServer, HARNESS_HEADER, TAB_ID_HEADER};
-use violeet_daemon::registry::{Registry, SessionState};
-use violeet_daemon::socket::{Hub, SocketServer};
 use chrono::Duration as ChronoDuration;
 use http_body_util::BodyExt;
 use hyper::{Request, StatusCode};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UnixStream};
+use violeet_daemon::hitl::HitlRegistry;
+use violeet_daemon::http::{HookServer, HARNESS_HEADER, TAB_ID_HEADER};
+use violeet_daemon::registry::{Registry, SessionState};
+use violeet_daemon::socket::{Hub, SocketServer};
 
 /// Everything here should be near-instant. A hang is the failure mode under
 /// test, so the deadline is short and hitting it fails the test.
@@ -1171,7 +1171,9 @@ async fn a_looked_up_model_reaches_the_app_as_a_patch() {
         "a session nobody has looked up yet has no model"
     );
 
-    assert!(h.hub.observe_model("s1", "composer-2.5", chrono::Utc::now()));
+    assert!(h
+        .hub
+        .observe_model("s1", "composer-2.5", chrono::Utc::now()));
 
     let patch = loop {
         let msg = app.next().await;
@@ -1199,13 +1201,17 @@ async fn the_same_model_twice_is_not_sent_twice() {
     )
     .await;
 
-    assert!(h.hub.observe_model("s1", "composer-2.5", chrono::Utc::now()));
+    assert!(h
+        .hub
+        .observe_model("s1", "composer-2.5", chrono::Utc::now()));
     assert!(
-        !h.hub.observe_model("s1", "composer-2.5", chrono::Utc::now()),
+        !h.hub
+            .observe_model("s1", "composer-2.5", chrono::Utc::now()),
         "an unchanged model is not news"
     );
     assert!(
-        h.hub.observe_model("s1", "claude-opus-5", chrono::Utc::now()),
+        h.hub
+            .observe_model("s1", "claude-opus-5", chrono::Utc::now()),
         "a switch is news"
     );
 }
@@ -1216,15 +1222,16 @@ async fn the_same_model_twice_is_not_sent_twice() {
 async fn a_model_never_registers_a_session_on_its_own() {
     let h = start().await;
 
-    assert!(!h.hub.observe_model("never-announced", "composer-2.5", chrono::Utc::now()));
-    assert!(
-        h.hub
-            .registry()
-            .lock()
-            .unwrap()
-            .session("never-announced")
-            .is_none()
-    );
+    assert!(!h
+        .hub
+        .observe_model("never-announced", "composer-2.5", chrono::Utc::now()));
+    assert!(h
+        .hub
+        .registry()
+        .lock()
+        .unwrap()
+        .session("never-announced")
+        .is_none());
 }
 
 /// An empty string is not a model name, and would render as a blank line where

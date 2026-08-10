@@ -69,6 +69,22 @@ use std::path::{Path, PathBuf};
 /// every busy session. Lower it instead if a hook is ever seen stalling here.
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 
+/// Read-only, and no per-connection mutex.
+///
+/// `READ_ONLY` is the enforcement behind rule 1 above: a bug in violeet must be
+/// unable to write to a file Cursor owns. `NO_MUTEX` because the connection is
+/// opened, used, and dropped on one thread, so the serialization rusqlite would
+/// otherwise pay for is pure overhead.
+///
+/// `SQLITE_OPEN_URI` used to be here and bought nothing: the path is always a
+/// `PathBuf` assembled from `HOME` below, never a `file:` URI, so the flag only
+/// widened what a path would be allowed to mean.
+///
+/// One `const` for production and for the tests that assert about these flags:
+/// a test that retypes the list can keep passing after production changes it.
+const FLAGS: rusqlite::OpenFlags =
+    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY.union(rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX);
+
 /// `~/.cursor/ai-tracking/ai-code-tracking.db`, or `None` without a `HOME`.
 pub fn tracking_db_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| {
@@ -91,10 +107,7 @@ pub fn model_for_session_in(db: &Path, session_id: &str) -> Option<String> {
         return None;
     }
 
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
-        | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-    let connection = rusqlite::Connection::open_with_flags(db, flags).ok()?;
+    let connection = rusqlite::Connection::open_with_flags(db, FLAGS).ok()?;
     connection.busy_timeout(BUSY_TIMEOUT).ok()?;
 
     // The most recent row that *wrote code* wins — which is not the same as the
@@ -104,14 +117,24 @@ pub fn model_for_session_in(db: &Path, session_id: &str) -> Option<String> {
     // of the 7 sessions measured on this machine, 3 had no row at all. See the
     // module header; the limitation is declared rather than papered over.
     //
-    // `timestamp` is nullable in this schema, so it is coalesced rather than
-    // ordered on directly: a NULL sorts unpredictably and would let an old row
-    // outrank a new one. `createdAt` is NOT NULL and moves the same direction.
+    // `ORDER BY createdAt DESC`, and the ordering column is chosen by the index
+    // rather than by taste. `EXPLAIN QUERY PLAN` on the real database, measured
+    // 2026-08-09: `conversationId` is not indexed and the only index is
+    // `idx_ai_code_hashes_createdAt`, so ordering on `createdAt` gives
+    // `SCAN ai_code_hashes USING INDEX idx_ai_code_hashes_createdAt`, while the
+    // `COALESCE(timestamp, createdAt)` this used to carry gives a plain `SCAN`
+    // plus `USE TEMP B-TREE FOR ORDER BY` — a sort of the whole table on a hook
+    // path, to defend against a NULL that `createdAt` cannot have: it is
+    // `NOT NULL` by DDL, so the defense the COALESCE was buying comes free.
+    //
+    // The COALESCE also hid an assumption it never checked, that the two columns
+    // are the same clock in the same unit. If they ever diverge, mixing them
+    // does not fail — it silently orders wrong. One column cannot.
     let model: String = connection
         .query_row(
             "SELECT model FROM ai_code_hashes \
              WHERE conversationId = ?1 AND model IS NOT NULL AND model <> '' \
-             ORDER BY COALESCE(timestamp, createdAt) DESC LIMIT 1",
+             ORDER BY createdAt DESC LIMIT 1",
             [session_id],
             |row| row.get(0),
         )
@@ -208,10 +231,11 @@ mod tests {
         );
     }
 
-    /// `timestamp` is nullable in the real schema. A NULL there must not let a
-    /// stale row outrank a current one.
+    /// `timestamp` is nullable in the real schema and the ordering does not read
+    /// it. What this pins is that a NULL there changes nothing: ordering is
+    /// `createdAt` alone, which is `NOT NULL`, so the newer row still wins.
     #[test]
-    fn a_null_timestamp_does_not_outrank_a_newer_row() {
+    fn a_null_timestamp_is_irrelevant_because_the_order_is_created_at_alone() {
         let dir = tracking_db(&[
             ("sess-a", Some("old-model"), None, 1000),
             ("sess-a", Some("new-model"), Some(9000), 9000),
@@ -315,10 +339,7 @@ mod tests {
             return;
         }
 
-        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-        let Ok(c) = rusqlite::Connection::open_with_flags(&db, flags) else {
+        let Ok(c) = rusqlite::Connection::open_with_flags(&db, FLAGS) else {
             eprintln!("skipping: the tracking database would not open read-only");
             return;
         };
@@ -329,7 +350,7 @@ mod tests {
             .query_row(
                 "SELECT conversationId FROM ai_code_hashes \
                  WHERE conversationId IS NOT NULL AND model IS NOT NULL \
-                 ORDER BY COALESCE(timestamp, createdAt) DESC LIMIT 1",
+                 ORDER BY createdAt DESC LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -355,10 +376,7 @@ mod tests {
         let dir = tracking_db(&[("sess-a", Some("composer-2.5"), Some(1000), 1000)]);
         let path = db_in(&dir);
 
-        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-        let c = rusqlite::Connection::open_with_flags(&path, flags).expect("open");
+        let c = rusqlite::Connection::open_with_flags(&path, FLAGS).expect("open");
 
         assert!(
             c.execute("DELETE FROM ai_code_hashes", []).is_err(),
