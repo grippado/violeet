@@ -524,6 +524,121 @@ impl Hub {
         true
     }
 
+    /// Fold one hook-reported file edit into a session and publish the list.
+    ///
+    /// The counterpart to the transcript's file reporting, for harnesses whose
+    /// transcript cannot answer the question. It only ever *adds* to what the
+    /// session is known to have written — see `FileTelemetry::record_hook_edit`
+    /// for why the two sources are summed rather than swapped.
+    pub fn observe_file_edit(
+        &self,
+        session_id: &str,
+        file_path: &str,
+        added: u64,
+        removed: u64,
+        now: chrono::DateTime<Utc>,
+    ) -> bool {
+        if file_path.is_empty() {
+            return false;
+        }
+
+        let patch = {
+            let mut registry = self.lock();
+            // Unlike the status line, this does not have to register anything:
+            // it is called from the hook route, which has already run
+            // `observe_hook` and so has already announced the session. A miss
+            // here means the session ended in the gap, and there is no card
+            // left to update.
+            let Some(session) = registry.session_mut(session_id) else {
+                return false;
+            };
+
+            session.files.record_hook_edit(file_path, added, removed);
+
+            let merged = session.files.merged();
+            let truncated = merged.len() > crate::transcript::MAX_FILES_ON_WIRE;
+            let mut files = merged;
+            files.truncate(crate::transcript::MAX_FILES_ON_WIRE);
+
+            let mut patch = SessionUpdated::new(session_id, now);
+            let mut anything = false;
+
+            if session.files.files != files {
+                session.files.files = files.clone();
+                patch.files = Some(Some(files));
+                anything = true;
+            }
+            if session.files.truncated != Some(truncated) {
+                session.files.truncated = Some(truncated);
+                patch.files_truncated = Some(Some(truncated));
+                anything = true;
+            }
+
+            if !anything {
+                return false;
+            }
+            session.touch(now);
+            patch.last_event_at = Some(Some(wire::timestamp(session.last_event_at)));
+            patch
+        };
+
+        self.broadcast(&DaemonToApp::SessionUpdated(patch));
+        true
+    }
+
+    /// Fold a compaction hook's context reading into a session.
+    ///
+    /// This is the **only** channel that reports occupancy for a harness with no
+    /// status line and no per-turn `usage` in its transcript. It is also a rare
+    /// one: it fires when a compaction is about to run and at no other time, so
+    /// a session that never fills its window never reports here at all. That is
+    /// why the field stays unknown rather than being seeded with a zero — an
+    /// unmeasured window is not an empty one.
+    pub fn observe_context_window(
+        &self,
+        session_id: &str,
+        used_tokens: Option<u64>,
+        window_size: Option<u64>,
+        now: chrono::DateTime<Utc>,
+    ) -> bool {
+        if used_tokens.is_none() && window_size.is_none() {
+            return false;
+        }
+
+        let patch = {
+            let mut registry = self.lock();
+            let Some(session) = registry.session_mut(session_id) else {
+                return false;
+            };
+
+            let mut patch = SessionUpdated::new(session_id, now);
+            let mut anything = false;
+
+            if let Some(used) = used_tokens {
+                if session.tokens.context_window_used_tokens != Some(used) {
+                    session.tokens.context_window_used_tokens = Some(used);
+                    patch.context_window_used_tokens = Some(Some(used));
+                    anything = true;
+                }
+            }
+            if let Some(size) = window_size {
+                if session.tokens.context_window_size_tokens != Some(size) {
+                    session.tokens.context_window_size_tokens = Some(size);
+                    patch.context_window_size_tokens = Some(Some(size));
+                    anything = true;
+                }
+            }
+
+            if !anything {
+                return false;
+            }
+            patch
+        };
+
+        self.broadcast(&DaemonToApp::SessionUpdated(patch));
+        true
+    }
+
     /// Set a session's model, if this is news.
     ///
     /// Separate from `observe_statusline`, which carries the model as one field

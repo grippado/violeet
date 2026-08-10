@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":[{"type":"text","text":"run tests"}]}}
+{"role":"assistant","timestamp":"2026-08-09T20:00:00Z","message":{"id":"gen-fixture-1","model":"composer-2","usage":{"input_tokens":500,"cache_read_input_tokens":10000,"output_tokens":25},"content":[{"type":"text","text":"running"},{"type":"tool_use","name":"Shell","input":{"command":"cargo test","description":"run tests"}}]}}

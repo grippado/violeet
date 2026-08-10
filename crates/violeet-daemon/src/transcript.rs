@@ -42,11 +42,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use violeet_transcript::{
-    watch_shared, ClaudeCodeReader, PendingAnswer, Telemetry, TranscriptSession, WatchHandle,
+    watch_shared, ClaudeCodeReader, CursorReader, PendingAnswer, Telemetry, TranscriptSession,
+    WatchHandle,
 };
 use chrono::Utc;
 
-use crate::registry::{SessionState, TitleSource};
+use crate::registry::{Harness, SessionState, TitleSource};
 use crate::socket::Hub;
 use crate::wire::{
     self, AnswerContextMessage as WireAnswerContext, AnswerRequest as WireAnswerRequest,
@@ -108,13 +109,25 @@ impl TranscriptSupervisor {
 /// event, so this is called constantly and must be free when nothing changed.
 /// A session whose path *changes* is re-followed, and the old watcher is
 /// dropped by the replacement.
-pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
+///
+/// `hook_harness` is what the current hook claims. When the session is already
+/// in the registry, its stored harness wins — the first hook may call `follow`
+/// before `observe_hook` registers the session.
+pub fn follow(hub: &Hub, session_id: &str, path: &Path, hook_harness: Harness) {
     {
         let supervisor = lock(hub.transcripts());
         if supervisor.is_following(session_id, path) {
             return;
         }
     }
+
+    let harness = {
+        let registry = lock(hub.registry());
+        registry
+            .session(session_id)
+            .map(|s| s.harness)
+            .unwrap_or(hook_harness)
+    };
 
     // Always from the start. This used to read from the end of a transcript
     // that already existed, and the reasoning was about the wrong thing.
@@ -143,7 +156,10 @@ pub fn follow(hub: &Hub, session_id: &str, path: &Path) {
     // transcript a moment before Claude Code creates it.
     let from_end = false;
 
-    let reader = Box::new(ClaudeCodeReader::new());
+    let reader: Box<dyn violeet_transcript::TranscriptReader> = match harness {
+        Harness::Cursor => Box::new(CursorReader::new()),
+        _ => Box::new(ClaudeCodeReader::new()),
+    };
     let (handle, updates, shared) = match watch_shared(path, reader, from_end) {
         Ok(pair) => pair,
         Err(e) => {
@@ -299,26 +315,40 @@ pub fn name_from_head(hub: &Hub, session_id: &str, path: &Path) {
 /// not arrive, and the panel stops updating with nothing on screen to say why.
 /// At roughly 120 bytes an entry this leaves the line an order of magnitude
 /// inside that limit even for a session that rewrote a monorepo.
-const MAX_FILES_ON_WIRE: usize = 500;
+pub const MAX_FILES_ON_WIRE: usize = 500;
 
 /// The file list as it goes on the wire, and whether it had to be cut.
 ///
 /// Cutting keeps the first N by path rather than by size or recency: the panel
 /// renders a tree, and a tree missing a random half is harder to read than one
 /// that stops. The flag is what keeps it honest either way.
+#[cfg(test)]
 fn wire_files(telemetry: &Telemetry) -> (Vec<WireFileChange>, bool) {
-    let truncated = telemetry.files.len() > MAX_FILES_ON_WIRE;
-    let files = telemetry
+    cut_to_wire(transcript_files(telemetry))
+}
+
+/// The transcript's own view of what the session wrote, whole and uncut.
+///
+/// Kept separate from the cut because it is now one of two sources — see
+/// `FileTelemetry` — and truncating a source before merging it would drop files
+/// the other source could have ranked above the cut.
+fn transcript_files(telemetry: &Telemetry) -> Vec<WireFileChange> {
+    telemetry
         .files
         .iter()
-        .take(MAX_FILES_ON_WIRE)
         .map(|(path, stat)| WireFileChange {
             path: path.clone(),
             added: stat.added,
             removed: stat.removed,
             created: stat.created,
         })
-        .collect();
+        .collect()
+}
+
+/// Cut a merged list down to what one message may carry.
+fn cut_to_wire(mut files: Vec<WireFileChange>) -> (Vec<WireFileChange>, bool) {
+    let truncated = files.len() > MAX_FILES_ON_WIRE;
+    files.truncate(MAX_FILES_ON_WIRE);
     (files, truncated)
 }
 
@@ -474,7 +504,13 @@ fn publish(hub: &Hub, session_id: &str, telemetry: &Telemetry, partial: bool, en
         // session working in one file produces a tool result every few seconds
         // and this is the largest field on the wire.
         {
-            let (files, truncated) = wire_files(telemetry);
+            // The transcript owns its source and only its source. Publishing
+            // the merge is what keeps a hook-reported edit alive across a read
+            // that never mentioned it — before this, a Cursor session's Files
+            // panel was cleared by the next transcript read after every edit,
+            // because that reader legitimately had nothing to say about files.
+            session.files.from_transcript = transcript_files(telemetry);
+            let (files, truncated) = cut_to_wire(session.files.merged());
             if session.files.files != files {
                 session.files.files = files.clone();
                 patch.files = Some(Some(files));

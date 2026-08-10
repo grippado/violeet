@@ -170,6 +170,73 @@ only allow/deny/ask were exercised.
    `(hook_event_name, session_id)` within 750ms via
    `~/.violeet/cursor-hook-debounce.json`.
 
+## What Cursor's transcript does *not* carry (2026-08-09, LAB-62)
+
+Measured directly against six real transcripts under
+`~/.cursor/projects/*/agent-transcripts/`, not from documentation.
+
+Every line is `{"role", "message"}`, and every `message` holds exactly one key:
+`content`. Across those six files:
+
+| looked for | found |
+|---|---|
+| `usage` (any token count) | **0** |
+| `tool_result` blocks | **0** |
+| `tool_use` blocks | 477 |
+| `id` on a `tool_use` | **0** — keys are `input`, `name`, `type` only |
+| `model`, `timestamp`, `message.id` | **0** |
+
+Two consequences, and both are load-bearing:
+
+1. **Tokens are unobtainable.** Not merely absent from the transcript — absent
+   from every channel Cursor has. The hook payloads carry no token counts
+   either (`afterAgentResponse` is `{text}`, `postToolUse` carries `model` and
+   `duration` but no usage). So `cumulative_input_tokens` and its three
+   siblings stay unknown for a Cursor session, and the card renders `—`. LAB-62's
+   acceptance criterion asking for them cannot be met by any implementation;
+   it is a fact about Cursor, not a gap in violeet.
+2. **A file's diffstat has to come from a hook.** With no `tool_result` there is
+   no `structuredPatch` and no outcome of any kind — the transcript shows that a
+   `Write` was *requested* and never what it did.
+
+### The two hooks that close the gap
+
+| hook | carries | fills |
+|---|---|---|
+| `afterFileEdit` | `file_path`, `edits[{old_string,new_string}]` | the Files panel, diffstat **measured** from both sides of each replacement |
+| `preCompact` | `context_tokens`, `context_window_size` | the context bar |
+
+`preCompact` fires only when a compaction is about to run, so the context bar on
+a Cursor card is unknown until the session first fills its window, and correct
+from then on. That is the honest shape: a bar that says nothing beats a bar
+showing a number nobody measured.
+
+Neither hook reports whether a file was **created**. An `afterFileEdit` with an
+empty `old_string` is equally a creation and a write at the top of an existing
+file, so `created` is never set from this source.
+
+### `transcript_path` is inferred, not sent
+
+Cursor sends `transcript_path` on **no** hook. It is recovered from the session
+id alone: the id in `session_id`/`conversation_id` is verbatim the transcript's
+directory *and* file name, confirmed by matching `~/.violeet/cursor-hook.log`
+against what is on disk (`dd125b00-…`, `0fa12731-…`).
+
+Deriving the containing `<project>` directory from the workspace root was tried
+and rejected: the slug transform is not a transform. `/Users/me/.notes` becomes
+`Users-me-notes` (dot deleted) while `/Users/me/www/vozes.social/api` becomes
+`…-vozes-social-api` (dot to dash). `crate::cursor_paths` scans the projects
+root for the id instead, which either finds the real file or honestly finds
+nothing.
+
+### Upgrading past this change
+
+`EVENTS` grew from six entries to eight, and `violeet doctor` compares the
+installed count against `EVENTS.len()`. An installation made before this change
+therefore reports Cursor hooks as missing until `violeet install-cursor-hooks`
+is run again. That is the intended prompt, but note the failure text is written
+for a rewritten `~/.claude/settings.json` and reads oddly here.
+
 ## Manual validation
 
 ```bash

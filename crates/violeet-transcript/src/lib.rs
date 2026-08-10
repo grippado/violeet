@@ -33,6 +33,7 @@ use chrono::{DateTime, Utc};
 
 pub mod answer_request;
 pub mod claude_code;
+pub mod cursor;
 pub mod tail;
 pub mod title;
 pub mod watch;
@@ -41,6 +42,7 @@ pub use answer_request::{
     AnswerRequest, AnswerRequestConfig, ContextMessage, Declined, Signal, ANSWER_REQUEST,
 };
 pub use claude_code::ClaudeCodeReader;
+pub use cursor::CursorReader;
 pub use tail::{Cursor, TailError};
 pub use watch::{
     watch, watch_shared, SharedWatch, TranscriptSession, Update, WatchError, WatchHandle,

@@ -8,7 +8,20 @@ use std::path::PathBuf;
 
 use serde_json::{json, Map, Value};
 
-/// Lifecycle and HITL events installed for Cursor. Names are Cursor's hook keys.
+/// Lifecycle, HITL and telemetry events installed for Cursor. Names are
+/// Cursor's hook keys.
+///
+/// The last two are not lifecycle at all — they are the only sources of two
+/// numbers Cursor's transcript does not carry:
+///
+/// - `afterFileEdit` — the Files panel. Cursor's JSONL records `tool_use` and
+///   no `tool_result` (measured across six transcripts, 2026-08-09: 477 uses,
+///   0 results), so the fact that a `Write` happened is in the file and its
+///   outcome is nowhere. This hook carries the path and the strings swapped.
+/// - `preCompact` — the context bar. Alone among Cursor's hooks it reports
+///   `context_tokens` and `context_window_size`, and it fires only when a
+///   compaction is about to run. Rare, but measured; the alternative was a bar
+///   that stayed empty for the life of every Cursor session.
 pub const EVENTS: &[&str] = &[
     "sessionStart",
     "sessionEnd",
@@ -16,6 +29,8 @@ pub const EVENTS: &[&str] = &[
     "stop",
     "beforeShellExecution",
     "beforeMCPExecution",
+    "afterFileEdit",
+    "preCompact",
 ];
 
 /// Permission hooks need a longer timeout — the daemon may hold the response

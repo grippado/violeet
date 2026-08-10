@@ -10,6 +10,7 @@ export CURSOR_HOOK_INPUT
 CURSOR_HOOK_INPUT=$(cat)
 
 exec python3 - "$HOME" <<'PY'
+import hashlib
 import json
 import os
 import sys
@@ -21,6 +22,7 @@ HOME = sys.argv[1]
 DISCOVERY = os.path.join(HOME, ".violeet", "daemon.json")
 HARNESS_HEADER = "x-violeet-harness"
 CURSOR_HARNESS = "cursor"
+TAB_ID_HEADER = "x-violeet-tab-id"
 
 EVENT_MAP = {
     "sessionStart": "SessionStart",
@@ -29,6 +31,11 @@ EVENT_MAP = {
     "stop": "Stop",
     "beforeShellExecution": "PermissionRequest",
     "beforeMCPExecution": "PermissionRequest",
+    # Telemetry, not lifecycle. FileEdited is violeet's own spelling: Claude
+    # Code has no such hook because its transcript already carries the diffstat,
+    # and Cursor's transcript carries no tool results at all.
+    "afterFileEdit": "FileEdited",
+    "preCompact": "PreCompact",
 }
 
 
@@ -90,6 +97,38 @@ def to_daemon_payload(data):
         if isinstance(prompt, str) and prompt:
             out["prompt"] = prompt
 
+    if mapped == "FileEdited":
+        path = data.get("file_path")
+        if not isinstance(path, str) or not path.strip():
+            # Nothing to attribute the edit to. Dropped rather than sent as an
+            # edit of an unnamed file, which would add a blank row to the panel.
+            return None, False
+        out["file_path"] = path.strip()
+        edits = data.get("edits")
+        if isinstance(edits, list):
+            # Forwarded as the two strings, uncounted. The daemon measures the
+            # diffstat so the rule lives in one place with the tests, rather
+            # than in a shell script nothing exercises.
+            out["edits"] = [
+                {
+                    "old_string": e.get("old_string") if isinstance(e, dict) else None,
+                    "new_string": e.get("new_string") if isinstance(e, dict) else None,
+                }
+                for e in edits
+            ]
+
+    if mapped == "PreCompact":
+        # The only context reading Cursor ever gives us. Copied only when it is
+        # a real number: a missing field must stay unknown, never become a zero
+        # that renders as an empty context bar.
+        for src, dst in (
+            ("context_tokens", "context_tokens"),
+            ("context_window_size", "context_window_size"),
+        ):
+            value = data.get(src)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                out[dst] = int(value)
+
     if mapped == "PermissionRequest":
         if event_name == "beforeShellExecution":
             command = data.get("command")
@@ -114,12 +153,21 @@ def to_daemon_payload(data):
 def post(port, path, body, permission=False):
     url = f"http://127.0.0.1:{port}{path}"
     data = json.dumps(body).encode("utf-8")
+    # `VIOLEET_TAB_ID` is what binds a session to the tab it runs in (ADR-003).
+    # violeet exports it into every tab it opens, and Cursor's hook command
+    # inherits the environment of the agent process, so it is simply read here.
+    #
+    # Without it every Cursor session arrives unbound and lands in Elsewhere,
+    # even one running inside a violeet tab — which is what happened before this
+    # line existed. Sent always, empty included, exactly like the installed
+    # Claude Code hook: the daemon reads `""` as "no tab" rather than as a tab.
     req = urllib.request.Request(
         url,
         data=data,
         headers={
             "Content-Type": "application/json",
             HARNESS_HEADER: CURSOR_HARNESS,
+            TAB_ID_HEADER: os.environ.get("VIOLEET_TAB_ID", ""),
         },
         method="POST",
     )
@@ -171,6 +219,25 @@ def log_invocation(data):
 DEBOUNCE_SEC = 0.75
 
 
+def debounce_key(data, event, sid):
+    """What counts as "the same invocation" for this event.
+
+    Lifecycle events are one-per-moment, so the event and session identify them.
+    `afterFileEdit` is not: it fires once per edit, and several edits inside the
+    debounce window are the normal case for an agent working in one file. Keyed
+    the same way, the second and later edits of every burst would be dropped and
+    the Files panel would undercount by however fast the agent was going — so
+    this event is discriminated by its payload instead. The duplicate this whole
+    mechanism exists for is a byte-identical redelivery, which still collides.
+    """
+    if event == "afterFileEdit":
+        digest = hashlib.sha256(
+            json.dumps(data, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        return f"{event}:{sid}:{digest}"
+    return f"{event}:{sid}"
+
+
 def should_skip_duplicate(data):
     """Workspace at $HOME loads ~/.cursor/hooks.json as user + project hooks."""
     event = data.get("hook_event_name", "")
@@ -178,7 +245,7 @@ def should_skip_duplicate(data):
     if not event or sid is None:
         return False
     cache_path = os.path.join(HOME, ".violeet", "cursor-hook-debounce.json")
-    key = f"{event}:{sid}"
+    key = debounce_key(data, event, sid)
     now = time.time()
     try:
         with open(cache_path, encoding="utf-8") as f:

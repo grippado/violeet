@@ -12,15 +12,15 @@
 
 use std::time::Duration;
 
+use violeet_daemon::hitl::HitlRegistry;
+use violeet_daemon::http::{HookServer, HARNESS_HEADER, TAB_ID_HEADER};
+use violeet_daemon::registry::{Registry, SessionState};
+use violeet_daemon::socket::{Hub, SocketServer};
 use chrono::Duration as ChronoDuration;
 use http_body_util::BodyExt;
 use hyper::{Request, StatusCode};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UnixStream};
-use violeet_daemon::hitl::HitlRegistry;
-use violeet_daemon::http::{HookServer, HARNESS_HEADER, TAB_ID_HEADER};
-use violeet_daemon::registry::{Registry, SessionState};
-use violeet_daemon::socket::{Hub, SocketServer};
 
 /// Everything here should be near-instant. A hang is the failure mode under
 /// test, so the deadline is short and hitting it fails the test.
@@ -1141,6 +1141,204 @@ async fn a_late_client_sees_pending_requests_in_its_snapshot() {
         "sessions replay before the requests that reference them"
     );
     assert_eq!(hitl["session_id"], "s1");
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry that arrives on the hook channel (LAB-62)
+// ---------------------------------------------------------------------------
+//
+// Cursor's transcript carries no tool results and no per-turn `usage`, so two
+// of the card's panels have no transcript to read. These hooks are the only
+// sources, which makes the end-to-end wiring — route to registry to wire — the
+// thing worth testing rather than the parsing alone.
+
+/// One `afterFileEdit`, translated by the adapter, as it reaches the daemon.
+fn file_edited(session: &str, path: &str, edits: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session,
+        "hook_event_name": "FileEdited",
+        "file_path": path,
+        "edits": edits,
+    })
+}
+
+#[tokio::test]
+async fn a_file_edit_hook_fills_the_files_panel_for_a_harness_with_no_tool_results() {
+    let h = start().await;
+
+    post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        session_start("s1", "/repo"),
+    )
+    .await;
+
+    let res = post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        file_edited(
+            "s1",
+            "/repo/src/lib.rs",
+            serde_json::json!([{"old_string": "one\ntwo", "new_string": "uno\ndos\ntres"}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+
+    let registry = h.hub.registry().lock().unwrap();
+    let files = &registry.session("s1").expect("the session").files.files;
+    assert_eq!(files.len(), 1, "the edited file is on the card");
+    assert_eq!(files[0].path, "/repo/src/lib.rs");
+    assert_eq!(
+        (files[0].added, files[0].removed),
+        (3, 2),
+        "both sides of the replacement are measured"
+    );
+    assert!(
+        !files[0].created,
+        "the hook cannot tell creation from writing at the top of a file"
+    );
+}
+
+/// `afterFileEdit` fires once per edit. The panel reports what the session did
+/// to the file, so the second edit must add to the first rather than replace it.
+#[tokio::test]
+async fn repeated_file_edit_hooks_accumulate_on_the_card() {
+    let h = start().await;
+
+    post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        session_start("s1", "/repo"),
+    )
+    .await;
+
+    for _ in 0..3 {
+        post_with_harness(
+            h.port,
+            "/hook/event",
+            Some("tab-1"),
+            Some("cursor"),
+            file_edited(
+                "s1",
+                "/repo/src/lib.rs",
+                serde_json::json!([{"old_string": "", "new_string": "a line"}]),
+            ),
+        )
+        .await;
+    }
+
+    let registry = h.hub.registry().lock().unwrap();
+    let files = &registry.session("s1").expect("the session").files.files;
+    assert_eq!(files.len(), 1);
+    assert_eq!((files[0].added, files[0].removed), (3, 0));
+}
+
+/// A file edit is a hook like any other, so it announces its session the same
+/// way any hook does — and the edit still lands on the card it just created.
+///
+/// This is the daemon-restarted case: violeet comes back mid-session, and the
+/// first thing it hears about that session is an edit. The alternative, holding
+/// the edit until some other hook introduced the session, would drop every file
+/// written before the next lifecycle event.
+#[tokio::test]
+async fn a_file_edit_announces_its_session_and_still_lands_on_the_card() {
+    let h = start().await;
+
+    let res = post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        file_edited(
+            "never-announced",
+            "/repo/a.rs",
+            serde_json::json!([{"old_string": "x", "new_string": "y"}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+
+    let registry = h.hub.registry().lock().unwrap();
+    let session = registry.session("never-announced").expect("the session");
+    assert_eq!(
+        session.files.files.len(),
+        1,
+        "the edit that introduced the session is not lost introducing it"
+    );
+    assert_eq!(session.files.files[0].path, "/repo/a.rs");
+}
+
+/// The compaction hook is the only reading of context occupancy a Cursor
+/// session ever produces.
+#[tokio::test]
+async fn a_precompact_hook_is_the_only_context_reading_cursor_gives_us() {
+    let h = start().await;
+
+    post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        session_start("s1", "/repo"),
+    )
+    .await;
+
+    {
+        let registry = h.hub.registry().lock().unwrap();
+        let tokens = &registry.session("s1").expect("the session").tokens;
+        assert_eq!(
+            tokens.context_window_used_tokens, None,
+            "unmeasured, and an unmeasured window is not an empty one"
+        );
+    }
+
+    post_with_harness(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        Some("cursor"),
+        serde_json::json!({
+            "session_id": "s1",
+            "hook_event_name": "PreCompact",
+            "context_tokens": 181_000,
+            "context_window_size": 200_000,
+        }),
+    )
+    .await;
+
+    let registry = h.hub.registry().lock().unwrap();
+    let tokens = &registry.session("s1").expect("the session").tokens;
+    assert_eq!(tokens.context_window_used_tokens, Some(181_000));
+    assert_eq!(tokens.context_window_size_tokens, Some(200_000));
+}
+
+/// A compaction hook without the numbers leaves them unknown. Claude Code's
+/// `PreCompact` carries no context fields at all, and it must not be turned
+/// into a reading of zero.
+#[tokio::test]
+async fn a_precompact_without_numbers_leaves_the_context_unknown() {
+    let h = start().await;
+
+    post(h.port, "/hook/event", Some("tab-1"), session_start("s1", "/repo")).await;
+    post(
+        h.port,
+        "/hook/event",
+        Some("tab-1"),
+        serde_json::json!({"session_id": "s1", "hook_event_name": "PreCompact"}),
+    )
+    .await;
+
+    let registry = h.hub.registry().lock().unwrap();
+    let tokens = &registry.session("s1").expect("the session").tokens;
+    assert_eq!(tokens.context_window_used_tokens, None);
+    assert_eq!(tokens.context_window_size_tokens, None);
 }
 
 // ---------------------------------------------------------------------------
