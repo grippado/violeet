@@ -136,17 +136,26 @@ fn cursor_harness_populates_telemetry_from_cursor_jsonl() {
 
     append(&path, &cursor_tool_call("gen-2"));
 
+    // Wait on the *second* line's arrival, not on something the first line
+    // already satisfies. Both appended lines produce a `Shell` last_action, so
+    // polling for that returned as soon as line one was read and the token
+    // assertion below then raced the second read — passing on an idle machine
+    // and failing under load. The cumulative total is the only condition here
+    // that line one alone cannot meet.
     assert!(
         eventually(|| {
             hub.registry()
                 .lock()
                 .unwrap()
                 .session("s-cursor")
-                .and_then(|s| s.last_action.as_deref())
-                .is_some_and(|a| a.starts_with("Shell"))
+                .is_some_and(|s| s.tokens.cumulative_output_tokens == Some(80))
         }),
-        "expected Shell last_action, got {:?}",
-        hub.registry().lock().unwrap().session("s-cursor").and_then(|s| s.last_action.clone())
+        "expected both lines folded in, got {:?}",
+        hub.registry()
+            .lock()
+            .unwrap()
+            .session("s-cursor")
+            .map(|s| (s.tokens.cumulative_output_tokens, s.last_action.clone()))
     );
 
     let registry = hub.registry().lock().unwrap();
