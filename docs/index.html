@@ -230,6 +230,54 @@
   .card h3 { font-size: 1rem; margin-bottom: 6px; }
   .card p { margin: 0; font-size: 0.92rem; opacity: 0.82; }
 
+  /* ---- the wider constellation ---- */
+  /* The one label on the page that sits above a heading instead of below it.
+     Small caps by letter-spacing rather than by `font-variant`, which the UI
+     stack renders as real small capitals only for some of the four languages
+     and as nothing at all for the rest. */
+  .eyebrow {
+    text-transform: uppercase; letter-spacing: 0.14em;
+    font-size: 0.72rem; font-weight: 700;
+    color: var(--violeeter-magenta);
+    margin: 0 0 10px;
+  }
+  /* Mark beside the heading, and the two of them on their own lines once the
+     column gets narrow. `flex-wrap` and a basis on the text column rather than
+     a width media query: this page has no width breakpoints anywhere, it wraps
+     by construction, and adding one here would put the only hard-coded
+     viewport number in the stylesheet. */
+  .constellation { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; }
+  /* `min-width: 0` because a flex item refuses to shrink below the widest
+     thing inside it, and the card grid below counts as that. Without it the
+     row stops wrapping and the section pushes the page sideways instead. */
+  .constellation-copy { flex: 1 1 320px; min-width: 0; }
+  .constellation h2 span { color: var(--violeeter-magenta); }
+  /* Bigger than `.mark` in the header: this one is the section's whole image,
+     not a companion to a wordmark. */
+  .glabs-mark { width: 76px; height: 76px; flex: none; object-fit: contain; }
+  .family-links {
+    display: grid; gap: 12px; margin-top: 24px;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  }
+  .family-link {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px;
+    border: 1px solid var(--violeeter-selection);
+    border-radius: 10px;
+    color: inherit; text-decoration: none;
+  }
+  /* The card is the target, so the whole card answers the pointer. Colour is
+     not available for that here: these links inherit rather than turning
+     magenta, because a card that recolours its own name reads as a different
+     product rather than as a hovered link. */
+  .family-link:hover { background: var(--violeeter-selection); }
+  .family-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  .family-link img { width: 40px; height: 40px; flex: none; object-fit: contain; }
+  /* `strong` is inline, so without this the descriptor rides up beside the
+     name instead of sitting under it. */
+  .family-link strong { display: block; }
+  .family-link small { opacity: 0.75; }
+
   /* ---- palette ---- */
   .swatches { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin: 14px 0 4px; }
   .sw { aspect-ratio: 1; border-radius: 5px; }
@@ -448,6 +496,39 @@ app/scripts/install.sh</pre>
     <code>launchd</code>. It is optional: with it stopped, Violeet is still a
     terminal, and the board simply says so.
   </p>
+</section>
+
+<section id="glabs">
+  <div class="constellation">
+    <img class="glabs-mark only-dark" src="glabs-dark.svg" alt="[GLabs]">
+    <img class="glabs-mark only-light" src="glabs-light.svg" alt="[GLabs]">
+    <div class="constellation-copy">
+      <p class="eyebrow" data-i18n="glabs.eyebrow">the wider constellation</p>
+      <h2 data-i18n="glabs.h2">Held by <span>[GLabs]</span>.</h2>
+      <p class="section-lede" data-i18n="glabs.lede">
+        [GLabs] is the umbrella that ties the family together in
+        Violeeter’s visual language.
+      </p>
+      <!-- No `aria-label` on either card, deliberately. The name and the
+           descriptor inside are already the link's accessible name, and they
+           are the parts that get translated; a label would be a fifth string
+           to keep in four languages that says the same thing worse. The icons
+           carry `alt=""` so they are not announced twice.
+           The destinations are the published pages, not the repositories: the
+           card promises the product, and a reader who wants the source finds
+           it one click further in. -->
+      <div class="family-links">
+        <a class="family-link" href="https://grippado.github.io/flux/">
+          <img class="only-dark" src="flux-dark.svg" alt=""><img class="only-light" src="flux-light.svg" alt="">
+          <span><strong>flux</strong><small data-i18n="glabs.flux">the workflow · direct reference ↗</small></span>
+        </a>
+        <a class="family-link" href="https://grippado.github.io/violeeter/">
+          <img class="only-dark" src="violeeter-dark.png" alt=""><img class="only-light" src="violeeter-light.png" alt="">
+          <span><strong>Violeeter</strong><small data-i18n="glabs.violeeter">the visual system · direct reference ↗</small></span>
+        </a>
+      </div>
+    </div>
+  </div>
 </section>
 
 <footer data-i18n="footer">
