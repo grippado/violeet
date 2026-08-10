@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cursor_paths;
+pub mod cursor_model;
 pub mod discovery;
 pub mod hitl;
 pub mod http;
