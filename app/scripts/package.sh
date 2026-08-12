@@ -28,9 +28,10 @@
 #                      [--skip-dmg]
 #
 # Both --version and --build-number are read from the git checkout when not
-# given, and are only needed where there is none. --build-number must exceed the
-# last published build: outside a checkout this script has no way to check that,
-# which is why it asks instead of guessing.
+# given, and are only needed where there is none. This script cannot tell
+# whether a --build-number is higher than the last one published — that lives
+# outside the checkout — so it checks the shape and leaves the ordering to
+# whoever passes it.
 #
 # Environment:
 #   VIOLEET_SIGN_IDENTITY   Codesign identity. Empty or unset means ad-hoc.
@@ -50,7 +51,16 @@ BUILD_DMG=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
-    --build-number) BUILD_NUMBER="$2"; shift 2 ;;
+    # Checked here rather than trusted, because the only thing downstream of it
+    # is PlistBuddy, which writes whatever it is handed: `--build-number abc`
+    # would land a non-number in CFBundleVersion and look like a valid build.
+    --build-number)
+      BUILD_NUMBER="${2:-}"
+      if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+        echo "package.sh: --build-number takes a whole number, got: '${BUILD_NUMBER}'" >&2
+        exit 2
+      fi
+      shift 2 ;;
     --output) OUTPUT_DIR="$2"; shift 2 ;;
     --skip-dmg) BUILD_DMG=0; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
@@ -92,10 +102,21 @@ VERSION="${VERSION#v}"
 # earlier version of this comment claimed: %cd is fixed per commit, so two runs
 # of this script over the same commit produce the same number no matter how far
 # apart they are. Seconds only separate two distinct commits landed in the same
-# minute. That collision is correct anyway — the build is reproducible, so the
-# same commit yields the same bytes, and the same artefact deserves the same
-# identity. Epoch would sort identically and cannot be read aloud off a screen
-# into a bug report, which is the other job this number has. 14 digits are fine:
+# minute.
+#
+# Two runs over one commit sharing a number is deliberate, and the reason is
+# narrower than "the build is reproducible", which an earlier version of this
+# comment asserted and which is not true. Measured, same commit, twice: the
+# published .zip differs, and so does the executable on disk, because
+# `codesign --timestamp` below fetches a fresh trusted timestamp and `ditto`
+# keeps per-run mtimes. What is identical is the CDHash — the code itself is
+# bit-for-bit the same, and what differs is packaging and signing metadata. So
+# the two runs are the same software wearing different wrapping, and giving
+# them one identity is right. If the compile ever stops being deterministic,
+# this reasoning dies with it and the number has to come from the build.
+#
+# Epoch would sort identically and cannot be read aloud off a screen into a bug
+# report, which is the other job this number has. 14 digits are fine:
 # CFBundleVersion is an unvalidated string outside App Store submission.
 #
 # One limit is accepted rather than solved. A commit whose committer clock is
@@ -116,7 +137,9 @@ if [[ -z "$BUILD_NUMBER" ]]; then
 fi
 if [[ -z "$BUILD_NUMBER" ]]; then
   echo "package.sh: no git checkout to date this build from." >&2
-  echo "  Pass --build-number <n>; it must exceed the last published build." >&2
+  echo "  Pass --build-number <n>. Nothing here can check it against what was" >&2
+  echo "  already published, so ordering is on you: CFBundleVersion going down" >&2
+  echo "  reads as a downgrade." >&2
   exit 2
 fi
 
