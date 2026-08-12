@@ -58,9 +58,25 @@ if [[ -z "$VERSION" ]]; then
 fi
 VERSION="${VERSION#v}"
 
-# CFBundleVersion must increase monotonically for updaters to work. The commit
-# count is the cheapest monotonic number a git checkout already has.
-BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
+# CFBundleVersion must increase monotonically for updaters to work, and a number
+# that ever goes down is read as a downgrade. The commit count used to fill this
+# and does not hold that guarantee: it counts reachable commits, not time, so it
+# depends on the path taken to a commit. Measured on the LAB-82 branch, where a
+# squash merge made it go backwards — 129 on main, 130 and 131 on the branch,
+# then 130 again on main once two commits collapsed into one. The same run also
+# shipped two different bundles both stamped 130, which is the shape of the bug
+# that hurts: the build number is what a person can read off the screen into a
+# report, and it stopped identifying a build.
+#
+# The commit date is monotonic by construction and survives squash, rebase and
+# branch choice. %cd and not %ad on purpose: rebase and cherry-pick rewrite the
+# commit date to the moment of the operation, so the number still climbs when
+# history is rewritten, while the author date would keep the old value and bring
+# the regression back.
+#
+# Minute resolution is enough. Two commits in the same minute would collide, and
+# VioleetGitCommit below already names the exact revision when that happens.
+BUILD_NUMBER="$(git log -1 --format=%cd --date=format:%Y%m%d%H%M 2>/dev/null || echo "1")"
 
 # Which commit this bundle came from. The version string does not identify a
 # build during development — `0.9.2-dev` is cut a dozen times a day — so a bug
