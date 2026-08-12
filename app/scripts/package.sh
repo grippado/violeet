@@ -68,15 +68,25 @@ VERSION="${VERSION#v}"
 # that hurts: the build number is what a person can read off the screen into a
 # report, and it stopped identifying a build.
 #
-# The commit date is monotonic by construction and survives squash, rebase and
+# The commit date climbs with wall-clock time and survives squash, rebase and
 # branch choice. %cd and not %ad on purpose: rebase and cherry-pick rewrite the
 # commit date to the moment of the operation, so the number still climbs when
 # history is rewritten, while the author date would keep the old value and bring
 # the regression back.
 #
-# Minute resolution is enough. Two commits in the same minute would collide, and
-# VioleetGitCommit below already names the exact revision when that happens.
-BUILD_NUMBER="$(git log -1 --format=%cd --date=format:%Y%m%d%H%M 2>/dev/null || echo "1")"
+# Normalised to UTC on purpose. Bare `--date=format:` prints each commit in the
+# offset that commit recorded, so two committers in different zones can produce
+# strings that sort against real chronology. Every commit here happens to carry
+# -0300 today, which is exactly what makes it easy to ship the bug and only meet
+# it once a second contributor appears.
+#
+# Two limits are accepted rather than solved. A commit whose committer clock is
+# ahead of real time poisons every later build number until the calendar catches
+# up, and nothing here clamps it — the old commit count was immune to a wrong
+# clock, so this trades one failure mode for another, narrower one. And minute
+# resolution means two commits in the same minute collide; VioleetGitCommit
+# below names the exact revision when that happens.
+BUILD_NUMBER="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M 2>/dev/null || echo "1")"
 
 # Which commit this bundle came from. The version string does not identify a
 # build during development — `0.9.2-dev` is cut a dozen times a day — so a bug
