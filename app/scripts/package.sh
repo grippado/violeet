@@ -24,7 +24,13 @@
 # by a user seeing "app is damaged".
 #
 # Usage:
-#   scripts/package.sh [--version X.Y.Z] [--output DIR] [--skip-dmg]
+#   scripts/package.sh [--version X.Y.Z] [--build-number N] [--output DIR]
+#                      [--skip-dmg]
+#
+# Both --version and --build-number are read from the git checkout when not
+# given, and are only needed where there is none. --build-number must exceed the
+# last published build: outside a checkout this script has no way to check that,
+# which is why it asks instead of guessing.
 #
 # Environment:
 #   VIOLEET_SIGN_IDENTITY   Codesign identity. Empty or unset means ad-hoc.
@@ -37,12 +43,14 @@ APP_NAME="violeet"
 EXECUTABLE="Violeet"
 BUNDLE_ID="digital.opengateway.violeet"
 VERSION=""
+BUILD_NUMBER=""
 OUTPUT_DIR="dist"
 BUILD_DMG=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
+    --build-number) BUILD_NUMBER="$2"; shift 2 ;;
     --output) OUTPUT_DIR="$2"; shift 2 ;;
     --skip-dmg) BUILD_DMG=0; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
@@ -80,28 +88,37 @@ VERSION="${VERSION#v}"
 # -0300 today, which is exactly what makes it easy to ship the bug and only meet
 # it once a second contributor appears.
 #
-# Second resolution, not minute. Minute was tried first and documented as an
-# accepted collision, which was the wrong call: two builds a few seconds apart
-# would share a CFBundleVersion, and that is the exact defect this block exists
-# to remove — writing it down does not stop an updater from reading two builds
-# as one. Epoch seconds would collide just as rarely and are unreadable, and the
-# only job this number has besides sorting is being read aloud off a screen into
-# a bug report. 14 digits are fine: CFBundleVersion is an unvalidated string
-# outside App Store submission, and this app ships direct.
+# Second resolution rather than minute, which is a small win and not the one an
+# earlier version of this comment claimed: %cd is fixed per commit, so two runs
+# of this script over the same commit produce the same number no matter how far
+# apart they are. Seconds only separate two distinct commits landed in the same
+# minute. That collision is correct anyway — the build is reproducible, so the
+# same commit yields the same bytes, and the same artefact deserves the same
+# identity. Epoch would sort identically and cannot be read aloud off a screen
+# into a bug report, which is the other job this number has. 14 digits are fine:
+# CFBundleVersion is an unvalidated string outside App Store submission.
 #
 # One limit is accepted rather than solved. A commit whose committer clock is
 # ahead of real time poisons every later build number until the calendar catches
 # up, and nothing here clamps it — the old commit count was immune to a wrong
 # clock, so this trades one failure mode for another, narrower one.
 #
-# Without a checkout the build date stands in for the commit date. It is not a
-# fallback constant on purpose: a fixed number would hand two different bundles
-# the same identity, which is the bug this block was written to kill. The build
-# date is a worse answer than the commit date — it says when this ran, not what
-# it was built from — but it is a true one, and it keeps the number unique and
-# climbing. GIT_COMMIT below is what records that the revision is unknown.
-BUILD_NUMBER="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S 2>/dev/null \
-  || TZ=UTC date +%Y%m%d%H%M%S)"
+# With no checkout this refuses to guess. Both alternatives were tried and are
+# worse. A constant hands different bundles the same identity, which is the bug
+# this block exists to kill. The build date is not a smaller version of the same
+# mistake but a different one: it measures when the script ran, not what it ran
+# on, so a tarball of last year's code compiled today outranks every real
+# release — a number that lies about being newest is worse than no number. There
+# is no honest answer to derive here, so the operator supplies it or nothing is
+# built.
+if [[ -z "$BUILD_NUMBER" ]]; then
+  BUILD_NUMBER="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S 2>/dev/null)" || true
+fi
+if [[ -z "$BUILD_NUMBER" ]]; then
+  echo "package.sh: no git checkout to date this build from." >&2
+  echo "  Pass --build-number <n>; it must exceed the last published build." >&2
+  exit 2
+fi
 
 # Which commit this bundle came from. The version string does not identify a
 # build during development — `0.9.2-dev` is cut a dozen times a day — so a bug
