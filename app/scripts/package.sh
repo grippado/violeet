@@ -24,7 +24,14 @@
 # by a user seeing "app is damaged".
 #
 # Usage:
-#   scripts/package.sh [--version X.Y.Z] [--output DIR] [--skip-dmg]
+#   scripts/package.sh [--version X.Y.Z] [--build-number N] [--output DIR]
+#                      [--skip-dmg]
+#
+# Both --version and --build-number are read from the git checkout when not
+# given, and are only needed where there is none. This script cannot tell
+# whether a --build-number is higher than the last one published — that lives
+# outside the checkout — so it checks the shape and leaves the ordering to
+# whoever passes it.
 #
 # Environment:
 #   VIOLEET_SIGN_IDENTITY   Codesign identity. Empty or unset means ad-hoc.
@@ -37,12 +44,23 @@ APP_NAME="violeet"
 EXECUTABLE="Violeet"
 BUNDLE_ID="digital.opengateway.violeet"
 VERSION=""
+BUILD_NUMBER=""
 OUTPUT_DIR="dist"
 BUILD_DMG=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
+    # Checked here rather than trusted, because the only thing downstream of it
+    # is PlistBuddy, which writes whatever it is handed: `--build-number abc`
+    # would land a non-number in CFBundleVersion and look like a valid build.
+    --build-number)
+      BUILD_NUMBER="${2:-}"
+      if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+        echo "package.sh: --build-number takes a whole number, got: '${BUILD_NUMBER}'" >&2
+        exit 2
+      fi
+      shift 2 ;;
     --output) OUTPUT_DIR="$2"; shift 2 ;;
     --skip-dmg) BUILD_DMG=0; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
@@ -58,9 +76,72 @@ if [[ -z "$VERSION" ]]; then
 fi
 VERSION="${VERSION#v}"
 
-# CFBundleVersion must increase monotonically for updaters to work. The commit
-# count is the cheapest monotonic number a git checkout already has.
-BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo "1")"
+# CFBundleVersion must increase monotonically for updaters to work, and a number
+# that ever goes down is read as a downgrade. The commit count used to fill this
+# and does not hold that guarantee: it counts reachable commits, not time, so it
+# depends on the path taken to a commit. Measured on the LAB-82 branch, where a
+# squash merge made it go backwards — 129 on main, 130 and 131 on the branch,
+# then 130 again on main once two commits collapsed into one. The same run also
+# shipped two different bundles both stamped 130, which is the shape of the bug
+# that hurts: the build number is what a person can read off the screen into a
+# report, and it stopped identifying a build.
+#
+# The commit date climbs with wall-clock time and survives squash, rebase and
+# branch choice. %cd and not %ad on purpose: rebase and cherry-pick rewrite the
+# commit date to the moment of the operation, so the number still climbs when
+# history is rewritten, while the author date would keep the old value and bring
+# the regression back.
+#
+# Normalised to UTC on purpose. Bare `--date=format:` prints each commit in the
+# offset that commit recorded, so two committers in different zones can produce
+# strings that sort against real chronology. Every commit here happens to carry
+# -0300 today, which is exactly what makes it easy to ship the bug and only meet
+# it once a second contributor appears.
+#
+# Second resolution rather than minute, which is a small win and not the one an
+# earlier version of this comment claimed: %cd is fixed per commit, so two runs
+# of this script over the same commit produce the same number no matter how far
+# apart they are. Seconds only separate two distinct commits landed in the same
+# minute.
+#
+# Two runs over one commit sharing a number is deliberate, and the reason is
+# narrower than "the build is reproducible", which an earlier version of this
+# comment asserted and which is not true. Measured, same commit, twice: the
+# published .zip differs, and so does the executable on disk, because
+# `codesign --timestamp` below fetches a fresh trusted timestamp and `ditto`
+# keeps per-run mtimes. What is identical is the CDHash — the code itself is
+# bit-for-bit the same, and what differs is packaging and signing metadata. So
+# the two runs are the same software wearing different wrapping, and giving
+# them one identity is right. If the compile ever stops being deterministic,
+# this reasoning dies with it and the number has to come from the build.
+#
+# Epoch would sort identically and cannot be read aloud off a screen into a bug
+# report, which is the other job this number has. 14 digits are fine:
+# CFBundleVersion is an unvalidated string outside App Store submission.
+#
+# One limit is accepted rather than solved. A commit whose committer clock is
+# ahead of real time poisons every later build number until the calendar catches
+# up, and nothing here clamps it — the old commit count was immune to a wrong
+# clock, so this trades one failure mode for another, narrower one.
+#
+# With no checkout this refuses to guess. Both alternatives were tried and are
+# worse. A constant hands different bundles the same identity, which is the bug
+# this block exists to kill. The build date is not a smaller version of the same
+# mistake but a different one: it measures when the script ran, not what it ran
+# on, so a tarball of last year's code compiled today outranks every real
+# release — a number that lies about being newest is worse than no number. There
+# is no honest answer to derive here, so the operator supplies it or nothing is
+# built.
+if [[ -z "$BUILD_NUMBER" ]]; then
+  BUILD_NUMBER="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S 2>/dev/null)" || true
+fi
+if [[ -z "$BUILD_NUMBER" ]]; then
+  echo "package.sh: no git checkout to date this build from." >&2
+  echo "  Pass --build-number <n>. Nothing here can check it against what was" >&2
+  echo "  already published, so ordering is on you: CFBundleVersion going down" >&2
+  echo "  reads as a downgrade." >&2
+  exit 2
+fi
 
 # Which commit this bundle came from. The version string does not identify a
 # build during development — `0.9.2-dev` is cut a dozen times a day — so a bug
