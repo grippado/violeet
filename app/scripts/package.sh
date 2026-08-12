@@ -192,13 +192,21 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 # ---------------------------------------------------------------------------
 
 IDENTITY="${VIOLEET_SIGN_IDENTITY:-}"
+ENTITLEMENTS="Sources/Violeet/Violeet.entitlements"
+
 if [[ -n "$IDENTITY" ]]; then
   echo "==> Signing with: $IDENTITY"
   # The hardened runtime is required for notarization. It does not conflict with
   # spawning PTYs — that is the sandbox, which stays off (see project.yml).
+  #
+  # The entitlements are not optional under that runtime: it blocks audio input
+  # before TCC is consulted, so a signed build without them has no dictation in
+  # any tab no matter what Info.plist says. Passed on the ad-hoc path too, so
+  # the bundle people actually test is the bundle that ships.
   codesign --force --timestamp --options runtime \
     --sign "$IDENTITY" \
     --identifier "$BUNDLE_ID" \
+    --entitlements "$ENTITLEMENTS" \
     "$APP"
   codesign --verify --deep --strict --verbose=2 "$APP"
 else
@@ -206,7 +214,8 @@ else
   echo "    This build runs on the machine that made it. On any other machine"
   echo "    Gatekeeper will refuse it until the quarantine flag is removed:"
   echo "      xattr -dr com.apple.quarantine /Applications/$APP_NAME.app"
-  codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
+  codesign --force --sign - --identifier "$BUNDLE_ID" \
+    --entitlements "$ENTITLEMENTS" "$APP"
 fi
 
 # ---------------------------------------------------------------------------

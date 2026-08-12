@@ -58,6 +58,34 @@
 	<false/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!--
+	  The microphone key is here for a process violeet does not contain: an
+	  agent running in a tab. TCC does not ask the process that opens the
+	  device, it asks the responsible process, and for anything spawned into a
+	  PTY that is this bundle. Claude Code's `/voice` inside a tab therefore
+	  fails against violeet's Info.plist, not against its own — and it fails
+	  silently, with no prompt and no error, which is why the missing key reads
+	  as a broken dictation feature rather than as a missing permission.
+
+	  Kept even though no Swift code in this app touches AVCaptureDevice: the
+	  alternative is to declare it only once the app itself records audio, which
+	  gets the ordering backwards. The bundle is the permission boundary for
+	  every tab, so it declares what the tabs need. The user-facing string says
+	  "agents in tabs" for the same reason — the consent dialog names violeet,
+	  and a string about violeet recording would be a lie.
+
+	  The string is pt-BR while every other user-facing string in this app is
+	  English, and that divergence is deliberate rather than an oversight. This
+	  is the only string here rendered by the OS to the person at the keyboard,
+	  in a dialog they cannot dismiss without understanding it; the rest are
+	  sidebar labels and debug text read by whoever builds this. Localizing the
+	  whole app was rejected as the fix: there is no .lproj or
+	  Localizable.strings infrastructure in this repo, and adding it to justify
+	  one consent dialog would be a large change carrying a small one. Revisit
+	  when a second locale is actually needed.
+	-->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>violeet precisa do microfone para que agentes rodando nas abas usem ditado por voz.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<!--

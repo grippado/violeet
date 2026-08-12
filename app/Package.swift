@@ -39,10 +39,12 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             path: "Sources/Violeet",
-            // Info.plist is consumed by the Xcode target, not by SwiftPM; the
-            // per-directory READMEs are orientation for humans, not resources.
+            // Info.plist and the entitlements are consumed by the signing step,
+            // not by SwiftPM; the per-directory READMEs are orientation for
+            // humans, not resources.
             exclude: [
                 "Info.plist",
+                "Violeet.entitlements",
                 "Terminal/README.md",
                 "Sidebar/README.md",
                 "Daemon/README.md",

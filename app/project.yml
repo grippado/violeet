@@ -35,6 +35,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: digital.opengateway.violeet
         SWIFT_VERSION: "5.9"
         ENABLE_HARDENED_RUNTIME: true
+        # The entitlements file exists for one key, audio input, and it is here
+        # for a process this app does not contain: an agent running in a tab.
+        # Under the hardened runtime the runtime blocks the microphone before
+        # TCC is ever consulted, so the NSMicrophoneUsageDescription in
+        # Info.plist fixes only the ad-hoc build and leaves the signed one
+        # broken — in the way hardest to notice, since the build that ships is
+        # not the build dictation gets tested on. The sandbox stays off (below);
+        # this is not a step toward turning it on.
+        #
+        # The rationale lives here and not in the file because the file cannot
+        # hold it: AMFI's entitlements parser rejects XML comments outright
+        # ("syntax error"), so codesign fails on a commented plist.
+        CODE_SIGN_ENTITLEMENTS: Sources/Violeet/Violeet.entitlements
         # The app spawns PTYs and talks to a Unix socket in ~/.violeet.
         # Sandboxing is deliberately off for v0 — revisit before distribution.
         ENABLE_APP_SANDBOX: false
