@@ -80,13 +80,28 @@ VERSION="${VERSION#v}"
 # -0300 today, which is exactly what makes it easy to ship the bug and only meet
 # it once a second contributor appears.
 #
-# Two limits are accepted rather than solved. A commit whose committer clock is
+# Second resolution, not minute. Minute was tried first and documented as an
+# accepted collision, which was the wrong call: two builds a few seconds apart
+# would share a CFBundleVersion, and that is the exact defect this block exists
+# to remove — writing it down does not stop an updater from reading two builds
+# as one. Epoch seconds would collide just as rarely and are unreadable, and the
+# only job this number has besides sorting is being read aloud off a screen into
+# a bug report. 14 digits are fine: CFBundleVersion is an unvalidated string
+# outside App Store submission, and this app ships direct.
+#
+# One limit is accepted rather than solved. A commit whose committer clock is
 # ahead of real time poisons every later build number until the calendar catches
 # up, and nothing here clamps it — the old commit count was immune to a wrong
-# clock, so this trades one failure mode for another, narrower one. And minute
-# resolution means two commits in the same minute collide; VioleetGitCommit
-# below names the exact revision when that happens.
-BUILD_NUMBER="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M 2>/dev/null || echo "1")"
+# clock, so this trades one failure mode for another, narrower one.
+#
+# Without a checkout the build date stands in for the commit date. It is not a
+# fallback constant on purpose: a fixed number would hand two different bundles
+# the same identity, which is the bug this block was written to kill. The build
+# date is a worse answer than the commit date — it says when this ran, not what
+# it was built from — but it is a true one, and it keeps the number unique and
+# climbing. GIT_COMMIT below is what records that the revision is unknown.
+BUILD_NUMBER="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S 2>/dev/null \
+  || TZ=UTC date +%Y%m%d%H%M%S)"
 
 # Which commit this bundle came from. The version string does not identify a
 # build during development — `0.9.2-dev` is cut a dozen times a day — so a bug
