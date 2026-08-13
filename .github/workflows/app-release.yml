@@ -149,33 +149,16 @@ jobs:
 
       # The changelog is read, never written: the workflow copies what a human
       # already wrote on the tag and says so plainly when there is nothing to
-      # copy. It does not summarize and it does not invent prose.
+      # copy. It does not summarize and it does not invent prose. The chain
+      # itself lives in the script because docs/latest-release.json below
+      # resolves the same thing for two tags, and two copies of a fallback chain
+      # drift apart the first time one of them is fixed.
       - name: Resolve changelog
         id: changelog
         run: |
           set -euo pipefail
-          tag="v${{ steps.version.outputs.version }}"
-          changelog=""
-
-          if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
-            # The test is the object type, not whether the string came back
-            # empty: on a lightweight tag `%(contents)` does not return nothing,
-            # it quietly returns the whole message of the commit underneath.
-            # v0.1.1 is such a tag, and it would otherwise publish a full commit
-            # body, sign-off trailer included, as if it were a changelog.
-            if [[ "$(git cat-file -t "$tag")" == "tag" ]]; then
-              changelog="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
-            fi
-            if [[ -z "${changelog//[[:space:]]/}" ]]; then
-              changelog="$(git log -1 --format=%s "$tag")"
-            fi
-          fi
-
-          if [[ -z "${changelog//[[:space:]]/}" ]]; then
-            changelog="Sem changelog registrado para esta tag."
-          fi
-
-          printf '%s\n' "$changelog" > "$RUNNER_TEMP/changelog.md"
+          scripts/release-meta.sh changelog "v${{ steps.version.outputs.version }}" \
+            > "$RUNNER_TEMP/changelog.md"
           cat "$RUNNER_TEMP/changelog.md"
 
       - name: Write release notes
@@ -218,3 +201,41 @@ jobs:
             app/dist/*.dmg
             app/dist/*.zip
             app/dist/SHA256SUMS.txt
+
+      # After the release and never before it: the file names a published_at and
+      # an html_url, and neither exists until the step above has run.
+      #
+      # A prerelease is skipped for the same reason it is not the download the
+      # front page offers: it must not become what the page calls the current
+      # version.
+      - name: Update docs/latest-release.json
+        if: ${{ !contains(steps.version.outputs.version, '-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The job is checked out at the tag, which is a detached HEAD: a commit
+          # made here would belong to no branch and a push would have nowhere to
+          # land. The file belongs to main, so main is what gets checked out.
+          git fetch --no-tags origin main
+          git checkout -B main FETCH_HEAD
+
+          scripts/release-meta.sh json "v${{ steps.version.outputs.version }}" \
+            > docs/latest-release.json
+          cat docs/latest-release.json
+
+          if git diff --quiet -- docs/latest-release.json; then
+            echo "docs/latest-release.json already describes this release"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/latest-release.json
+          git commit -m "🤖 chore(release): docs/latest-release.json em v${{ steps.version.outputs.version }}"
+
+          # No `|| true` anywhere above, on purpose. A release the site does not
+          # know about is worse than a red job: the red job is the only thing
+          # that tells anyone the two went out of sync.
+          git push origin main
