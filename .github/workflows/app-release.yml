@@ -39,6 +39,13 @@ permissions:
   # a release job has no reason to be able to push code.
   contents: write
 
+# Two tags pushed in a row would otherwise race each other pushing main. Queued
+# and never cancelled: a cancelled release is a published release whose artifacts
+# never got built.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build, sign, publish
@@ -155,9 +162,11 @@ jobs:
       # drift apart the first time one of them is fixed.
       - name: Resolve changelog
         id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          scripts/release-meta.sh changelog "v${{ steps.version.outputs.version }}" \
+          scripts/release-meta.sh changelog "v${VERSION}" \
             > "$RUNNER_TEMP/changelog.md"
           cat "$RUNNER_TEMP/changelog.md"
 
@@ -212,8 +221,29 @@ jobs:
         if: ${{ !contains(steps.version.outputs.version, '-') }}
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+
+          # A dispatch can name any tag, and rebuilding an old one is an ordinary
+          # thing to want. Writing the file from it would announce a superseded
+          # version as the current one, so the step skips and succeeds.
+          highest=""
+          while read -r tag; do
+            [[ -z "$tag" || "$tag" == *-* ]] && continue
+            highest="$tag"
+            break
+          done < <(git tag --list 'v[0-9]*' --sort=-v:refname)
+          if [[ "$highest" != "v${VERSION}" ]]; then
+            echo "v${VERSION} is not the highest released version (${highest:-none});" \
+              "leaving docs/latest-release.json untouched"
+            exit 0
+          fi
+
+          # The checkout below swaps the whole tree for main's, so a script run
+          # after it is main's script, not the tag's. The release body above was
+          # written by the tag's, and both have to come from the same source.
+          install -m 755 scripts/release-meta.sh "$RUNNER_TEMP/release-meta.sh"
 
           # The job is checked out at the tag, which is a detached HEAD: a commit
           # made here would belong to no branch and a push would have nowhere to
@@ -221,7 +251,7 @@ jobs:
           git fetch --no-tags origin main
           git checkout -B main FETCH_HEAD
 
-          scripts/release-meta.sh json "v${{ steps.version.outputs.version }}" \
+          "$RUNNER_TEMP/release-meta.sh" json "v${VERSION}" \
             > docs/latest-release.json
           cat docs/latest-release.json
 
@@ -233,9 +263,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/latest-release.json
-          git commit -m "🤖 chore(release): docs/latest-release.json em v${{ steps.version.outputs.version }}"
+          git commit -m "🤖 chore(release): docs/latest-release.json em v${VERSION}"
 
           # No `|| true` anywhere above, on purpose. A release the site does not
           # know about is worse than a red job: the red job is the only thing
-          # that tells anyone the two went out of sync.
-          git push origin main
+          # that tells anyone the two went out of sync. The retry below rebases
+          # onto whatever landed meanwhile and pushes again; if that also fails,
+          # the step fails.
+          git push origin main || {
+            git fetch --no-tags origin main
+            git rebase FETCH_HEAD
+            git push origin main
+          }

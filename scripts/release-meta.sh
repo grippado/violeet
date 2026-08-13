@@ -16,7 +16,20 @@
 
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# The summary is cut by character count, and `${#s}` counts characters under a
+# UTF-8 locale and bytes outside one. Without this the same tag is truncated at
+# two different places, and a cut landing inside a multibyte character puts an
+# orphan byte on the page.
+export LC_ALL=en_US.UTF-8
+
+# Normally the repository is the one this file lives in. The release workflow
+# copies the script out of the checkout before switching branches, and that copy
+# has no repository above it, so it falls back to the one it was called from.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if ! git -C "$ROOT" rev-parse --git-dir > /dev/null 2>&1; then
+    ROOT="$(git rev-parse --show-toplevel)"
+fi
+cd "$ROOT"
 
 SUMMARY_MAX=140
 NO_CHANGELOG="Sem changelog registrado para esta tag."
@@ -40,19 +53,19 @@ resolve_changelog() {
         # trailer included, as if it were a changelog.
         if [[ "$(git cat-file -t "$tag")" == "tag" ]]; then
             CHANGELOG="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
-            if [[ -n "${CHANGELOG//[[:space:]]/}" ]]; then
+            if [[ "$CHANGELOG" =~ [^[:space:]] ]]; then
                 CHANGELOG_SOURCE="tag_message"
             fi
         fi
-        if [[ -z "${CHANGELOG//[[:space:]]/}" ]]; then
+        if [[ ! "$CHANGELOG" =~ [^[:space:]] ]]; then
             CHANGELOG="$(git log -1 --format=%s "$tag")"
-            if [[ -n "${CHANGELOG//[[:space:]]/}" ]]; then
+            if [[ "$CHANGELOG" =~ [^[:space:]] ]]; then
                 CHANGELOG_SOURCE="commit_subject"
             fi
         fi
     fi
 
-    if [[ -z "${CHANGELOG//[[:space:]]/}" ]]; then
+    if [[ ! "$CHANGELOG" =~ [^[:space:]] ]]; then
         CHANGELOG="$NO_CHANGELOG"
         CHANGELOG_SOURCE="none"
     fi
