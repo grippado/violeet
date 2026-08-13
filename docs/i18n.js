@@ -61,6 +61,11 @@ window.VIOLEET_I18N = {
     "install.lede": "macOS, Apple silicon and Intel. Builds are ad-hoc signed, so the first launch needs the quarantine flag cleared.",
     "install.daemon": "The daemon that watches sessions installs separately and runs under <code>launchd</code>. It is optional: with it stopped, Violeet is still a terminal, and the board simply says so.",
 
+    "releases.eyebrow": "recent releases",
+    "releases.latest": "latest version",
+    "releases.previous": "previous version",
+    "releases.all": "see all versions ↗",
+
     "glabs.eyebrow": "the wider constellation",
     "glabs.h2": "Held by <span>[GLabs]</span>.",
     "glabs.lede": "[GLabs] is the umbrella that ties the family together in Violeeter’s visual language.",
@@ -117,6 +122,11 @@ window.VIOLEET_I18N = {
     "install.h2": "Instalação",
     "install.lede": "macOS, Apple silicon e Intel. Os builds são assinados ad-hoc, então a primeira abertura exige limpar a flag de quarentena.",
     "install.daemon": "O daemon que observa as sessões se instala à parte e roda sob <code>launchd</code>. Ele é opcional: com ele parado, o Violeet continua sendo um terminal, e o painel simplesmente diz isso.",
+
+    "releases.eyebrow": "versões recentes",
+    "releases.latest": "última versão",
+    "releases.previous": "versão anterior",
+    "releases.all": "ver todas as versões ↗",
 
     "glabs.eyebrow": "a constelação maior",
     "glabs.h2": "Sob o guarda-chuva da <span>[GLabs]</span>.",
@@ -175,6 +185,11 @@ window.VIOLEET_I18N = {
     "install.lede": "macOS, Apple silicon e Intel. Los builds están firmados ad-hoc, así que el primer arranque exige quitar la marca de cuarentena.",
     "install.daemon": "El daemon que observa las sesiones se instala aparte y corre bajo <code>launchd</code>. Es opcional: con él detenido, Violeet sigue siendo una terminal, y el panel simplemente lo dice.",
 
+    "releases.eyebrow": "versiones recientes",
+    "releases.latest": "última versión",
+    "releases.previous": "versión anterior",
+    "releases.all": "ver todas las versiones ↗",
+
     "glabs.eyebrow": "la constelación mayor",
     "glabs.h2": "Bajo el paraguas de <span>[GLabs]</span>.",
     "glabs.lede": "[GLabs] conecta la familia con el lenguaje visual de Violeeter.",
@@ -231,6 +246,11 @@ window.VIOLEET_I18N = {
     "install.h2": "Installation",
     "install.lede": "macOS, Apple Silicon und Intel. Die Builds sind ad-hoc signiert, der erste Start braucht also ein entferntes Quarantäne-Flag.",
     "install.daemon": "Der Daemon, der die Sitzungen beobachtet, wird separat installiert und läuft unter <code>launchd</code>. Er ist optional: steht er still, ist Violeet immer noch ein Terminal, und das Board sagt genau das.",
+
+    "releases.eyebrow": "aktuelle Versionen",
+    "releases.latest": "neueste Version",
+    "releases.previous": "vorherige Version",
+    "releases.all": "alle Versionen ansehen ↗",
 
     "glabs.eyebrow": "die weitere Konstellation",
     "glabs.h2": "Unter dem Dach von <span>[GLabs]</span>.",

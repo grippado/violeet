@@ -230,6 +230,26 @@
   .card h3 { font-size: 1rem; margin-bottom: 6px; }
   .card p { margin: 0; font-size: 0.92rem; opacity: 0.82; }
 
+  /* ---- releases ---- */
+  .releases[hidden] { display: none; }
+  .releases {
+    border: 1px solid var(--violeeter-selection);
+    border-radius: 10px; padding: 18px 20px;
+    margin: 0 0 28px;
+  }
+  .release + .release { margin-top: 18px; }
+  .release-label {
+    margin: 0; font-size: 0.78rem; font-weight: 650;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--violeeter-fg); opacity: 0.6;
+  }
+  .release-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 2px 0 0; }
+  .release-num { font-size: 0.95rem; font-weight: 650; text-decoration: none; }
+  .release-num:hover, .release-num:focus-visible { text-decoration: underline; }
+  .release-date::before { content: "· "; }
+  .release-summary { margin: 4px 0 0; font-size: 0.92rem; opacity: 0.82; }
+  .release-all { margin: 18px 0 0; font-size: 0.88rem; }
+
   /* ---- the wider constellation ---- */
   /* The one label on the page that sits above a heading instead of below it.
      Small caps by letter-spacing rather than by `font-variant`, which the UI
@@ -487,6 +507,30 @@
     macOS, Apple silicon and Intel. Builds are ad-hoc signed, so the first
     launch needs the quarantine flag cleared.
   </p>
+
+  <div class="releases" id="releases" hidden>
+    <p class="eyebrow" data-i18n="releases.eyebrow">recent releases</p>
+    <div class="release" id="release-latest">
+      <p class="release-label" data-i18n="releases.latest">latest version</p>
+      <p class="release-head">
+        <a class="mono release-num" href="https://github.com/grippado/violeet/releases"></a>
+        <span class="variant-meta release-date"></span>
+      </p>
+      <p class="release-summary" lang="pt-BR"></p>
+    </div>
+    <div class="release" id="release-previous">
+      <p class="release-label" data-i18n="releases.previous">previous version</p>
+      <p class="release-head">
+        <a class="mono release-num" href="https://github.com/grippado/violeet/releases"></a>
+        <span class="variant-meta release-date"></span>
+      </p>
+      <p class="release-summary" lang="pt-BR"></p>
+    </div>
+    <p class="release-all">
+      <a id="release-all-link" href="https://github.com/grippado/violeet/tags" data-i18n="releases.all">see all versions ↗</a>
+    </p>
+  </div>
+
 <pre class="block">git clone https://github.com/grippado/violeet
 cd violeet
 app/scripts/package.sh
@@ -579,6 +623,77 @@ app/scripts/install.sh</pre>
       }
     });
 
+  // ---- releases ----
+  //
+  // Same contract as the palette above: the file is written by the release
+  // workflow, and a page that cannot read it says nothing about versions rather
+  // than showing a frame with no numbers in it. Half a showcase is worse than
+  // none, so the box only unhides once every field it promises is in hand.
+  const releasesBox = document.getElementById("releases");
+  const DATE_LOCALES = { en: "en", pt: "pt-BR", es: "es", de: "de" };
+  let releases = null;
+
+  function isRelease(entry) {
+    return !!entry
+      && typeof entry.version === "string" && entry.version !== ""
+      && typeof entry.published_at === "string" && entry.published_at !== ""
+      && typeof entry.html_url === "string" && entry.html_url !== ""
+      && typeof entry.summary === "string" && entry.summary !== "";
+  }
+
+  // The stamp is UTC and stays UTC. Rendered in the reader's zone, a release cut
+  // just after midnight moves to the day before, which is a different date than
+  // the one the tag carries.
+  function releaseDate(iso) {
+    const when = new Date(iso);
+    if (isNaN(when.getTime())) return "";
+    try {
+      return new Intl.DateTimeFormat(DATE_LOCALES[current] || "en", {
+        day: "numeric", month: "short", year: "numeric", timeZone: "UTC"
+      }).format(when);
+    } catch (e) {
+      return iso.slice(0, 10);
+    }
+  }
+
+  function fillRelease(id, entry) {
+    const box = document.getElementById(id);
+    if (!box) return;
+    const link = box.querySelector(".release-num");
+    link.textContent = typeof entry.tag === "string" && entry.tag !== ""
+      ? entry.tag : "v" + entry.version;
+    link.href = entry.html_url;
+    box.querySelector(".release-date").textContent = releaseDate(entry.published_at);
+    // `textContent`: the summary is release copy, not page copy, and it is the
+    // one string here that does not come out of `i18n.js`.
+    box.querySelector(".release-summary").textContent = entry.summary;
+  }
+
+  // Called again on every language change, because the date is the one value in
+  // the box that is written in the language the reader picked.
+  function paintReleases() {
+    if (!releases) return;
+    fillRelease("release-latest", releases.latest);
+    if (releases.previous) fillRelease("release-previous", releases.previous);
+  }
+
+  fetch("latest-release.json")
+    .then(response => response.json())
+    .then(data => {
+      if (!isRelease(data && data.latest)) throw new Error("incomplete");
+      releases = {
+        latest: data.latest,
+        previous: isRelease(data.previous) ? data.previous : null
+      };
+      if (!releases.previous) document.getElementById("release-previous").remove();
+      if (typeof data.all_tags_url === "string" && data.all_tags_url !== "") {
+        document.getElementById("release-all-link").href = data.all_tags_url;
+      }
+      paintReleases();
+      releasesBox.hidden = false;
+    })
+    .catch(() => releasesBox.remove());
+
   const root = document.documentElement;
   const button = document.getElementById("toggle");
   const SUN_ICON = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/></svg>`;
@@ -664,6 +779,7 @@ app/scripts/install.sh</pre>
             .setAttribute("aria-label", strings["theme.get"] + " Violeeter");
     select.setAttribute("aria-label", strings["lang.label"]);
 
+    paintReleases();
     paintToggle();
     remember(code);
   }
