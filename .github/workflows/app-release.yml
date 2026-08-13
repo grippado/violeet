@@ -59,6 +59,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # The release body is the tag's own message, which lives in the tag
+          # object and not in any commit. Without this the annotation is not
+          # guaranteed to be on the runner and the changelog silently degrades
+          # to the fallback.
+          fetch-tags: true
 
       - name: Select Xcode
         run: sudo xcode-select -switch /Applications/Xcode_16.4.app
@@ -142,12 +147,47 @@ jobs:
         working-directory: app/dist
         run: shasum -a 256 * | tee SHA256SUMS.txt
 
+      # The changelog is read, never written: the workflow copies what a human
+      # already wrote on the tag and says so plainly when there is nothing to
+      # copy. It does not summarize and it does not invent prose.
+      - name: Resolve changelog
+        id: changelog
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.version.outputs.version }}"
+          changelog=""
+
+          if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+            # The test is the object type, not whether the string came back
+            # empty: on a lightweight tag `%(contents)` does not return nothing,
+            # it quietly returns the whole message of the commit underneath.
+            # v0.1.1 is such a tag, and it would otherwise publish a full commit
+            # body, sign-off trailer included, as if it were a changelog.
+            if [[ "$(git cat-file -t "$tag")" == "tag" ]]; then
+              changelog="$(git for-each-ref --format='%(contents)' "refs/tags/$tag")"
+            fi
+            if [[ -z "${changelog//[[:space:]]/}" ]]; then
+              changelog="$(git log -1 --format=%s "$tag")"
+            fi
+          fi
+
+          if [[ -z "${changelog//[[:space:]]/}" ]]; then
+            changelog="Sem changelog registrado para esta tag."
+          fi
+
+          printf '%s\n' "$changelog" > "$RUNNER_TEMP/changelog.md"
+          cat "$RUNNER_TEMP/changelog.md"
+
       - name: Write release notes
         id: notes
         run: |
           set -euo pipefail
           {
             echo "## violeet ${{ steps.version.outputs.version }}"
+            echo
+            cat "$RUNNER_TEMP/changelog.md"
+            echo
+            echo "---"
             echo
             echo "macOS 14 or later. Universal (Apple silicon and Intel)."
             echo
