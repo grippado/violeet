@@ -244,20 +244,29 @@
     color: var(--violeeter-fg); opacity: 0.6;
   }
   .release-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 2px 0 0; }
-  .release-num { font-size: 0.95rem; font-weight: 650; text-decoration: none; }
-  .release-num:hover, .release-num:focus-visible { text-decoration: underline; }
+  .release-num {
+    font-size: 0.95rem; font-weight: 650;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+    text-underline-offset: 3px;
+  }
+  .release-num:hover, .release-num:focus-visible { text-decoration-color: currentColor; }
+  .release-num::after { content: " ↗"; }
   .release-date::before { content: "· "; }
   .release-summary { margin: 4px 0 0; font-size: 0.92rem; opacity: 0.82; }
   .release-all { margin: 18px 0 0; font-size: 0.88rem; }
 
   /* ---- the wider constellation ---- */
-  /* The one label on the page that sits above a heading instead of below it.
-     Small caps by letter-spacing rather than by `font-variant`, which the UI
-     stack renders as real small capitals only for some of the four languages
-     and as nothing at all for the rest. */
+  /* Two labels wear this, and they play different parts. This one sits above a
+     heading instead of below it; the releases one is itself the heading that
+     names its box, an `h3`, so the rule has to hold the `h1, h2, h3` line-height
+     back to the body value or the label loses four pixels of height the day it
+     stops being a `p`. Small caps by letter-spacing rather than by
+     `font-variant`, which the UI stack renders as real small capitals only for
+     some of the four languages and as nothing at all for the rest. */
   .eyebrow {
     text-transform: uppercase; letter-spacing: 0.14em;
-    font-size: 0.72rem; font-weight: 700;
+    font-size: 0.72rem; font-weight: 700; line-height: 1.6;
     color: var(--violeeter-magenta);
     margin: 0 0 10px;
   }
@@ -509,7 +518,7 @@
   </p>
 
   <div class="releases" id="releases" hidden>
-    <p class="eyebrow" data-i18n="releases.eyebrow">recent releases</p>
+    <h3 class="eyebrow" data-i18n="releases.eyebrow">recent releases</h3>
     <div class="release" id="release-latest">
       <p class="release-label" data-i18n="releases.latest">latest version</p>
       <p class="release-head">
@@ -633,11 +642,17 @@ app/scripts/install.sh</pre>
   const DATE_LOCALES = { en: "en", pt: "pt-BR", es: "es", de: "de" };
   let releases = null;
 
+  function isHttpUrl(value) {
+    try { return ["http:", "https:"].includes(new URL(value).protocol); }
+    catch (e) { return false; }
+  }
+
   function isRelease(entry) {
     return !!entry
       && typeof entry.version === "string" && entry.version !== ""
-      && typeof entry.published_at === "string" && entry.published_at !== ""
-      && typeof entry.html_url === "string" && entry.html_url !== ""
+      && typeof entry.published_at === "string"
+      && !isNaN(new Date(entry.published_at).getTime())
+      && typeof entry.html_url === "string" && isHttpUrl(entry.html_url)
       && typeof entry.summary === "string" && entry.summary !== "";
   }
 
@@ -686,8 +701,10 @@ app/scripts/install.sh</pre>
         previous: isRelease(data.previous) ? data.previous : null
       };
       if (!releases.previous) document.getElementById("release-previous").remove();
-      if (typeof data.all_tags_url === "string" && data.all_tags_url !== "") {
+      if (isHttpUrl(data.all_tags_url)) {
         document.getElementById("release-all-link").href = data.all_tags_url;
+      } else {
+        document.getElementById("release-all-link").parentNode.remove();
       }
       paintReleases();
       releasesBox.hidden = false;
