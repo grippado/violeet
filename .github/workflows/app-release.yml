@@ -39,6 +39,13 @@ permissions:
   # a release job has no reason to be able to push code.
   contents: write
 
+# Two tags pushed in a row would otherwise race each other pushing main. Queued
+# and never cancelled: a cancelled release is a published release whose artifacts
+# never got built.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build, sign, publish
@@ -59,6 +66,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # The release body is the tag's own message, which lives in the tag
+          # object and not in any commit. Without this the annotation is not
+          # guaranteed to be on the runner and the changelog silently degrades
+          # to the fallback.
+          fetch-tags: true
 
       - name: Select Xcode
         run: sudo xcode-select -switch /Applications/Xcode_16.4.app
@@ -142,12 +154,32 @@ jobs:
         working-directory: app/dist
         run: shasum -a 256 * | tee SHA256SUMS.txt
 
+      # The changelog is read, never written: the workflow copies what a human
+      # already wrote on the tag and says so plainly when there is nothing to
+      # copy. It does not summarize and it does not invent prose. The chain
+      # itself lives in the script because docs/latest-release.json below
+      # resolves the same thing for two tags, and two copies of a fallback chain
+      # drift apart the first time one of them is fixed.
+      - name: Resolve changelog
+        id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/release-meta.sh changelog "v${VERSION}" \
+            > "$RUNNER_TEMP/changelog.md"
+          cat "$RUNNER_TEMP/changelog.md"
+
       - name: Write release notes
         id: notes
         run: |
           set -euo pipefail
           {
             echo "## violeet ${{ steps.version.outputs.version }}"
+            echo
+            cat "$RUNNER_TEMP/changelog.md"
+            echo
+            echo "---"
             echo
             echo "macOS 14 or later. Universal (Apple silicon and Intel)."
             echo
@@ -178,3 +210,68 @@ jobs:
             app/dist/*.dmg
             app/dist/*.zip
             app/dist/SHA256SUMS.txt
+
+      # After the release and never before it: the file names a published_at and
+      # an html_url, and neither exists until the step above has run.
+      #
+      # A prerelease is skipped for the same reason it is not the download the
+      # front page offers: it must not become what the page calls the current
+      # version.
+      - name: Update docs/latest-release.json
+        if: ${{ !contains(steps.version.outputs.version, '-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # A dispatch can name any tag, and rebuilding an old one is an ordinary
+          # thing to want. Writing the file from it would announce a superseded
+          # version as the current one, so the step skips and succeeds.
+          highest=""
+          while read -r tag; do
+            [[ -z "$tag" || "$tag" == *-* ]] && continue
+            highest="$tag"
+            break
+          done < <(git tag --list 'v[0-9]*' --sort=-v:refname)
+          if [[ "$highest" != "v${VERSION}" ]]; then
+            echo "v${VERSION} is not the highest released version (${highest:-none});" \
+              "leaving docs/latest-release.json untouched"
+            exit 0
+          fi
+
+          # The checkout below swaps the whole tree for main's, so a script run
+          # after it is main's script, not the tag's. The release body above was
+          # written by the tag's, and both have to come from the same source.
+          install -m 755 scripts/release-meta.sh "$RUNNER_TEMP/release-meta.sh"
+
+          # The job is checked out at the tag, which is a detached HEAD: a commit
+          # made here would belong to no branch and a push would have nowhere to
+          # land. The file belongs to main, so main is what gets checked out.
+          git fetch --no-tags origin main
+          git checkout -B main FETCH_HEAD
+
+          "$RUNNER_TEMP/release-meta.sh" json "v${VERSION}" \
+            > docs/latest-release.json
+          cat docs/latest-release.json
+
+          if git diff --quiet -- docs/latest-release.json; then
+            echo "docs/latest-release.json already describes this release"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/latest-release.json
+          git commit -m "🤖 chore(release): docs/latest-release.json em v${VERSION}"
+
+          # No `|| true` anywhere above, on purpose. A release the site does not
+          # know about is worse than a red job: the red job is the only thing
+          # that tells anyone the two went out of sync. The retry below rebases
+          # onto whatever landed meanwhile and pushes again; if that also fails,
+          # the step fails.
+          git push origin main || {
+            git fetch --no-tags origin main
+            git rebase FETCH_HEAD
+            git push origin main
+          }

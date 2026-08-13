@@ -1,0 +1,19 @@
+{
+  "latest": {
+    "version": "0.4.2",
+    "tag": "v0.4.2",
+    "published_at": "2026-08-12T01:14:22Z",
+    "html_url": "https://github.com/grippado/violeet/releases/tag/v0.4.2",
+    "summary": "número de build derivado da data do commit (LAB-93)",
+    "changelog_source": "tag_message"
+  },
+  "previous": {
+    "version": "0.4.1",
+    "tag": "v0.4.1",
+    "published_at": "2026-08-12T00:08:45Z",
+    "html_url": "https://github.com/grippado/violeet/releases/tag/v0.4.1",
+    "summary": "microfone liberado para os agentes nas abas (LAB-82)",
+    "changelog_source": "tag_message"
+  },
+  "all_tags_url": "https://github.com/grippado/violeet/tags"
+}
