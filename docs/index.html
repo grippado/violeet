@@ -649,13 +649,22 @@ app/scripts/install.sh</pre>
 
   // A summary is an object keyed by language, or a plain string on a tag cut
   // before the convention existed. Both have to render.
-  function releaseSummary(entry) {
+  // Returns the key it picked as well as the text, because the element's `lang`
+  // has to describe the sentence that is actually on screen. A summary the page
+  // fell back to English for is an English sentence, whatever the page language.
+  function releaseSummaryPick(entry) {
     const summary = entry && entry.summary;
-    if (typeof summary === "string") return summary;
-    if (!summary || typeof summary !== "object") return "";
-    const picked = summary[current] || summary.en
-      || Object.values(summary).find(v => typeof v === "string" && v !== "");
-    return typeof picked === "string" ? picked : "";
+    if (typeof summary === "string") return { text: summary, key: null };
+    if (!summary || typeof summary !== "object") return { text: "", key: null };
+    for (const key of [current, "en"].concat(Object.keys(summary))) {
+      const value = summary[key];
+      if (typeof value === "string" && value !== "") return { text: value, key };
+    }
+    return { text: "", key: null };
+  }
+
+  function releaseSummary(entry) {
+    return releaseSummaryPick(entry).text;
   }
 
   function isRelease(entry) {
@@ -693,11 +702,12 @@ app/scripts/install.sh</pre>
     // `textContent`: the summary is release copy, not page copy, and it is the
     // one string here that does not come out of `i18n.js`.
     const summary = box.querySelector(".release-summary");
-    summary.textContent = releaseSummary(entry);
+    const picked = releaseSummaryPick(entry);
+    summary.textContent = picked.text;
     // The tag carries one sentence per language, so the element's own `lang`
-    // has to follow the pick. Left fixed, a screen reader reads three of the
-    // four in the wrong voice.
-    summary.lang = DATE_LOCALES[current] || "en";
+    // follows the pick and not the page. Left on the page language, a reader in
+    // Spanish would hear an English sentence announced as Spanish.
+    summary.lang = DATE_LOCALES[picked.key || current] || "en";
   }
 
   // Called again on every language change, because the date is the one value in
