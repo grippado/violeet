@@ -160,6 +160,19 @@ jobs:
       # itself lives in the script because docs/latest-release.json below
       # resolves the same thing for two tags, and two copies of a fallback chain
       # drift apart the first time one of them is fixed.
+      # The checkout leaves refs/tags/<tag> pointing straight at the commit — a
+      # lightweight tag — even when the tag on the remote is annotated, and
+      # `fetch-tags` does not change that for the tag that triggered the run.
+      # release-meta.sh refuses a lightweight tag on purpose, so without this
+      # fetch every release publishes no changelog at all and nothing says so.
+      - name: Fetch annotated tag object
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/v${VERSION}:refs/tags/v${VERSION}"
+          test "$(git cat-file -t "v${VERSION}")" = "tag"
+
       - name: Resolve changelog
         id: changelog
         env:
@@ -201,6 +214,10 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          # Explicit because a workflow_dispatch runs with the `main` ref, and
+          # without this the action has no tag to publish against. Dispatch is
+          # exactly the path for repairing a release already cut.
+          tag_name: v${{ steps.version.outputs.version }}
           name: violeet ${{ steps.version.outputs.version }}
           body_path: notes.md
           # A tag that looks like a prerelease is published as one, so a
