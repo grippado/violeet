@@ -41,9 +41,20 @@ NO_CHANGELOG="Sem changelog registrado para esta tag."
 #   Summary-en: The build number is now derived from the commit date.
 #   Summary-pt: O numero de build passa a ser derivado da data do commit.
 #
-# A tag without trailers breaks nothing: the four languages fall back to the
-# first line, which is what every tag predating this convention already did.
-SUMMARY_LANGS=(en pt es de)
+# A tag without trailers breaks nothing: the languages fall back to the first
+# line, which is what every tag predating this convention already did.
+#
+# Only a language whose text was reviewed by someone who speaks it belongs on
+# this list. The tags also declare `Summary-es` and `Summary-de`, and those stay
+# out on purpose: they were written by someone who speaks neither, and a wrong
+# sentence published with an official look is worse than the page showing
+# English. A re-read already caught a `sich auflöst` that said "dissolves itself"
+# where it meant "resolves", which is the argument that there may be another.
+#
+# The page falls back to English on its own for every language absent here. Once
+# one is reviewed, adding it to this line is enough: the text is already on the
+# tag.
+SUMMARY_LANGS=(en pt)
 
 CHANGELOG=""
 CHANGELOG_SOURCE="none"

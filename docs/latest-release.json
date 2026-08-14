@@ -6,9 +6,7 @@
     "html_url": "https://github.com/grippado/violeet/releases/tag/v0.4.2",
     "summary": {
       "en": "The build number is derived from the commit date, so two machines building the same commit no longer disagree.",
-      "pt": "O número de build passa a ser derivado da data do commit, então duas máquinas que compilam o mesmo commit não divergem mais.",
-      "es": "El número de build pasa a derivarse de la fecha del commit, así que dos máquinas que compilan el mismo commit ya no discrepan.",
-      "de": "Die Build-Nummer wird aus dem Commit-Datum abgeleitet, sodass zwei Maschinen beim selben Commit nicht mehr auseinanderlaufen."
+      "pt": "O número de build passa a ser derivado da data do commit, então duas máquinas que compilam o mesmo commit não divergem mais."
     },
     "changelog_source": "tag_message"
   },
@@ -19,9 +17,7 @@
     "html_url": "https://github.com/grippado/violeet/releases/tag/v0.4.1",
     "summary": {
       "en": "Agents running in a tab can now reach the microphone, which the sandbox had been denying them.",
-      "pt": "Agentes rodando numa aba passam a alcançar o microfone, que o sandbox vinha negando a eles.",
-      "es": "Los agentes que corren en una pestaña ya pueden acceder al micrófono, que el sandbox les venía negando.",
-      "de": "Agenten in einem Tab erreichen nun das Mikrofon, das ihnen die Sandbox bisher verweigert hatte."
+      "pt": "Agentes rodando numa aba passam a alcançar o microfone, que o sandbox vinha negando a eles."
     },
     "changelog_source": "tag_message"
   },
