@@ -31,8 +31,19 @@ if ! git -C "$ROOT" rev-parse --git-dir > /dev/null 2>&1; then
 fi
 cd "$ROOT"
 
-SUMMARY_MAX=140
+SUMMARY_MAX=180
 NO_CHANGELOG="Sem changelog registrado para esta tag."
+
+# The page switches language as a whole, and the summary is the one line in it
+# that comes from outside. A tag declares all four versions as trailers at the
+# end of its message:
+#
+#   Summary-en: The build number is now derived from the commit date.
+#   Summary-pt: O numero de build passa a ser derivado da data do commit.
+#
+# A tag without trailers breaks nothing: the four languages fall back to the
+# first line, which is what every tag predating this convention already did.
+SUMMARY_LANGS=(en pt es de)
 
 CHANGELOG=""
 CHANGELOG_SOURCE="none"
@@ -119,6 +130,27 @@ strip_version_header() {
     printf '%s' "$rest"
 }
 
+# The trailers address the page, not the release: publishing them in the body
+# would put four translations of one sentence under the text they summarize.
+strip_summary_trailers() {
+    printf '%s\n' "$1" | awk '
+        /^Summary-[a-z][a-z]:/ { next }
+        { lines[n++] = $0 }
+        END {
+            last = -1
+            for (i = 0; i < n; i++) if (lines[i] ~ /[^[:space:]]/) last = i
+            for (i = 0; i <= last; i++) print lines[i]
+        }
+    '
+}
+
+trailer_for() {
+    local lang="$1" text="$2"
+    printf '%s\n' "$text" \
+        | sed -n "s/^Summary-${lang}:[[:space:]]*//p" \
+        | head -n 1
+}
+
 # The JSON carries one line; the full body stays on the release, which is the
 # one place it can grow without the page having to render it.
 summarize() {
@@ -179,10 +211,18 @@ previous_tag() {
 
 entry_json() {
     local tag="$1"
-    local summary published_at html_url meta
+    local fallback published_at html_url meta lang value summary
 
     resolve_changelog "$tag"
-    summary="$(summarize "$CHANGELOG")"
+    fallback="$(summarize "$(strip_summary_trailers "$CHANGELOG")")"
+
+    summary="$(jq -n '{}')"
+    for lang in "${SUMMARY_LANGS[@]}"; do
+        value="$(trailer_for "$lang" "$CHANGELOG")"
+        [[ -z "$value" ]] && value="$fallback"
+        summary="$(printf '%s' "$summary" \
+            | jq --arg k "$lang" --arg v "$value" '. + {($k): $v}')"
+    done
 
     if meta="$(gh release view "$tag" --json publishedAt,url 2> /dev/null)"; then
         published_at="$(printf '%s' "$meta" | jq -r '.publishedAt')"
@@ -197,7 +237,7 @@ entry_json() {
         --arg tag "$tag" \
         --arg published_at "$published_at" \
         --arg html_url "$html_url" \
-        --arg summary "$summary" \
+        --argjson summary "$summary" \
         --arg changelog_source "$CHANGELOG_SOURCE" \
         '{
             version: $version,
@@ -242,7 +282,7 @@ main() {
     case "$command" in
         changelog)
             resolve_changelog "$tag"
-            printf '%s\n' "$CHANGELOG"
+            strip_summary_trailers "$CHANGELOG"
             ;;
         json)
             release_json "$tag"

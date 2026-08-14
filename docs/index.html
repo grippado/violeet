@@ -525,7 +525,7 @@
         <a class="mono release-num" href="https://github.com/grippado/violeet/releases"></a>
         <span class="variant-meta release-date"></span>
       </p>
-      <p class="release-summary" lang="pt-BR"></p>
+      <p class="release-summary"></p>
     </div>
     <div class="release" id="release-previous">
       <p class="release-label" data-i18n="releases.previous">previous version</p>
@@ -533,7 +533,7 @@
         <a class="mono release-num" href="https://github.com/grippado/violeet/releases"></a>
         <span class="variant-meta release-date"></span>
       </p>
-      <p class="release-summary" lang="pt-BR"></p>
+      <p class="release-summary"></p>
     </div>
     <p class="release-all">
       <a id="release-all-link" href="https://github.com/grippado/violeet/tags" data-i18n="releases.all">see all versions ↗</a>
@@ -647,13 +647,24 @@ app/scripts/install.sh</pre>
     catch (e) { return false; }
   }
 
+  // A summary is an object keyed by language, or a plain string on a tag cut
+  // before the convention existed. Both have to render.
+  function releaseSummary(entry) {
+    const summary = entry && entry.summary;
+    if (typeof summary === "string") return summary;
+    if (!summary || typeof summary !== "object") return "";
+    const picked = summary[current] || summary.en
+      || Object.values(summary).find(v => typeof v === "string" && v !== "");
+    return typeof picked === "string" ? picked : "";
+  }
+
   function isRelease(entry) {
     return !!entry
       && typeof entry.version === "string" && entry.version !== ""
       && typeof entry.published_at === "string"
       && !isNaN(new Date(entry.published_at).getTime())
       && typeof entry.html_url === "string" && isHttpUrl(entry.html_url)
-      && typeof entry.summary === "string" && entry.summary !== "";
+      && releaseSummary(entry) !== "";
   }
 
   // The stamp is UTC and stays UTC. Rendered in the reader's zone, a release cut
@@ -681,7 +692,12 @@ app/scripts/install.sh</pre>
     box.querySelector(".release-date").textContent = releaseDate(entry.published_at);
     // `textContent`: the summary is release copy, not page copy, and it is the
     // one string here that does not come out of `i18n.js`.
-    box.querySelector(".release-summary").textContent = entry.summary;
+    const summary = box.querySelector(".release-summary");
+    summary.textContent = releaseSummary(entry);
+    // The tag carries one sentence per language, so the element's own `lang`
+    // has to follow the pick. Left fixed, a screen reader reads three of the
+    // four in the wrong voice.
+    summary.lang = DATE_LOCALES[current] || "en";
   }
 
   // Called again on every language change, because the date is the one value in
