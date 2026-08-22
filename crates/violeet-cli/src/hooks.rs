@@ -99,8 +99,34 @@ pub const PERMISSION_EVENT: &str = "PermissionRequest";
 /// marker survives a port change because it is matched independently of it.
 pub const MARKER: &str = "src=violeet";
 
-/// Informational hooks answer immediately; five seconds is already generous for
-/// a loopback POST the daemon replies `204` to without doing any work.
+/// How an violeet entry is recognized in the `command` form.
+///
+/// The marker as we write it: an argument of its own, leading `--`. Not the
+/// bare `MARKER`, because a `command` is free-form shell and somebody else's
+/// hook may legitimately contain our query string — a `curl` at
+/// `/hook/event?src=violeet`, which is exactly what a curious user would write
+/// after reading our own URL in the docs. Matching the loose substring would
+/// make `uninstall-hooks` delete that person's hook without a word. This is the
+/// `command` counterpart of the rule already asserted for `url`: an unmarked
+/// entry is somebody else's, even when it points at our own route.
+pub const COMMAND_MARKER: &str = "--src=violeet";
+
+/// The harness's deadline for an informational entry.
+///
+/// Five seconds is generous for a loopback POST the daemon answers `204` to
+/// without doing any work — but this budget is no longer the POST alone. It now
+/// covers the fork of `sh`, reading the payload, the `sed` over the discovery
+/// file, and only then `curl`. So the two numbers have to be read together: the
+/// script's own `curl -m 2` has to expire strictly *inside* this, otherwise a
+/// daemon that accepts the connection and then stalls would have the harness
+/// kill the command at the same moment `curl` gives up, and the transcript
+/// would fill with hook-timeout lines — the same per-tool-call noise the script
+/// exists to end, wearing a different name.
+///
+/// Which is also why the fix is the shorter `curl` rather than a longer
+/// deadline: an informational hook carries telemetry, and telemetry must never
+/// hold up a tool call. Same reasoning, same 2 seconds, as the status line
+/// wrapper against this very daemon.
 const INFORMATIONAL_TIMEOUT: u64 = 5;
 
 /// The permission hook must outlive the daemon's own deadline.
@@ -186,12 +212,12 @@ pub fn install_script_in(violeet_dir: &std::path::Path) -> Result<PathBuf, Strin
 /// recognized entry for entry, so the next `install-hooks` replaces it instead
 /// of doubling it.
 pub fn is_ours(hook: &Value) -> bool {
-    let marked = |field: &str| {
+    let marked = |field: &str, marker: &str| {
         hook.get(field)
             .and_then(Value::as_str)
-            .is_some_and(|value| value.contains(MARKER))
+            .is_some_and(|value| value.contains(marker))
     };
-    marked("url") || marked("command")
+    marked("url", MARKER) || marked("command", COMMAND_MARKER)
 }
 
 /// True if this matcher group contains only our hooks (so the whole group goes).
@@ -209,7 +235,7 @@ pub fn group_is_ours(group: &Value) -> bool {
 /// argument is ours and travels with the entry, so `is_ours` keeps working
 /// either way.
 pub fn informational_command(script: &str) -> String {
-    format!("\"{script}\" --{MARKER}")
+    format!("\"{script}\" {COMMAND_MARKER}")
 }
 
 /// One `{matcher?, hooks: [...]}` group for `event`.
@@ -377,6 +403,29 @@ mod tests {
         );
     }
 
+    /// The `command` half of the rule above. A hook of somebody else's that
+    /// curls our documented route carries our query string in its command line,
+    /// and must not be swept up by uninstall on that account.
+    #[test]
+    fn a_foreign_command_touching_our_route_is_not_ours() {
+        let foreign = json!({
+            "type": "command",
+            "command": "curl -s 'http://127.0.0.1:9847/hook/event?src=violeet'",
+        });
+        assert!(
+            !is_ours(&foreign),
+            "our query string inside somebody else's command is not our entry; \
+             uninstall would delete a hook we never installed"
+        );
+
+        // Ours is recognized by the argument we write, not by the path.
+        let ours = json!({
+            "type": "command",
+            "command": informational_command("/somewhere/else/renamed.sh"),
+        });
+        assert!(is_ours(&ours), "the marker travels with the entry, not the file name");
+    }
+
     /// Both shapes answer to the same marker, or uninstall strands whichever
     /// one it cannot see. The HTTP entry here is the layout every already
     /// installed machine is carrying right now.
@@ -447,6 +496,30 @@ mod tests {
              made by the time we notice there is nobody to receive it"
         );
         assert!(script.contains("exit 0"));
+    }
+
+    /// The script's own curl deadline has to expire strictly inside the entry's
+    /// timeout. Both numbers live apart — one in Rust, one in shell — and the
+    /// comment on INFORMATIONAL_TIMEOUT claims they are related; this is what
+    /// makes the claim true. Raising one without the other brings back
+    /// per-tool-call noise, as a hook timeout instead of a refused connection.
+    #[test]
+    fn the_curl_deadline_expires_inside_the_hook_timeout() {
+        let script = adapter_script_source();
+        let at = script.find("curl -s -m ").expect("the script POSTs with a deadline");
+        let curl_timeout: u64 = script[at + "curl -s -m ".len()..]
+            .split_whitespace()
+            .next()
+            .expect("a number after -m")
+            .parse()
+            .expect("-m takes seconds");
+
+        assert!(
+            curl_timeout < INFORMATIONAL_TIMEOUT,
+            "curl -m {curl_timeout} against a hook timeout of {INFORMATIONAL_TIMEOUT}s: \
+             a stalled daemon would have the harness kill the command at the same \
+             moment curl gives up, and the transcript fills with hook-timeout lines"
+        );
     }
 
     /// An informational hook has no decision to make, so it must never hand

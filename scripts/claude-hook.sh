@@ -60,7 +60,14 @@ command -v curl >/dev/null 2>&1 || exit 0
 # VIOLEET_TAB_ID is what binds a session to the tab it runs in (ADR-003), and
 # the daemon reads an empty header as "no tab" rather than as a tab — so it is
 # sent always, empty included, exactly as the native http hook sent it.
-printf '%s' "$payload" | curl -s -m 5 -X POST \
+#
+# `-m 2`, not 5: the hook entry's own timeout is 5s and it covers this whole
+# script, not just the POST. Matching the two would mean a stalled daemon has
+# curl give up at the same instant the harness kills the command, turning a
+# silent failure into a hook-timeout line per tool call. Two seconds expires
+# well inside the budget, and telemetry is never worth delaying a tool call
+# for — the status line wrapper hits this same daemon with the same -m 2.
+printf '%s' "$payload" | curl -s -m 2 -X POST \
     -H 'Content-Type: application/json' \
     -H "x-violeet-tab-id: ${VIOLEET_TAB_ID:-}" \
     --data-binary @- \
