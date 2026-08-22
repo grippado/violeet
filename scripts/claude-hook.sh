@@ -28,13 +28,25 @@
 #
 # The contract with the harness is one line long: exit 0, always, silently. An
 # informational hook has no decision to make, so there is no outcome this script
-# could report that Claude Code should act on.
+# could report that Claude Code should act on. Note how narrow that is: exit 2
+# from a PreToolUse hook BLOCKS the tool call, so a stray failure here does not
+# merely add noise, it stops the user's work.
+#
+# Which is why every variable this script reads is guarded rather than assumed.
+# `set -u` turns an unset variable into an error, and an error under `set -e`
+# into an exit — so `$HOME` alone, on a machine that somehow has none, would
+# exit 1 under sh and 2 under dash, printing to stderr on the way out. That is
+# the precise pair of symptoms this whole file exists to avoid, produced by the
+# file itself.
 set -eu
 
 payload=$(cat)
 [ -n "$payload" ] || exit 0
 
-discovery="$HOME/.violeet/daemon.json"
+home=${HOME:-}
+[ -n "$home" ] || exit 0
+
+discovery="$home/.violeet/daemon.json"
 [ -f "$discovery" ] || exit 0
 
 port=$(

@@ -128,9 +128,18 @@ pub fn permission_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/hook/permission-request?{MARKER}")
 }
 
+/// Where the adapter script lives inside a given violeet directory.
+///
+/// Split from `script_path` so the install can be exercised against a scratch
+/// directory. The alternative was moving `HOME` around inside the tests, and
+/// this crate forbids `unsafe`, which `std::env::set_var` now requires.
+pub fn script_path_in(violeet_dir: &std::path::Path) -> PathBuf {
+    violeet_dir.join("claude-hook.sh")
+}
+
 /// Where the adapter script lives once installed.
 pub fn script_path() -> Option<PathBuf> {
-    crate::probe::violeet_dir().map(|d| d.join("claude-hook.sh"))
+    crate::probe::violeet_dir().map(|d| script_path_in(&d))
 }
 
 /// The adapter script body — versioned in `scripts/claude-hook.sh` and copied
@@ -145,12 +154,17 @@ pub fn adapter_script_source() -> &'static str {
 /// is compiled into this binary, so an upgraded CLI beside a stale script is a
 /// version skew nobody would think to look for.
 pub fn install_script() -> Result<PathBuf, String> {
-    let Some(path) = script_path() else {
+    let Some(dir) = crate::probe::violeet_dir() else {
         return Err("HOME is not set".into());
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
+    install_script_in(&dir)
+}
+
+/// The body of the install, against an explicit directory.
+pub fn install_script_in(violeet_dir: &std::path::Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(violeet_dir)
+        .map_err(|e| format!("create {}: {e}", violeet_dir.display()))?;
+    let path = script_path_in(violeet_dir);
     std::fs::write(&path, adapter_script_source())
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     #[cfg(unix)]
@@ -438,13 +452,167 @@ mod tests {
     /// An informational hook has no decision to make, so it must never hand
     /// Claude Code an exit code that reads as one. Exit 2 on `PreToolUse`
     /// blocks the tool call outright.
+    ///
+    /// This RUNS the script, and the earlier version of this test did not — it
+    /// scanned the source for literal `exit N` lines. That reads only the exits
+    /// we wrote on purpose and is blind to the ones the shell produces for us:
+    /// `set -u` on an unguarded variable, `set -e` on any command that starts
+    /// failing later. It passed while the script exited 1 under sh and 2 under
+    /// dash with `HOME` unset, which is the exact failure it claimed to prevent.
+    /// A contract about what a process does when the world is hostile can only
+    /// be tested by making the world hostile.
     #[test]
-    fn the_script_never_exits_nonzero() {
-        for line in adapter_script_source().lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("exit ") {
-                assert_eq!(rest, "0", "a nonzero exit from a PreToolUse hook blocks the tool");
+    fn the_script_stays_silent_and_succeeds_in_a_hostile_environment() {
+        let dir = temp_dir("hostile");
+        let script = dir.join("claude-hook.sh");
+        write_script(&script);
+
+        let no_home = dir.join("empty-home");
+        std::fs::create_dir_all(&no_home).unwrap();
+
+        let corrupt = dir.join("corrupt-home");
+        std::fs::create_dir_all(corrupt.join(".violeet")).unwrap();
+        std::fs::write(corrupt.join(".violeet/daemon.json"), "not json at all").unwrap();
+
+        // A discovery file naming a port nothing is listening on. This is the
+        // common case, not an exotic one: the daemon writes the file and
+        // removes it on a clean shutdown, so any unclean exit leaves it behind.
+        let closed = dir.join("closed-port-home");
+        std::fs::create_dir_all(closed.join(".violeet")).unwrap();
+        std::fs::write(
+            closed.join(".violeet/daemon.json"),
+            r#"{"pid":1,"socket":"/tmp/v.sock","hook_port":9}"#,
+        )
+        .unwrap();
+
+        // A PATH holding what the script needs and NOT curl. An empty PATH would
+        // be a different (and unreal) test: it takes away `cat` too, so it
+        // exercises a machine with no userland rather than one with no curl.
+        let curl_less = dir.join("bin");
+        std::fs::create_dir_all(&curl_less).unwrap();
+        for tool in ["cat", "sed", "head"] {
+            let src = ["/usr/bin", "/bin"]
+                .iter()
+                .map(|d| std::path::Path::new(d).join(tool))
+                .find(|p| p.exists())
+                .unwrap_or_else(|| panic!("{tool} has to exist to run this test"));
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&src, curl_less.join(tool)).unwrap();
+        }
+        let curl_less = curl_less.display().to_string();
+
+        let cases: Vec<(&str, Option<&std::path::Path>, &str)> = vec![
+            ("no HOME at all", None, "/usr/bin:/bin"),
+            ("HOME with no discovery file", Some(&no_home), "/usr/bin:/bin"),
+            ("discovery file that is not JSON", Some(&corrupt), "/usr/bin:/bin"),
+            ("discovery naming a closed port", Some(&closed), "/usr/bin:/bin"),
+            ("no curl on PATH", Some(&closed), &curl_less),
+        ];
+
+        for (what, home, path) in cases {
+            let mut cmd = std::process::Command::new("/bin/sh");
+            cmd.arg(&script)
+                .arg("--src=violeet")
+                .env_clear()
+                .env("PATH", path)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if let Some(home) = home {
+                cmd.env("HOME", home);
             }
+
+            let mut child = cmd.spawn().expect("spawn the adapter");
+            {
+                use std::io::Write;
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(br#"{"hook_event_name":"PreToolUse","session_id":"s"}"#)
+                    .unwrap();
+            }
+            let out = child.wait_with_output().expect("run the adapter");
+
+            assert!(
+                out.status.success(),
+                "{what}: exited {:?} — a nonzero exit from PreToolUse blocks the tool call. \
+                 stderr: {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr),
+            );
+            assert!(
+                out.stdout.is_empty(),
+                "{what}: wrote {:?} to stdout, which the harness parses as hook output",
+                String::from_utf8_lossy(&out.stdout),
+            );
+            assert!(
+                out.stderr.is_empty(),
+                "{what}: wrote {:?} to stderr, which lands in the transcript as a hook error",
+                String::from_utf8_lossy(&out.stderr),
+            );
+        }
+    }
+
+    /// `install_script` is the one function here that touches the user's disk,
+    /// and it was the one with no test. Mode matters (it must not inherit the
+    /// session umask), and so does the returned path: `run_install` interpolates
+    /// it into the entries, so a path that disagrees with what was written is a
+    /// hook pointing at nothing.
+    #[test]
+    fn install_script_writes_an_executable_at_the_promised_path() {
+        let dir = temp_dir("install");
+        let violeet_dir = dir.join(".violeet");
+
+        let written = install_script_in(&violeet_dir).expect("install the script");
+        assert_eq!(
+            written,
+            script_path_in(&violeet_dir),
+            "the entries are written against this path"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&written).unwrap(),
+            adapter_script_source(),
+            "the installed body is the one compiled into this binary"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&written).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "the umask must not get a say here");
+        }
+
+        // Second run over a stale body replaces it rather than leaving it — the
+        // version skew an upgraded binary would otherwise sit next to.
+        std::fs::write(&written, "#!/bin/sh\nexit 3\n").unwrap();
+        install_script_in(&violeet_dir).expect("reinstall over a stale script");
+        assert_eq!(
+            std::fs::read_to_string(&written).unwrap(),
+            adapter_script_source()
+        );
+    }
+
+    // --- helpers -------------------------------------------------------
+
+    /// A private directory for one test. `std::env::temp_dir` plus the pid and
+    /// a label, because the workspace has no tempdir crate and adding one for
+    /// two tests is a poor trade.
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("violeet-hooks-tests")
+            .join(format!("{}-{label}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the test directory");
+        dir
+    }
+
+    fn write_script(path: &std::path::Path) {
+        std::fs::write(path, adapter_script_source()).expect("write the script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
     }
 }
