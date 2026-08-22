@@ -213,8 +213,8 @@ impl Settings {
     /// Replacing rather than appending is what makes a second `install-hooks`
     /// idempotent — and what lets it fix a stale port without the user having to
     /// uninstall first.
-    pub fn upsert_ours(&mut self, event: &str, port: u16) {
-        let entry = hooks::entry_for(event, port);
+    pub fn upsert_ours(&mut self, event: &str, port: u16, script: &str) {
+        let entry = hooks::entry_for(event, port, script);
         let hooks_map = self.hooks_mut();
 
         let list = hooks_map
@@ -418,6 +418,8 @@ fn to_string_with_indent(value: &Value, indent: &str) -> String {
 mod tests {
     use super::*;
 
+    const SCRIPT: &str = "/Users/me/.violeet/claude-hook.sh";
+
     fn settings_from(text: &str) -> Settings {
         Settings {
             path: PathBuf::from("/nowhere/settings.json"),
@@ -453,7 +455,7 @@ mod tests {
         assert_eq!(s.rendered(), original, "reading and re-rendering must be a no-op");
 
         for event in hooks::all_events() {
-            s.upsert_ours(event, 9847);
+            s.upsert_ours(event, 9847, SCRIPT);
         }
         assert_ne!(s.rendered(), original);
 
@@ -474,7 +476,7 @@ mod tests {
         let mut s = settings_from(original);
 
         for event in hooks::all_events() {
-            s.upsert_ours(event, 9847);
+            s.upsert_ours(event, 9847, SCRIPT);
         }
         for event in hooks::all_events() {
             s.remove_ours(event);
@@ -490,13 +492,13 @@ mod tests {
     fn installing_twice_is_the_same_as_installing_once() {
         let mut once = settings_from("{}");
         for event in hooks::all_events() {
-            once.upsert_ours(event, 9847);
+            once.upsert_ours(event, 9847, SCRIPT);
         }
 
         let mut twice = settings_from("{}");
         for _ in 0..2 {
             for event in hooks::all_events() {
-                twice.upsert_ours(event, 9847);
+                twice.upsert_ours(event, 9847, SCRIPT);
             }
         }
 
@@ -506,18 +508,68 @@ mod tests {
 
     /// Re-running against a different port replaces rather than accumulates —
     /// which is what makes a stale-port fix a re-run and not a manual edit.
+    ///
+    /// Asserted on the permission hook because it is the only one that still
+    /// carries a port: the informational entries read it from the discovery
+    /// file when they fire, so a port change no longer stales them at all.
     #[test]
     fn reinstalling_on_a_new_port_replaces_the_old_entry() {
         let mut s = settings_from("{}");
-        s.upsert_ours("Stop", 9847);
-        s.upsert_ours("Stop", 51234);
+        s.upsert_ours(hooks::PERMISSION_EVENT, 9847, SCRIPT);
+        s.upsert_ours(hooks::PERMISSION_EVENT, 51234, SCRIPT);
 
-        let groups = s.groups_for("Stop");
+        let groups = s.groups_for(hooks::PERMISSION_EVENT);
         assert_eq!(groups.len(), 1);
         assert!(groups[0]["hooks"][0]["url"]
             .as_str()
             .unwrap()
             .contains("51234"));
+    }
+
+    /// The same guarantee for the informational entries, whose moving part is
+    /// the script path rather than the port.
+    #[test]
+    fn reinstalling_from_another_home_replaces_the_old_entry() {
+        let mut s = settings_from("{}");
+        s.upsert_ours("Stop", 9847, "/Users/old/.violeet/claude-hook.sh");
+        s.upsert_ours("Stop", 9847, "/Users/new/.violeet/claude-hook.sh");
+
+        let groups = s.groups_for("Stop");
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("/Users/new/"));
+    }
+
+    /// An upgrade lands on a file already carrying the previous all-HTTP
+    /// layout. It has to replace those entries, not sit beside them — two
+    /// hooks on one event would double every event the daemon receives.
+    #[test]
+    fn installing_over_the_previous_http_layout_replaces_it() {
+        let previous = concat!(
+            "{\n",
+            "    \"hooks\": {\n",
+            "        \"Stop\": [\n",
+            "            {\n",
+            "                \"hooks\": [\n",
+            "                    {\n",
+            "                        \"type\": \"http\",\n",
+            "                        \"url\": \"http://127.0.0.1:9847/hook/event?src=violeet\"\n",
+            "                    }\n",
+            "                ]\n",
+            "            }\n",
+            "        ]\n",
+            "    }\n",
+            "}\n"
+        );
+
+        let mut s = settings_from(previous);
+        s.upsert_ours("Stop", 9847, SCRIPT);
+
+        let groups = s.groups_for("Stop");
+        assert_eq!(groups.len(), 1, "the old entry must be gone, not kept");
+        assert_eq!(groups[0]["hooks"][0]["type"], "command");
     }
 
     /// Other people's hooks on the same event survive everything we do.
@@ -542,7 +594,7 @@ mod tests {
         );
         let mut s = settings_from(original);
 
-        s.upsert_ours("PermissionRequest", 9847);
+        s.upsert_ours("PermissionRequest", 9847, SCRIPT);
         assert_eq!(s.groups_for("PermissionRequest").len(), 2);
         assert_eq!(s.foreign_groups_for("PermissionRequest").len(), 1);
 

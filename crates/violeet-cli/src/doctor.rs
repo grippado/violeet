@@ -244,12 +244,16 @@ fn hook_checks(settings: &Settings, port: Option<u16>) -> Vec<Check> {
             missing.push(event);
             continue;
         }
+        // Only the permission hook can hold a stale port. The informational
+        // entries name no port at all — the adapter reads it from the
+        // discovery file when it fires — so asking them for one would flag
+        // every event as wrong forever, and send the user to reinstall
+        // something that was never broken.
+        if event != hooks::PERMISSION_EVENT {
+            continue;
+        }
         if let Some(port) = port {
-            let expected = if event == hooks::PERMISSION_EVENT {
-                hooks::permission_url(port)
-            } else {
-                hooks::informational_url(port)
-            };
+            let expected = hooks::permission_url(port);
             let matches = ours.iter().any(|g| {
                 g["hooks"]
                     .as_array()
@@ -289,6 +293,22 @@ fn hook_checks(settings: &Settings, port: Option<u16>) -> Vec<Check> {
         );
     } else if port.is_some() && missing.is_empty() {
         checks.push(Check::ok("hooks point at the running daemon"));
+    }
+
+    // The informational entries are only as good as the script they name, and
+    // a settings file pointing at a script that is not on disk fails once per
+    // tool call — loudly, and looking exactly like the ECONNREFUSED noise the
+    // script was introduced to end.
+    if let Some(script) = hooks::script_path() {
+        if script.exists() {
+            checks.push(Check::ok("hook adapter script").detail(script.display().to_string()));
+        } else if missing.len() < hooks::all_events().len() {
+            checks.push(
+                Check::fail("hook adapter script")
+                    .detail(format!("{} is missing", script.display()))
+                    .fix("violeet install-hooks"),
+            );
+        }
     }
 
     checks

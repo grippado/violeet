@@ -156,6 +156,13 @@ shelling out to `curl --unix-socket` would work and was rejected separately — 
 puts a shell and a `curl` on the hot path of every hook, and the whole reason
 the CLI writes `http` hooks is that a `command` hook is a fork per event.
 
+> **Amended 2026-08-22.** The informational hooks are `command` hooks now, so
+> the fork this paragraph rejected is being paid — see the amendment at the end
+> of this ADR for what changed and what it costs. The conclusion for *this*
+> alternative is unaffected: the permission hook, the one an attacker would
+> want, is still `http` against a TCP port, so a Unix socket would still not buy
+> the authentication this section is about.
+
 **Verify the caller's pid via `SO_PEERCRED` / `LOCAL_PEERPID`.** Establishes
 which process is calling. Rejected: it authenticates the *process*, and every
 local process is the same user here, so it answers a question we are not asking.
@@ -166,3 +173,49 @@ outright — the port is published in a file specifically so clients do not have
 guess, so it is not secret from anything that can read the file, and a port scan
 of loopback finds it in milliseconds regardless. Obscurity that the design
 itself removes is not a control.
+
+## Amendment, 2026-08-22: the informational hooks became `command` hooks
+
+This ADR assumed all eleven hooks were `http`, and rejected `command` hooks in
+one line about cost. Ten of the eleven are `command` hooks now, running
+`~/.violeet/claude-hook.sh`. What that paragraph did not weigh is what an
+`http` hook cannot do: decline to fire.
+
+An `http` hook has no way to express "the daemon is not running". Claude Code
+treats the connection failure as non-blocking, so nothing breaks — but it prints
+`<event> hook error / connect ECONNREFUSED` into the transcript, once per event.
+`PreToolUse` and `PostToolUse` fire on every tool call, so a machine with the
+daemon down produces a wall of errors about a feature the user is not using.
+There is no `optional`/`ignoreFailure` in the hook schema to turn that off
+(checked against the hook reference). The only lever is to stop issuing a
+request that cannot succeed, and only a `command` hook can decide that.
+
+**What it costs, measured** (macOS, 200 runs each, this repo at the commit that
+introduced the script):
+
+| path | per event |
+|---|---|
+| no daemon — reads the discovery file, exits 0 | **6.1 ms** |
+| daemon up — same, plus the `curl` POST | **16.2 ms** |
+
+So the fork is real and this ADR was right about it. `PreToolUse` gates the tool
+call, so that latency is on the critical path: roughly 32 ms per tool call for
+the Pre/Post pair. It is paid against tool calls that take hundreds of
+milliseconds to seconds, and it buys back a transcript that is readable when the
+daemon is down — which is most of the time on a machine that has violeet
+installed but not running.
+
+**The permission hook stays `http`, deliberately.** It fires only when a human
+is about to be asked something, so it produces no wall of noise; when the daemon
+is unreachable, Claude Code falls through to its own dialog, which is the same
+measured-safe fallback the 600s timeout exists to preserve. Rewriting the one
+hook that blocks on a person, to fix noise it does not produce, would trade a
+real invariant for a cosmetic win. Everything this ADR decides about
+authentication is therefore unchanged: the blocking route is still an
+unauthenticated loopback POST, and the threat model above still describes it.
+
+**One thing improved on the way.** The informational entries no longer carry a
+port — the script reads it from `~/.violeet/daemon.json` when it fires. A daemon
+that comes up on a different port used to leave those hooks pointing at nothing
+until `install-hooks` was re-run; now they follow it. Only the permission entry
+can still go stale that way, and `violeet doctor` checks exactly that one.

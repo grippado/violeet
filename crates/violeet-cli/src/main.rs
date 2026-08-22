@@ -244,16 +244,36 @@ fn run_install(options: &Options, style: &Style) -> ExitCode {
         }
     };
 
+    // Where the adapter WILL go. Only the path is needed to render the entries;
+    // writing the file is deferred until the user has agreed, so that declining
+    // this install really does leave the disk untouched.
+    let Some(script) = hooks::script_path().map(|p| p.display().to_string()) else {
+        eprintln!("violeet: HOME is not set, so there is nowhere to install the hook adapter");
+        return ExitCode::FAILURE;
+    };
+
     let before = settings.original.clone().unwrap_or_default();
     for event in hooks::all_events() {
-        settings.upsert_ours(event, port);
+        settings.upsert_ours(event, port, &script);
     }
 
     if settings.is_unchanged() {
-        println!(
-            "{} hooks are already installed and pointing at port {port}. Nothing to do.",
-            style.green("✓")
-        );
+        // Nothing to ask about — the entries already say what they should. The
+        // script is still refreshed, because its body ships inside this binary
+        // and an upgraded CLI beside a stale script is a skew nobody would go
+        // looking for. It is our own file in our own directory, so rewriting it
+        // is not the user's settings being touched behind their back.
+        match hooks::install_script() {
+            Ok(_) => println!(
+                "{} hooks are already installed and pointing at port {port}. \
+                 Adapter script refreshed; nothing else to do.",
+                style.green("✓")
+            ),
+            Err(e) => {
+                eprintln!("violeet: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
         return ExitCode::SUCCESS;
     }
 
@@ -281,6 +301,15 @@ fn run_install(options: &Options, style: &Style) -> ExitCode {
             eprintln!("violeet: could not write a backup, so I will not write the file: {e}");
             return ExitCode::FAILURE;
         }
+    }
+
+    // The adapter goes in before the entries that name it. A settings file
+    // pointing at a script that is not there yet would fire once per event and
+    // fail on every one — the exact noise this indirection exists to remove.
+    // Hence here: past the confirmation, still ahead of the write.
+    if let Err(e) = hooks::install_script() {
+        eprintln!("violeet: {e}");
+        return ExitCode::FAILURE;
     }
 
     if let Err(e) = settings.write() {
