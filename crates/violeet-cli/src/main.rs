@@ -244,9 +244,20 @@ fn run_install(options: &Options, style: &Style) -> ExitCode {
         }
     };
 
+    // The adapter goes in before the entries that name it. A settings file
+    // pointing at a script that is not there yet would fire once per event and
+    // fail on every one — the exact noise this indirection exists to remove.
+    let script = match hooks::install_script() {
+        Ok(path) => path.display().to_string(),
+        Err(e) => {
+            eprintln!("violeet: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let before = settings.original.clone().unwrap_or_default();
     for event in hooks::all_events() {
-        settings.upsert_ours(event, port);
+        settings.upsert_ours(event, port, &script);
     }
 
     if settings.is_unchanged() {
