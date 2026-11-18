@@ -19,19 +19,20 @@
         {
           "n": 1,
           "title": "Base linear e botoeira da coluna",
-          "state": "em andamento"
+          "state": "entregue"
         },
         {
           "n": 2,
           "title": "Header na lateral, celular e o nome violeet",
-          "state": "em andamento"
+          "state": "entregue"
         },
         {
           "n": 3,
           "title": "Seções em accordion",
-          "state": "em andamento"
+          "state": "entregue"
         }
-      ]
+      ],
+      "state": "entregue"
     },
     {
       "id": "M2",
@@ -41,7 +42,7 @@
         {
           "n": 4,
           "title": "Barra de dados da sessão e card enxuto",
-          "state": "planejada"
+          "state": "em andamento"
         },
         {
           "n": 5,
