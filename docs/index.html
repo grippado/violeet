@@ -161,6 +161,18 @@
   .badge[data-state="em andamento"] { background: var(--yellow); border-color: var(--yellow); color: var(--on-accent); }
   .badge[data-state="planejada"] { color: var(--blue); border-color: var(--blue); }
   .badge[data-state="futuro"] { color: var(--purple); border-color: var(--purple); }
+  .ms-tag {
+    flex: none;
+    font: 700 0.7rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 5px 8px; border-radius: 4px;
+    color: var(--purple); border: 1px solid var(--purple);
+    background: color-mix(in srgb, var(--purple) 14%, transparent);
+  }
+  .ms-shot {
+    width: 100%; margin: 16px 0 0;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg);
+  }
   .roadmap-meta { margin: 16px 0 0; font-size: 0.85rem; color: var(--fg-muted); }
   .roadmap-empty { border: 1px dashed var(--line); border-radius: 12px; padding: 20px; color: var(--fg-muted); margin: 0; }
 
@@ -181,6 +193,7 @@
       <span>violeet</span>
     </a>
     <nav aria-label="Seções">
+      <a href="#navegador">No navegador</a>
       <a href="#o-que-e">O que é</a>
       <a href="#interface">Interface</a>
       <a href="#roadmap">Roadmap</a>
@@ -193,8 +206,8 @@
   </div>
 
   <div class="hero">
-    <h1>Várias sessões de agentes de código, <em>lado a lado</em>.</h1>
-    <p class="lede">O violeet é um lugar para rodar e acompanhar várias sessões de agentes de código ao mesmo tempo, no navegador: no desktop e no celular. Cada sessão é um terminal de verdade, com o modelo, o contexto e os tokens à vista.</p>
+    <h1>Várias sessões de agentes de código, lado a lado, <em>no navegador</em>.</h1>
+    <p class="lede">O violeet é um app de navegador para rodar e acompanhar várias sessões de agentes de código ao mesmo tempo, do desktop ou do celular. Cada sessão é um terminal de verdade, com o modelo, o contexto e os tokens à vista.</p>
     <ul class="harnesses" aria-label="Agentes suportados">
       <li>Claude Code</li>
       <li>Codex</li>
@@ -204,13 +217,24 @@
 </header>
 
 <main>
+  <section id="navegador" aria-labelledby="navegador-h">
+    <p class="eyebrow">Um app de navegador</p>
+    <h2 id="navegador-h">Abre onde você estiver, roda na sua máquina</h2>
+    <p class="section-lede">O violeet vive no navegador. Os agentes rodam na sua máquina; a tela vai com você.</p>
+    <div class="grid">
+      <div class="card" style="--dot: var(--blue)"><h3>No navegador</h3><p>Nada para instalar no computador onde você está: abre no navegador e pronto.</p></div>
+      <div class="card" style="--dot: var(--purple)"><h3>De qualquer máquina e do celular</h3><p>A mesma tela no desktop, no notebook de outra pessoa ou no celular.</p></div>
+      <div class="card" style="--dot: var(--green)"><h3>As sessões continuam rodando</h3><p>Feche a aba e volte depois: os agentes seguem trabalhando na sua máquina, do jeito que ficaram.</p></div>
+      <div class="card" style="--dot: var(--yellow)"><h3>Acompanhe e responda de longe</h3><p>Veja qual agente está esperando você e responda dali mesmo, longe do computador.</p></div>
+    </div>
+  </section>
+
   <section id="o-que-e" aria-labelledby="o-que-e-h">
     <p class="eyebrow">O que é</p>
     <h2 id="o-que-e-h">Um painel para quem roda mais de um agente por vez</h2>
     <p class="section-lede">Com três ou quatro agentes trabalhando ao mesmo tempo, o difícil deixa de ser o código: é saber qual sessão está esperando você, qual está perto de estourar o contexto e o que cada uma já fez. O violeet junta tudo isso numa tela só, sem esconder o terminal.</p>
     <div class="grid">
       <div class="card" style="--dot: var(--purple)"><h3>Lado a lado</h3><p>Sessões de Claude Code, Codex e Cursor convivem na mesma lista, cada uma com o próprio estado.</p></div>
-      <div class="card" style="--dot: var(--blue)"><h3>No navegador</h3><p>Nada para instalar no cliente: abre no navegador do desktop e funciona no celular.</p></div>
       <div class="card" style="--dot: var(--green)"><h3>Terminal de verdade</h3><p>O agente roda num terminal real. O violeet acompanha, não substitui.</p></div>
     </div>
   </section>
@@ -309,9 +333,18 @@
       if (m.id) head.appendChild(el("span", "ms-id", m.id));
       head.appendChild(el("h3", "ms-title", m.title || ""));
       var slices = Array.isArray(m.slices) ? m.slices : [];
+      if (typeof m.tag === "string" && m.tag) head.appendChild(el("span", "ms-tag", m.tag));
       if (m.state || slices.length === 0) head.appendChild(badge(m.state));
       card.appendChild(head);
       if (m.summary) card.appendChild(el("p", "ms-summary", m.summary));
+      if (typeof m.image === "string" && m.image) {
+        var img = el("img", "ms-shot");
+        img.src = m.image;
+        img.alt = typeof m.image_alt === "string" ? m.image_alt : "";
+        img.loading = "lazy";
+        img.decoding = "async";
+        card.appendChild(img);
+      }
       if (slices.length) {
         var ul = el("ul", "slices");
         slices.forEach(function (s) {

@@ -5,8 +5,11 @@
     {
       "id": "M0",
       "title": "A base que já existe",
-      "summary": "Runs de Claude, Codex e Cursor em terminais no navegador, seções, Cmd+K com texto livre e imagens, melhorar prompt, statusline por run, notes, graphs e celular.",
-      "state": "entregue"
+      "tag": "app de navegador",
+      "summary": "Um app de navegador que já roda no dia a dia: runs de Claude, Codex e Cursor em terminais, seções, Cmd+K com texto livre e imagens, melhorar prompt, statusline por run, notes, graphs e celular.",
+      "state": "entregue",
+      "image": "agora.png",
+      "image_alt": "Tela atual do violeet com dados fictícios: cards de runs em ACTIVE, IDLE e WAITING agrupados em seções, e a home com o mapa de sessões por dia e a lista das sessões de hoje."
     },
     {
       "id": "M1",
