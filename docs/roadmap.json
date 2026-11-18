@@ -1,0 +1,74 @@
+{
+  "updated": "2026-11-18",
+  "status": "em desenvolvimento",
+  "milestones": [
+    {
+      "id": "M0",
+      "title": "A base que já existe",
+      "summary": "Runs de Claude, Codex e Cursor em terminais no navegador, seções, Cmd+K com texto livre e imagens, melhorar prompt, statusline por run, notes, graphs e celular.",
+      "state": "entregue"
+    },
+    {
+      "id": "M1",
+      "title": "Base visual e o nome violeet",
+      "summary": "Interface linear, header na lateral com o nome e o ícone do violeet, seções em accordion.",
+      "slices": [
+        {
+          "n": 1,
+          "title": "Base linear e botoeira da coluna",
+          "state": "em andamento"
+        },
+        {
+          "n": 2,
+          "title": "Header na lateral, celular e o nome violeet",
+          "state": "planejada"
+        },
+        {
+          "n": 3,
+          "title": "Seções em accordion",
+          "state": "planejada"
+        }
+      ]
+    },
+    {
+      "id": "M2",
+      "title": "A sessão no composer",
+      "summary": "Dados da sessão acima do input, card enxuto, esc, imagens e to new session no composer.",
+      "slices": [
+        {
+          "n": 4,
+          "title": "Barra de dados da sessão e card enxuto",
+          "state": "planejada"
+        },
+        {
+          "n": 5,
+          "title": "Botoeira do composer: esc, to new session e imagens",
+          "state": "planejada"
+        }
+      ]
+    },
+    {
+      "id": "M3",
+      "title": "Fluxos novos",
+      "summary": "Melhorar prompt no composer e handoff entre sessões em segundo plano.",
+      "slices": [
+        {
+          "n": 6,
+          "title": "Melhorar prompt no composer",
+          "state": "planejada"
+        },
+        {
+          "n": 7,
+          "title": "Handoff em segundo plano",
+          "state": "planejada"
+        }
+      ]
+    },
+    {
+      "id": "OSS",
+      "title": "Versão aberta",
+      "summary": "O código sai do laboratório privado e o violeet ganha uma versão para instalar.",
+      "state": "futuro"
+    }
+  ]
+}

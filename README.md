@@ -1,62 +1,21 @@
-# Violeet
+# violeet
 
-**[grippado.github.io/violeet →](https://grippado.github.io/violeet/)** · a terminal for watching agents work.
-Named after the colour it has always used, and shipping with
-[Violeeter](https://github.com/grippado/violeeter), that colour as a palette anyone can take.
+O violeet é um lugar para rodar e acompanhar várias sessões de agentes de código (Claude Code, Codex e Cursor) lado a lado, no navegador, no desktop e no celular.
 
+**Está em desenvolvimento** e ainda não tem versão para instalar. O código vive num repositório privado até a versão aberta.
 
-**This `violeet`:** a native macOS terminal built for running several AI coding agents (Claude Code, Codex, opencode) as tabs in a single window, instead of scattering them across six terminal windows you lose track of. Tabs name themselves from what the agent is actually working on. A SwiftUI sidebar keeps one card per session showing its state, how full its context window is, and, the reason this exists, any permission request currently blocking that agent, answerable from the sidebar without switching tabs. It is the sibling of [aitop](https://github.com/grippado/aitop), which monitors agent sessions read-only from a TUI; `violeet` is where you actually run them.
+- Landing, com o que já existe, os mockups do redesign e o roadmap: https://grippado.github.io/violeet/
+- Este repositório guarda só a landing, publicada pelo GitHub Pages a partir de `docs/`.
 
-<img width="2168" height="1402" alt="Screenshot 2026-08-08 at 15 26 17" src="https://github.com/user-attachments/assets/561a668b-6daa-4159-aac4-cbe461559197" />
+## Código antigo
 
+A versão anterior do violeet (daemon em Rust e app em SwiftUI) foi desativada e continua preservada aqui:
 
-## Shape of the thing
+- tag [`legacy-app`](https://github.com/grippado/violeet/tree/legacy-app)
+- branch [`legacy/app`](https://github.com/grippado/violeet/tree/legacy/app)
 
-| Component | Language | Job |
-|---|---|---|
-| `violeet-daemon` | Rust | Owns all intelligence: session registry, permission-request bookkeeping, HTTP endpoint for Claude Code hooks. Serves clients over a Unix socket. |
-| `violeet-transcript` | Rust | JSONL transcript reading, token and context math. A pure library: it takes a path and returns typed events plus telemetry, and knows nothing about the socket or the registry. The daemon depends on it, not the other way round. |
-| `violeet-app` | Swift / SwiftUI | Native macOS app. Terminal tabs via [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), sidebar in pure SwiftUI. A dumb client: renders and sends commands, computes nothing. |
-| `violeet-cli` | Rust | `violeet doctor`, `violeet install-hooks`, `violeet uninstall-hooks`. |
-| `violeet-proto` | Rust | Serde types for the socket protocol, shared by daemon and CLI. |
+As releases antigas continuam publicadas em [Releases](https://github.com/grippado/violeet/releases).
 
-The socket lives at `~/.violeet/daemon.sock` and speaks JSON-lines: one object per line, discriminated by a `type` field. The contract is [`docs/PROTOCOL.md`](docs/PROTOCOL.md); it is frozen during a fan-out wave and changed only through the process described there.
+## Licença
 
-## Status
-
-**All four pieces exist and talk to each other.** Verified against a real Claude Code v2.1.220, not against mocks.
-
-- `violeet-daemon`: session registry, Unix socket server, hook endpoint and HITL, plus transcript telemetry. Run it, point Claude Code's hooks at it, and watch a permission request block and then resolve over the socket.
-- `violeet-app`: window, tabs and a working terminal via SwiftTerm, with the sidebar listing tabs. The session cards are the next piece of work.
-- `violeet-transcript`: reads Claude Code JSONL incrementally and reports the four token numbers, the model and the last action. What it could *not* determine is written down as plainly as what it could: see [`docs/TRANSCRIPT_FORMAT.md`](docs/TRANSCRIPT_FORMAT.md) § 3.
-- `violeet-cli`: `doctor`, `install-hooks` and `uninstall-hooks`.
-
-Two numbers that look alike and are not: **window occupancy** falls when the context is compacted, **cumulative cost** only climbs. Adding the cumulative pair to estimate occupancy produces a plausible, wrong number, and the code says so at the point somebody would be tempted.
-
-See [`docs/adr/`](docs/adr/) for the decisions that got us here, and [`docs/tracks/`](docs/tracks/) for what each piece actually guarantees, including, in each log, what was measured versus inferred.
-
-## Building
-
-```bash
-# Rust side
-cargo build --workspace
-
-# macOS app (the .xcodeproj is generated, not committed)
-brew install xcodegen
-cd app && xcodegen generate && open Violeet.xcodeproj
-```
-
-There is a `Makefile` for the loop you run all day. `make` on its own lists
-every target; `make reinstall` is the one worth knowing, because it quits the
-app, packages it, installs it, restarts the daemon and reopens, in that order.
-The order is the point: the daemon ships inside the bundle, so an install that
-does not restart it leaves the board being served by the binary you just
-replaced.
-
-The Makefile adds no build logic. `app/scripts/package.sh` and
-`app/scripts/install.sh` remain the only things that know how to produce and
-place a bundle, and CI runs those.
-
-## License
-
-MIT © Gabriel Gripp
+[LICENSE](LICENSE)

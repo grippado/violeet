@@ -1,843 +1,347 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="pt-BR">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Violeet: a terminal for watching agents work</title>
-<meta name="description" id="meta-description" content="A macOS terminal built for running several coding agents at once: every session on a board, permission requests surfaced, and the files each one wrote.">
-<link rel="stylesheet" href="violeeter.css">
-<!-- The copy, in four languages. In <head> and not deferred: the strings have
-     to exist before the page is translated, and translating happens as soon as
-     the body is parsed. It is one small file, so this costs a parse, not a
-     round-trip. -->
-<script src="i18n.js"></script>
+<title>violeet</title>
+<meta name="description" content="O violeet é um lugar para rodar e acompanhar várias sessões de agentes de código (Claude Code, Codex, Cursor) lado a lado, no navegador. Em desenvolvimento.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="violeet-dark.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap">
 <style>
+  :root {
+    --bg: #24203F;
+    --bg-raised: #2E2A4E;
+    --fg: #D9D6EC;
+    --fg-strong: #F3F1FF;
+    --fg-muted: #ADA7D8;
+    --line: #3A355E;
+    --selection: #3A355E;
+    --purple: #C78BF7;
+    --blue: #7FAEFF;
+    --green: #6FE39B;
+    --yellow: #F2C97B;
+    --on-accent: #24203F;
+    --sans: "Inter", ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #FAF8FE;
+      --bg-raised: #F1ECFC;
+      --fg: #2A2440;
+      --fg-strong: #1B1630;
+      --fg-muted: #55506E;
+      --line: #DED6F5;
+      --selection: #DED6F5;
+      --purple: #7C3AED;
+      --blue: #2B4ACB;
+      --green: #147A52;
+      --yellow: #8A5A0B;
+      --on-accent: #FAF8FE;
+    }
+  }
   *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
     margin: 0;
-    background: var(--violeeter-bg);
-    color: var(--violeeter-fg);
-    font: 16px/1.6 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 var(--sans);
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
-  code, pre, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  a { color: var(--violeeter-magenta); }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 0 24px; }
-  h1, h2, h3 { line-height: 1.25; margin: 0; }
+  ::selection { background: var(--selection); color: var(--fg-strong); }
+  a { color: var(--purple); text-underline-offset: 3px; }
+  a:hover { color: var(--blue); }
+  a:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; border-radius: 4px; }
+  img { max-width: 100%; height: auto; display: block; }
+  h1, h2, h3 { line-height: 1.2; margin: 0; color: var(--fg-strong); }
+  code, .mono { font-family: var(--mono); }
 
-  /* ---- header ---- */
-  header { padding: 72px 0 56px; }
-  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
-  /* The Violeeter mark at text size, for the places its name appears inside a
-     sentence or a button. `1em` so it tracks whatever it sits in instead of
-     being right in one place and wrong in the rest, and `flex: none` so it can
-     never be what wraps a single-line control. */
-  .inline-mark {
-    height: 1em; width: 1em; flex: none;
-    object-fit: contain;
-    vertical-align: -0.14em;
-    margin-right: 0.3em;
-  }
-  /* Inside a button the word before the mark is its own element now, because it
-     is the part that gets translated. A `.btn` is an `inline-flex`, and a flex
-     container throws away the whitespace between its items, so the space that
-     used to sit in the markup stopped existing the moment the word was wrapped.
-     The gap has to be a margin, not a character. */
-  .btn .inline-mark { margin-left: 0.3em; }
+  .wrap { width: 100%; max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 32px; } }
 
-  .mark {
-    width: 40px; height: 40px; flex: none;
-    display: block;
-    /* The artwork carries its own rounded frame at the edge of the canvas.
-       Rounding the element again shaves that frame off, and anything other
-       than `contain` crops it. */
-    object-fit: contain;
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 20px 0;
   }
-  /* The icon comes in two cuts, and which one shows follows the theme by the
-     same rules the colours do. Doing it in CSS rather than by swapping `src`
-     in the toggle means the right one is already painted on first render,
-     including for a visitor whose system is dark and who never touches the
-     button. */
-  .only-dark { display: none; }
-  .only-light { display: block; }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .only-dark { display: block; }
-    :root:not([data-theme="light"]) .only-light { display: none; }
-  }
-  :root[data-theme="dark"] .only-dark { display: block; }
-  :root[data-theme="dark"] .only-light { display: none; }
-  :root[data-theme="light"] .only-dark { display: none; }
-  :root[data-theme="light"] .only-light { display: block; }
+  .brand { display: flex; align-items: center; gap: 12px; color: var(--fg-strong); text-decoration: none; }
+  .brand img { width: 36px; height: 36px; }
+  .brand span { font: 700 1.35rem/1 var(--mono); letter-spacing: -0.01em; }
+  .topbar nav { display: flex; gap: 18px; font-size: 0.92rem; }
+  .topbar nav a { color: var(--fg-muted); text-decoration: none; }
+  .topbar nav a:hover { color: var(--fg-strong); }
+  @media (max-width: 560px) { .topbar nav { display: none; } }
 
-  /* An inline mark stays inline when it is shown.
-     The rules above switch the two cuts with `display: block`, which is right
-     for the logo and wrong inside a sentence: a block-level `img` in a
-     paragraph takes a line of its own, so the mark before "Violeet" broke away
-     from the word it belongs to and sat alone between two lines of prose.
-     Seen on the page before it was explained. */
-  .inline-mark.only-dark, .inline-mark.only-light { display: none; }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .inline-mark.only-dark { display: inline-block; }
-  }
-  :root[data-theme="dark"] .inline-mark.only-dark { display: inline-block; }
-  :root[data-theme="light"] .inline-mark.only-light { display: inline-block; }
-  :root:not([data-theme="dark"]):not([data-theme="light"]) .inline-mark.only-light { display: inline-block; }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .inline-mark.only-light { display: none; }
-  }
-
-  .brand-name { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
-  /* The logo is a link, and inherits rather than turning link-coloured: a
-     wordmark that changes colour because it became clickable has stopped being
-     the wordmark. The mark and the name share one hit area, so the gap between
-     them is clickable too and there is no dead strip in the middle of a target
-     that reads as one thing. */
-  .brand-home {
-    display: flex; align-items: center; gap: 14px;
-    color: inherit; text-decoration: none;
-    border-radius: 8px;
-  }
-  /* Hover says "this does something", which a logo otherwise does not. Kept
-     quiet: it is a way home, not a call to action. */
-  .brand-home:hover { opacity: 0.82; }
-  .brand-home:focus-visible {
-    outline: 2px solid currentColor;
-    outline-offset: 4px;
-  }
-  h1 { font-size: clamp(2rem, 6vw, 3.1rem); font-weight: 700; letter-spacing: -0.03em; max-width: 16ch; }
-  .lede { font-size: 1.12rem; margin: 20px 0 0; max-width: 58ch; opacity: 0.85; }
-  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
-  .btn {
-    display: inline-flex; align-items: center; white-space: nowrap;
-    padding: 10px 18px; border-radius: 8px;
-    text-decoration: none; font-weight: 600; font-size: 0.95rem;
-    border: 1px solid var(--violeeter-brightblack);
-    color: var(--violeeter-fg);
-  }
-  .btn-primary {
-    background: var(--violeeter-magenta);
-    border-color: var(--violeeter-magenta);
-    color: var(--violeeter-bg);
-  }
-  /* The two controls the page's chrome offers, as one group pushed to the far
-     end: language and theme are the same kind of thing, a way of asking for
-     this page in a different dress, so they sit together rather than each
-     finding its own way to the right. */
-  .chrome { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-  .toggle {
-    align-self: center;
-    background: none; border: 1px solid var(--violeeter-brightblack);
-    color: var(--violeeter-fg); border-radius: 6px;
-    padding: 5px 11px; font-size: 0.82rem; cursor: pointer;
-  }
-  /* A native <select>, dressed down to match its neighbour. Native because the
-     alternative is rebuilding a listbox, and a hand-rolled one is worse on a
-     phone and worse with a screen reader than the one the platform already
-     ships. `appearance: none` removes the chrome, not the behaviour. */
-  .lang {
-    appearance: none; -webkit-appearance: none;
-    background: none; border: 1px solid transparent;
-    color: var(--violeeter-fg); border-radius: 6px;
-    padding: 0 0.55rem; height: 2.1rem;
-    font: inherit; font-size: 0.82rem; font-weight: 600;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    transition: background-color .12s ease;
-  }
-  .lang:hover, .lang:focus-visible { background: var(--violeeter-selection); }
-  /* The dropdown itself is drawn by the OS and does not inherit the page, so
-     the options are told the colours explicitly. Without this, a light-themed
-     system opens a white menu over the dark page. */
-  .lang option { background: var(--violeeter-bg); color: var(--violeeter-fg); }
-  /* Remix Icon and the GitHub octicon, inline. `1em` and `currentColor` so both
-     take the size and colour of the control they sit in, which is what stopped
-     the theme toggle from rendering a size smaller than its neighbours. */
-  .ic { width: 1.05em; height: 1.05em; flex: none; }
-  /* The header buttons drop their outline. Up there they sit alone on the
-     chrome with nothing to be told apart from, so the border was drawing a box
-     around a word for no reason. The hover fill keeps the affordance: the
-     target has to announce itself before the click, and now it does that on
-     contact instead of permanently. */
-  .nav-links .ghost, .brand .toggle {
-    border-color: transparent;
-    background: none;
-    transition: background-color .12s ease;
-  }
-  .nav-links .ghost:hover, .brand .toggle:hover,
-  .nav-links .ghost:focus-visible, .brand .toggle:focus-visible {
-    background: var(--violeeter-selection);
-  }
-
-  /* Sized, not padded.
-     Padding made the height a consequence of the glyph, so this button came out
-     shorter than the text links beside it. Fixing width and height in the same
-     unit the row is measured in makes it square by construction and the same
-     height as its neighbours, and `box-sizing: border-box` keeps the
-     transparent border from adding to it.
-     The icon is 1.25rem rather than 1.15rem: an icon alone in a box has to read
-     at a glance, and there is no label beside it doing half the work. */
-  .icon-only {
-    box-sizing: border-box;
-    width: 2.1rem; height: 2.1rem;
-    padding: 0;
-    justify-content: center;
-  }
-  .icon-only .ic { width: 1.25rem; height: 1.25rem; }
-  .with-icon { display: inline-flex; align-items: center; gap: 0.45em; }
-
-
-  /* ---- terminal ---- */
-  .term {
-    border: 1px solid var(--violeeter-brightblack);
-    border-radius: 10px; overflow: hidden; margin: 8px 0 0;
-    background: var(--violeeter-bg);
-  }
-  .term-bar {
-    display: flex; align-items: center; gap: 7px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--violeeter-brightblack);
-  }
-  .dot { width: 11px; height: 11px; border-radius: 50%; }
-  .term-title { margin-left: 8px; font-size: 0.8rem; opacity: 0.6; }
-  .term-body { padding: 16px; font-size: 0.85rem; line-height: 1.65; overflow-x: auto; }
-  .term-body pre { margin: 0; }
-  /* The session rows used to be one <pre> where the status was pushed to the
-     right by counted spaces. That column only lines up for the words it was
-     counted against, and this page now says those words in four languages, so
-     the alignment had to stop being a property of the string. The name and the
-     status are two ends of a row and the gap between them is the browser's
-     problem. */
-  .sess + .sess { margin-top: 1.15em; }
-  .sess-head { display: flex; justify-content: space-between; gap: 2.5em; }
-  .sess-line { padding-left: 2ch; white-space: pre; }
-  .c-magenta { color: var(--violeeter-magenta); }
-  .c-green   { color: var(--violeeter-green); }
-  .c-yellow  { color: var(--violeeter-yellow); }
-  .c-blue    { color: var(--violeeter-blue); }
-  .c-red     { color: var(--violeeter-red); }
-  .c-cyan    { color: var(--violeeter-cyan); }
-  .c-dim     { color: var(--violeeter-brightblack); }
-
-  /* ---- sections ---- */
-  section { padding: 56px 0; border-top: 1px solid var(--violeeter-selection); }
-  h2 { font-size: 1.5rem; letter-spacing: -0.02em; margin-bottom: 8px; }
-  .section-lede { opacity: 0.8; max-width: 62ch; margin: 0 0 28px; }
-  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-  .card {
-    border: 1px solid var(--violeeter-selection);
-    border-radius: 10px; padding: 18px 20px;
-  }
-  .card h3 { font-size: 1rem; margin-bottom: 6px; }
-  .card p { margin: 0; font-size: 0.92rem; opacity: 0.82; }
-
-  /* ---- releases ---- */
-  .releases[hidden] { display: none; }
-  .releases {
-    border: 1px solid var(--violeeter-selection);
-    border-radius: 10px; padding: 18px 20px;
-    margin: 0 0 28px;
-  }
-  .release + .release { margin-top: 18px; }
-  .release-label {
-    margin: 0; font-size: 0.78rem; font-weight: 650;
-    text-transform: uppercase; letter-spacing: 0.1em;
-    color: var(--violeeter-fg); opacity: 0.6;
-  }
-  .release-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 2px 0 0; }
-  .release-num {
-    font-size: 0.95rem; font-weight: 650;
-    text-decoration: underline;
-    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
-    text-underline-offset: 3px;
-  }
-  .release-num:hover, .release-num:focus-visible { text-decoration-color: currentColor; }
-  .release-num::after { content: " ↗"; }
-  .release-date::before { content: "· "; }
-  .release-summary { margin: 4px 0 0; font-size: 0.92rem; opacity: 0.82; }
-  .release-all { margin: 18px 0 0; font-size: 0.88rem; }
-
-  /* ---- the wider constellation ---- */
-  /* Two labels wear this, and they play different parts. This one sits above a
-     heading instead of below it; the releases one is itself the heading that
-     names its box, an `h3`, so the rule has to hold the `h1, h2, h3` line-height
-     back to the body value or the label loses four pixels of height the day it
-     stops being a `p`. Small caps by letter-spacing rather than by
-     `font-variant`, which the UI stack renders as real small capitals only for
-     some of the four languages and as nothing at all for the rest. */
-  .eyebrow {
-    text-transform: uppercase; letter-spacing: 0.14em;
-    font-size: 0.72rem; font-weight: 700; line-height: 1.6;
-    color: var(--violeeter-magenta);
-    margin: 0 0 10px;
-  }
-  /* Mark beside the heading, and the two of them on their own lines once the
-     column gets narrow. `flex-wrap` and a basis on the text column rather than
-     a width media query: this page has no width breakpoints anywhere, it wraps
-     by construction, and adding one here would put the only hard-coded
-     viewport number in the stylesheet. */
-  .constellation { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; }
-  /* `min-width: 0` because a flex item refuses to shrink below the widest
-     thing inside it, and the card grid below counts as that. Without it the
-     row stops wrapping and the section pushes the page sideways instead. */
-  .constellation-copy { flex: 1 1 320px; min-width: 0; }
-  .constellation h2 span { color: var(--violeeter-magenta); }
-  /* Bigger than `.mark` in the header: this one is the section's whole image,
-     not a companion to a wordmark. */
-  .glabs-mark { width: 76px; height: 76px; flex: none; object-fit: contain; }
-  .family-links {
-    display: grid; gap: 12px; margin-top: 24px;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  }
-  .family-link {
-    display: flex; align-items: center; gap: 14px;
-    padding: 14px;
-    border: 1px solid var(--violeeter-selection);
+  .notice {
+    display: flex; gap: 14px; align-items: flex-start;
+    border: 1px solid var(--yellow);
+    background: color-mix(in srgb, var(--yellow) 12%, transparent);
+    color: var(--fg-strong);
+    padding: 14px 16px;
     border-radius: 10px;
-    color: inherit; text-decoration: none;
+    margin: 8px 0 0;
   }
-  /* The card is the target, so the whole card answers the pointer. Colour is
-     not available for that here: these links inherit rather than turning
-     magenta, because a card that recolours its own name reads as a different
-     product rather than as a hovered link. */
-  .family-link:hover { background: var(--violeeter-selection); }
-  .family-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-  .family-link img { width: 40px; height: 40px; flex: none; object-fit: contain; }
-  /* `strong` is inline, so without this the descriptor rides up beside the
-     name instead of sitting under it. */
-  .family-link strong { display: block; }
-  .family-link small { opacity: 0.75; }
-
-  /* ---- palette ---- */
-  .swatches { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin: 14px 0 4px; }
-  .sw { aspect-ratio: 1; border-radius: 5px; }
-  .variant { margin-bottom: 28px; }
-  .variant-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
-  .variant-name { font-weight: 650; }
-  .variant-meta { font-size: 0.82rem; opacity: 0.65; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--violeeter-selection); }
-  th { font-weight: 600; opacity: 0.7; font-size: 0.82rem; }
-  td.mono { font-size: 0.85rem; }
-  .scroll { overflow-x: auto; }
-
-  pre.block {
-    background: var(--violeeter-selection);
-    padding: 14px 16px; border-radius: 8px; overflow-x: auto;
-    font-size: 0.85rem; margin: 0;
+  .notice-tag {
+    flex: none;
+    font: 700 0.72rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+    background: var(--yellow); color: var(--on-accent);
+    padding: 6px 8px; border-radius: 4px; margin-top: 2px;
   }
+  .notice p { margin: 0; }
+  @media (max-width: 480px) { .notice { flex-direction: column; gap: 10px; } }
 
-  footer { padding: 40px 0 64px; font-size: 0.88rem; opacity: 0.65; border-top: 1px solid var(--violeeter-selection); }
-  footer a { color: inherit; }
+  .hero { padding: 56px 0 64px; }
+  .hero h1 { font-size: clamp(2.1rem, 7vw, 3.6rem); letter-spacing: -0.03em; max-width: 18ch; }
+  .hero h1 em { font-style: normal; color: var(--purple); }
+  .lede { font-size: 1.15rem; margin: 22px 0 0; max-width: 60ch; color: var(--fg); }
+  .harnesses { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; padding: 0; list-style: none; }
+  .harnesses li {
+    font: 600 0.82rem/1 var(--mono);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 12px; color: var(--fg-strong);
+  }
+  .harnesses li::before { content: "› "; color: var(--purple); }
+
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  .eyebrow {
+    font: 700 0.74rem/1.4 var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--purple); margin: 0 0 12px;
+  }
+  h2 { font-size: clamp(1.5rem, 4vw, 2rem); letter-spacing: -0.02em; }
+  .section-lede { margin: 12px 0 32px; max-width: 64ch; color: var(--fg-muted); }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+  .card {
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px; background: var(--bg-raised);
+  }
+  .card h3 { font-size: 1.02rem; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+  .card h3::before {
+    content: ""; width: 10px; height: 10px; border-radius: 2px; flex: none;
+    background: var(--dot, var(--purple));
+  }
+  .card p { margin: 0; font-size: 0.95rem; color: var(--fg-muted); }
+
+  .shot {
+    margin: 0;
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    background: var(--bg-raised);
+  }
+  .shot img { width: 100%; }
+  .shot figcaption { padding: 12px 16px; font-size: 0.88rem; color: var(--fg-muted); border-top: 1px solid var(--line); }
+  .shots { display: grid; gap: 20px; margin-top: 20px; }
+  .shots-phones { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+  .shots-phones .shot img { max-width: 390px; margin: 0 auto; }
+  .mock-note { font-size: 0.85rem; color: var(--fg-muted); margin: 16px 0 0; }
+
+  .roadmap { display: grid; gap: 16px; }
+  .milestone { border: 1px solid var(--line); border-radius: 12px; padding: 20px; background: var(--bg-raised); }
+  .ms-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 12px; }
+  .ms-id { font: 700 0.8rem/1 var(--mono); color: var(--purple); }
+  .ms-title { font-size: 1.08rem; flex: 1 1 200px; min-width: 0; }
+  .ms-summary { margin: 8px 0 0; color: var(--fg-muted); font-size: 0.95rem; }
+  .slices { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; }
+  .slice {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  }
+  .slice-n { font: 600 0.8rem/1 var(--mono); color: var(--fg-muted); flex: none; }
+  .slice-title { flex: 1 1 180px; min-width: 0; font-size: 0.95rem; }
+  .badge {
+    flex: none;
+    font: 700 0.7rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 5px 8px; border-radius: 4px;
+    border: 1px solid var(--line); color: var(--fg-muted);
+  }
+  .badge[data-state="entregue"] { background: var(--green); border-color: var(--green); color: var(--on-accent); }
+  .badge[data-state="em andamento"] { background: var(--yellow); border-color: var(--yellow); color: var(--on-accent); }
+  .badge[data-state="planejada"] { color: var(--blue); border-color: var(--blue); }
+  .badge[data-state="futuro"] { color: var(--purple); border-color: var(--purple); }
+  .roadmap-meta { margin: 16px 0 0; font-size: 0.85rem; color: var(--fg-muted); }
+  .roadmap-empty { border: 1px dashed var(--line); border-radius: 12px; padding: 20px; color: var(--fg-muted); margin: 0; }
+
+  footer { border-top: 1px solid var(--line); padding: 40px 0 56px; font-size: 0.92rem; color: var(--fg-muted); }
+  footer p { margin: 0 0 8px; max-width: 64ch; }
 </style>
 </head>
 <body>
-
 <div class="wrap">
 
 <header>
-  <div class="brand">
-    <!-- The mark and the name are one link home, because that is what a reader
-         who clicks a logo is asking for. `./` rather than `/`: this is a
-         project page under a user site, so `/` is grippado.github.io and not
-         this page at all. -->
-    <a class="brand-home" href="./" id="brand-home" aria-label="Violeet, home">
-      <img class="mark only-dark" src="violeet-dark.png" alt="Violeet">
-      <img class="mark only-light" src="violeet-light.png" alt="Violeet">
-      <span class="brand-name">Violeet</span>
+  <div class="topbar">
+    <a class="brand" href="./" aria-label="violeet, início">
+      <picture>
+        <source srcset="violeet-light.svg" media="(prefers-color-scheme: light)">
+        <img src="violeet-dark.svg" alt="" width="36" height="36">
+      </picture>
+      <span>violeet</span>
     </a>
-    <div class="chrome">
-    <!-- The names of the languages are in their own languages, which is the one
-         labelling rule a picker like this has: someone looking for German is
-         looking for "Deutsch", and if they could read "German" they would not
-         need the control. -->
-    <select class="lang" id="lang" aria-label="Language">
-      <option value="en">English</option>
-      <option value="pt">Português</option>
-      <option value="es">Español</option>
-      <option value="de">Deutsch</option>
-    </select>
-    <button class="toggle icon-only with-icon" id="toggle" type="button"
-            title="Switch to light" aria-label="Switch to light"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/></svg></button>
-    </div>
+    <nav aria-label="Seções">
+      <a href="#o-que-e">O que é</a>
+      <a href="#interface">Interface</a>
+      <a href="#roadmap">Roadmap</a>
+    </nav>
   </div>
 
-  <h1 data-i18n="hero.h1">A terminal for watching agents work.</h1>
-  <p class="lede" data-i18n="hero.lede">
-    Run six coding agents at once and the hard part stops being the code. It is
-    knowing which one is blocked on you, which one is burning context, and what
-    any of them actually changed. Violeet puts that on a board beside the
-    terminal.
-  </p>
-
-  <div class="cta">
-    <a class="btn btn-primary" href="https://github.com/grippado/violeet/releases" data-i18n="cta.download">Download for macOS</a>
-    <a class="btn with-icon" href="https://github.com/grippado/violeet"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span data-i18n="cta.source">Source on GitHub</span></a>
-    <!-- The gap between the word and the mark is a margin, because a flex
-         container drops the whitespace in the markup. A margin is not a space
-         to a screen reader, though, so the link carries its own label rather
-         than being read as one run-together word. -->
-    <a class="btn" id="cta-wears" href="https://grippado.github.io/violeeter/" aria-label="Wears Violeeter"><span data-i18n="cta.wears">Wears</span> <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
+  <div class="notice" role="note">
+    <span class="notice-tag">Em desenvolvimento</span>
+    <p>O violeet ainda está sendo construído e não tem versão para instalar. Esta página mostra o que já existe, para onde ele vai e como deve ficar.</p>
   </div>
 
-  <div class="term" style="margin-top:44px">
-    <div class="term-bar">
-      <span class="dot" style="background:var(--violeeter-red)"></span>
-      <span class="dot" style="background:var(--violeeter-yellow)"></span>
-      <span class="dot" style="background:var(--violeeter-green)"></span>
-      <span class="term-title" data-i18n="term.title">violeet · sessions</span>
-    </div>
-    <div class="term-body mono">
-      <div class="sess">
-        <div class="sess-head">
-          <span class="c-yellow">▌ <span data-i18n="term.s1.name">refactor the transcript reader</span></span>
-          <span class="c-yellow" data-i18n="term.s1.status">waiting for you</span>
-        </div>
-        <div class="sess-line c-dim">~/www/personal/violeet</div>
-        <div class="sess-line"><span class="c-dim">ctx</span> <span class="c-green">████████</span><span class="c-dim">░░░░░░░░</span>  38% · 375k/1.0M</div>
-        <div class="sess-line"><span class="c-dim">Edit</span> crates/violeet-transcript/src/lib.rs</div>
-      </div>
-
-      <div class="sess">
-        <div class="sess-head">
-          <span class="c-magenta">▌ <span data-i18n="term.s2.name">files panel</span></span>
-          <span class="c-cyan" data-i18n="term.s2.status">working</span>
-        </div>
-        <div class="sess-line c-dim">~/www/personal/violeet</div>
-        <div class="sess-line"><span class="c-dim">ctx</span> <span class="c-green">███</span><span class="c-dim">░░░░░░░░░░░░░</span>  14% · 140k/1.0M</div>
-        <div class="sess-line"><span class="c-dim">Bash</span> swift test</div>
-      </div>
-
-      <div class="sess c-dim">
-        <div class="sess-head">
-          <span>▌ <span data-i18n="term.s3.name">docs sweep</span></span>
-          <span data-i18n="term.s3.status">idle</span>
-        </div>
-        <div class="sess-line">~/www/personal/violeeter</div>
-        <div class="sess-line">ctx ██░░░░░░░░░░░░░  9% · 90k/1.0M</div>
-      </div>
-    </div>
+  <div class="hero">
+    <h1>Várias sessões de agentes de código, <em>lado a lado</em>.</h1>
+    <p class="lede">O violeet é um lugar para rodar e acompanhar várias sessões de agentes de código ao mesmo tempo, no navegador: no desktop e no celular. Cada sessão é um terminal de verdade, com o modelo, o contexto e os tokens à vista.</p>
+    <ul class="harnesses" aria-label="Agentes suportados">
+      <li>Claude Code</li>
+      <li>Codex</li>
+      <li>Cursor</li>
+    </ul>
   </div>
 </header>
 
-<section>
-  <h2 data-i18n="does.h2">What it does</h2>
-  <p class="section-lede" data-i18n="does.lede">
-    Every agent session on the machine appears on the board, including the ones
-    started somewhere else.
-  </p>
-  <div class="grid">
-    <div class="card">
-      <h3 data-i18n="does.blocked.h3">Blocked agents come to you</h3>
-      <p data-i18n="does.blocked.p">A session waiting on a permission request is signalled three ways at
-      once: a lit edge, a slow pulse, and a colour used nowhere else. You are
-      not watching the sidebar, so it has to reach you from the corner of your
-      eye.</p>
+<main>
+  <section id="o-que-e" aria-labelledby="o-que-e-h">
+    <p class="eyebrow">O que é</p>
+    <h2 id="o-que-e-h">Um painel para quem roda mais de um agente por vez</h2>
+    <p class="section-lede">Com três ou quatro agentes trabalhando ao mesmo tempo, o difícil deixa de ser o código: é saber qual sessão está esperando você, qual está perto de estourar o contexto e o que cada uma já fez. O violeet junta tudo isso numa tela só, sem esconder o terminal.</p>
+    <div class="grid">
+      <div class="card" style="--dot: var(--purple)"><h3>Lado a lado</h3><p>Sessões de Claude Code, Codex e Cursor convivem na mesma lista, cada uma com o próprio estado.</p></div>
+      <div class="card" style="--dot: var(--blue)"><h3>No navegador</h3><p>Nada para instalar no cliente: abre no navegador do desktop e funciona no celular.</p></div>
+      <div class="card" style="--dot: var(--green)"><h3>Terminal de verdade</h3><p>O agente roda num terminal real. O violeet acompanha, não substitui.</p></div>
     </div>
-    <div class="card">
-      <h3 data-i18n="does.context.h3">Context, measured</h3>
-      <p data-i18n="does.context.p">How full each window is, with the absolute pair beside the percentage.
-      A small window nearly full and a large one barely touched call for
-      opposite reactions, and one number cannot tell them apart.</p>
+  </section>
+
+  <section id="ja-existe" aria-labelledby="ja-existe-h">
+    <p class="eyebrow">O que já existe</p>
+    <h2 id="ja-existe-h">A base já roda no dia a dia</h2>
+    <p class="section-lede">Antes do redesign, a base funcional já está de pé e é usada todos os dias por quem está construindo o violeet.</p>
+    <div class="grid">
+      <div class="card" style="--dot: var(--green)"><h3>Runs em terminais de verdade</h3><p>Cada run é um terminal no navegador, com o agente rodando como rodaria na sua máquina.</p></div>
+      <div class="card" style="--dot: var(--purple)"><h3>Seções para agrupar runs</h3><p>Organize as runs por projeto, por tipo de trabalho ou do jeito que fizer sentido.</p></div>
+      <div class="card" style="--dot: var(--blue)"><h3>Lançador com texto livre</h3><p>Abra uma run escrevendo o pedido, anexando imagens e usando o melhorar prompt antes de enviar.</p></div>
+      <div class="card" style="--dot: var(--yellow)"><h3>Dados da sessão por run</h3><p>Modelo, contexto restante e tokens de entrada, cache e saída, em cada run.</p></div>
+      <div class="card" style="--dot: var(--purple)"><h3>Notas e gráficos de uso</h3><p>Anotações por sessão e gráficos para entender como o uso se distribui.</p></div>
+      <div class="card" style="--dot: var(--green)"><h3>Uso pelo celular</h3><p>Acompanhe e responda às runs pelo celular, com teclas de atalho na tela.</p></div>
     </div>
-    <div class="card">
-      <h3 data-i18n="does.files.h3">The files each session wrote</h3>
-      <p data-i18n="does.files.p">A tree grouped by root, with a real diffstat, read from the diff the
-      agent itself produced, not estimated. Click a file and it opens in your
-      editor, on the first uncommitted change.</p>
-    </div>
-    <div class="card">
-      <h3 data-i18n="does.anywhere.h3">Sessions from anywhere</h3>
-      <p data-i18n="does.anywhere.p">An agent started in iTerm, or in another window, is still a real
-      session. It shows up on the board, clearly marked as living somewhere
-      else rather than quietly omitted.</p>
-    </div>
-  </div>
-</section>
+  </section>
 
-<section id="theme">
-  <h2><img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter</h2>
-  <p class="section-lede" data-i18n="theme.lede">
-    The palette Violeet ships with, published on its own under MIT. Two
-    variants. This page is painted with it, and the stylesheet below is generated
-    from the same file the terminals download, so the page cannot advertise
-    colours it is not using.
-  </p>
-
-  <div class="variant">
-    <div class="variant-head">
-      <span class="variant-name">Violeeter Dark</span>
-      <span class="variant-meta mono" data-i18n="theme.meta_dark">#24203F · worst text contrast 4.53</span>
-    </div>
-    <div class="swatches" id="sw-dark"></div>
-  </div>
-
-  <div class="variant">
-    <div class="variant-head">
-      <span class="variant-name">Violeeter Light</span>
-      <span class="variant-meta mono" data-i18n="theme.meta_light">#FAF8FE · worst text contrast 5.06</span>
-    </div>
-    <div class="swatches" id="sw-light"></div>
-  </div>
-
-  <p class="section-lede" style="margin-top:28px" data-i18n="theme.aa">
-    Every colour that can carry text clears WCAG AA against its own background,
-    and that is checked rather than claimed: the build fails if one drops under
-    4.5:1. It is MIT and has its own home, so you can wear it without ever
-    installing this terminal.
-  </p>
-
-  <div class="scroll">
-    <table>
-      <thead><tr><th data-i18n="theme.th_editors">Editors</th><th data-i18n="theme.th_terminals">Terminals</th><th data-i18n="theme.th_web">Web</th></tr></thead>
-      <tbody>
-        <tr>
-          <td>VS Code · Neovim · Zed</td>
-          <td>iTerm2 · Alacritty · Kitty · Ghostty · WezTerm · Windows Terminal</td>
-          <td>CSS · Tailwind</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <p class="section-lede" style="margin-top:24px" data-i18n="theme.painted">
-    The page you are reading is painted with it, and so is
-    <a href="https://grippado.github.io/violeeter/">its own</a>. Nothing here
-    uses a colour the theme does not ship.
-  </p>
-
-  <p style="margin-top:20px">
-    <a class="btn btn-primary" id="cta-get" href="https://grippado.github.io/violeeter/" aria-label="Get Violeeter"><span data-i18n="theme.get">Get</span> <img class="inline-mark only-dark" src="violeeter-dark.png" alt=""><img class="inline-mark only-light" src="violeeter-light.png" alt="">Violeeter →</a>
-  </p>
-</section>
-
-<section>
-  <h2 data-i18n="install.h2">Install</h2>
-  <p class="section-lede" data-i18n="install.lede">
-    macOS, Apple silicon and Intel. Builds are ad-hoc signed, so the first
-    launch needs the quarantine flag cleared.
-  </p>
-
-  <div class="releases" id="releases" hidden>
-    <h3 class="eyebrow" data-i18n="releases.eyebrow">recent releases</h3>
-    <div class="release" id="release-latest">
-      <p class="release-label" data-i18n="releases.latest">latest version</p>
-      <p class="release-head">
-        <a class="mono release-num" href="https://github.com/grippado/violeet/releases"></a>
-        <span class="variant-meta release-date"></span>
-      </p>
-      <p class="release-summary"></p>
-    </div>
-    <div class="release" id="release-previous">
-      <p class="release-label" data-i18n="releases.previous">previous version</p>
-      <p class="release-head">
-        <a class="mono release-num" href="https://github.com/grippado/violeet/releases"></a>
-        <span class="variant-meta release-date"></span>
-      </p>
-      <p class="release-summary"></p>
-    </div>
-    <p class="release-all">
-      <a id="release-all-link" href="https://github.com/grippado/violeet/tags" data-i18n="releases.all">see all versions ↗</a>
-    </p>
-  </div>
-
-<pre class="block">git clone https://github.com/grippado/violeet
-cd violeet
-app/scripts/package.sh
-app/scripts/install.sh</pre>
-  <p class="section-lede" style="margin-top:20px" data-i18n="install.daemon">
-    The daemon that watches sessions installs separately and runs under
-    <code>launchd</code>. It is optional: with it stopped, Violeet is still a
-    terminal, and the board simply says so.
-  </p>
-</section>
-
-<section id="glabs">
-  <div class="constellation">
-    <img class="glabs-mark only-dark" src="glabs-dark.svg" alt="[GLabs]">
-    <img class="glabs-mark only-light" src="glabs-light.svg" alt="[GLabs]">
-    <div class="constellation-copy">
-      <p class="eyebrow" data-i18n="glabs.eyebrow">the wider constellation</p>
-      <h2 data-i18n="glabs.h2">Held by <span>[GLabs]</span>.</h2>
-      <p class="section-lede" data-i18n="glabs.lede">
-        [GLabs] is the umbrella that ties the family together in
-        Violeeter’s visual language.
-      </p>
-      <!-- No `aria-label` on either card, deliberately. The name and the
-           descriptor inside are already the link's accessible name, and they
-           are the parts that get translated; a label would be a fifth string
-           to keep in four languages that says the same thing worse. The icons
-           carry `alt=""` so they are not announced twice.
-           The destinations are the published pages, not the repositories: the
-           card promises the product, and a reader who wants the source finds
-           it one click further in. -->
-      <div class="family-links">
-        <a class="family-link" href="https://grippado.github.io/flux/">
-          <img class="only-dark" src="flux-dark.svg" alt=""><img class="only-light" src="flux-light.svg" alt="">
-          <span><strong>flux</strong><small data-i18n="glabs.flux">the workflow · direct reference ↗</small></span>
-        </a>
-        <a class="family-link" href="https://grippado.github.io/violeeter/">
-          <img class="only-dark" src="violeeter-dark.png" alt=""><img class="only-light" src="violeeter-light.png" alt="">
-          <span><strong>Violeeter</strong><small data-i18n="glabs.violeeter">the visual system · direct reference ↗</small></span>
-        </a>
+  <section id="interface" aria-labelledby="interface-h">
+    <p class="eyebrow">A interface do redesign</p>
+    <h2 id="interface-h">Como o violeet deve ficar</h2>
+    <p class="section-lede">Mockups do redesign: o terminal no centro, a barra com os dados da sessão logo acima do composer e as runs agrupadas em seções na lateral.</p>
+    <div class="shots">
+      <figure class="shot">
+        <img src="mock-desktop.png" alt="Mockup do violeet no desktop: terminal de uma run à esquerda, barra com modelo, contexto e tokens, composer com imagens anexadas, e à direita a lista de runs agrupadas nas seções Produto, Revisões e Ideias." width="2880" height="1800" loading="lazy">
+        <figcaption>Desktop: terminal, dados da sessão, composer e a lista de runs em seções.</figcaption>
+      </figure>
+      <div class="shots-phones">
+        <figure class="shot">
+          <img src="mock-celular.png" alt="Mockup do violeet no celular com a gaveta fechada: terminal da run, dados da sessão, imagens anexadas, composer e teclas de atalho." width="780" height="1688" loading="lazy">
+          <figcaption>Celular: a run aberta, com o composer e as teclas na tela.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="mock-celular-gaveta.png" alt="Mockup do violeet no celular com a gaveta aberta: lista de runs e seções." width="780" height="1688" loading="lazy">
+          <figcaption>Celular: a gaveta com as runs e as seções.</figcaption>
+        </figure>
       </div>
+      <figure class="shot">
+        <img src="mock-handoff.png" alt="Mockup dos estados do handoff entre sessões: gerando em segundo plano, pronto, falhou e a versão de celular." width="2000" height="1560" loading="lazy">
+        <figcaption>Handoff entre sessões em segundo plano: gerando, pronto, falhou e no celular.</figcaption>
+      </figure>
     </div>
-  </div>
-</section>
+    <p class="mock-note">Os mockups usam dados fictícios.</p>
+  </section>
 
-<footer data-i18n="footer">
-  Violeet and Violeeter are MIT licensed. Built by
-  <a href="https://github.com/grippado">grippado</a>.
+  <section id="roadmap" aria-labelledby="roadmap-h">
+    <p class="eyebrow">Roadmap</p>
+    <h2 id="roadmap-h">Para onde o violeet vai</h2>
+    <p class="section-lede">Os marcos do redesign e as fatias de cada um, com o estado atual.</p>
+    <div id="roadmap-list" class="roadmap" aria-live="polite">
+      <p class="roadmap-empty">Carregando o roadmap…</p>
+    </div>
+    <p id="roadmap-meta" class="roadmap-meta" hidden></p>
+  </section>
+</main>
+
+<footer>
+  <p>O código do violeet vive num laboratório privado até a versão aberta. Quando ela sair, o código volta para este repositório.</p>
+  <p>O violeet veste o <a href="https://github.com/grippado/violeeter">violeeter</a>, o tema de cores de onde vem esta paleta.</p>
 </footer>
 
 </div>
-
 <script>
-  // Swatches come from `violeeter.json`, the same file the terminal exports
-  // are generated from, rather than from this page's own stylesheet.
-  //
-  // Reading them back out of CSS was the first attempt and does not work: both
-  // variants are scoped to `:root`, so showing the one the page is not wearing
-  // means setting `data-theme` and asking for the computed style in the same
-  // tick, which the browser does not recompute in time. Both rows came out
-  // identical, one of them labelled with the other one's name. Reading the
-  // source has no such problem and is the stronger claim anyway.
-  const SLOTS = ["black","red","green","yellow","blue","magenta","cyan","white",
-                 "brightBlack","brightRed","brightGreen","brightYellow",
-                 "brightBlue","brightMagenta","brightCyan","brightWhite"];
+(function () {
+  var list = document.getElementById("roadmap-list");
+  var meta = document.getElementById("roadmap-meta");
+  var labels = { "planejada": "planejada", "em andamento": "em andamento", "entregue": "entregue", "futuro": "futuro" };
 
-  function paint(id, variant) {
-    const host = document.getElementById(id);
-    host.textContent = "";
-    for (const slot of SLOTS) {
-      const value = variant.ansi[slot];
-      const cell = document.createElement("div");
-      cell.className = "sw";
-      cell.style.background = value;
-      cell.title = slot + " " + value;
-      host.appendChild(cell);
-    }
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = String(text);
+    return node;
   }
 
-  fetch("violeeter.json")
-    .then(response => response.json())
-    .then(theme => {
-      paint("sw-dark", theme.variants.dark);
-      paint("sw-light", theme.variants.light);
-    })
-    // A page that cannot reach the palette says nothing about it rather than
-    // showing sixteen empty boxes that look like a palette of nothing.
-    .catch(() => {
-      for (const id of ["sw-dark", "sw-light"]) {
-        document.getElementById(id).remove();
+  function badge(state) {
+    var s = typeof state === "string" ? state : "";
+    var b = el("span", "badge", labels[s] || s || "sem estado");
+    b.setAttribute("data-state", s);
+    return b;
+  }
+
+  function fail() {
+    list.replaceChildren(el("p", "roadmap-empty", "O roadmap não está disponível agora. Tente recarregar a página mais tarde."));
+    meta.hidden = true;
+  }
+
+  function render(data) {
+    var milestones = data && Array.isArray(data.milestones) ? data.milestones : null;
+    if (!milestones || milestones.length === 0) { fail(); return; }
+    var frag = document.createDocumentFragment();
+    milestones.forEach(function (m) {
+      if (!m || typeof m !== "object") return;
+      var card = el("article", "milestone");
+      var head = el("div", "ms-head");
+      if (m.id) head.appendChild(el("span", "ms-id", m.id));
+      head.appendChild(el("h3", "ms-title", m.title || ""));
+      var slices = Array.isArray(m.slices) ? m.slices : [];
+      if (m.state || slices.length === 0) head.appendChild(badge(m.state));
+      card.appendChild(head);
+      if (m.summary) card.appendChild(el("p", "ms-summary", m.summary));
+      if (slices.length) {
+        var ul = el("ul", "slices");
+        slices.forEach(function (s) {
+          if (!s || typeof s !== "object") return;
+          var li = el("li", "slice");
+          if (s.n != null) li.appendChild(el("span", "slice-n", "fatia " + s.n));
+          li.appendChild(el("span", "slice-title", s.title || ""));
+          li.appendChild(badge(s.state));
+          ul.appendChild(li);
+        });
+        card.appendChild(ul);
       }
+      frag.appendChild(card);
     });
-
-  // ---- releases ----
-  //
-  // Same contract as the palette above: the file is written by the release
-  // workflow, and a page that cannot read it says nothing about versions rather
-  // than showing a frame with no numbers in it. Half a showcase is worse than
-  // none, so the box only unhides once every field it promises is in hand.
-  const releasesBox = document.getElementById("releases");
-  const DATE_LOCALES = { en: "en", pt: "pt-BR", es: "es", de: "de" };
-  let releases = null;
-
-  function isHttpUrl(value) {
-    try { return ["http:", "https:"].includes(new URL(value).protocol); }
-    catch (e) { return false; }
-  }
-
-  // A summary is an object keyed by language, or a plain string on a tag cut
-  // before the convention existed. Both have to render.
-  // Returns the key it picked as well as the text, because the element's `lang`
-  // has to describe the sentence that is actually on screen. A summary the page
-  // fell back to English for is an English sentence, whatever the page language.
-  function releaseSummaryPick(entry) {
-    const summary = entry && entry.summary;
-    if (typeof summary === "string") return { text: summary, key: null };
-    if (!summary || typeof summary !== "object") return { text: "", key: null };
-    for (const key of [current, "en"].concat(Object.keys(summary))) {
-      const value = summary[key];
-      if (typeof value === "string" && value !== "") return { text: value, key };
-    }
-    return { text: "", key: null };
-  }
-
-  function releaseSummary(entry) {
-    return releaseSummaryPick(entry).text;
-  }
-
-  function isRelease(entry) {
-    return !!entry
-      && typeof entry.version === "string" && entry.version !== ""
-      && typeof entry.published_at === "string"
-      && !isNaN(new Date(entry.published_at).getTime())
-      && typeof entry.html_url === "string" && isHttpUrl(entry.html_url)
-      && releaseSummary(entry) !== "";
-  }
-
-  // The stamp is UTC and stays UTC. Rendered in the reader's zone, a release cut
-  // just after midnight moves to the day before, which is a different date than
-  // the one the tag carries.
-  function releaseDate(iso) {
-    const when = new Date(iso);
-    if (isNaN(when.getTime())) return "";
-    try {
-      return new Intl.DateTimeFormat(DATE_LOCALES[current] || "en", {
-        day: "numeric", month: "short", year: "numeric", timeZone: "UTC"
-      }).format(when);
-    } catch (e) {
-      return iso.slice(0, 10);
+    list.replaceChildren(frag);
+    if (data.updated) {
+      meta.textContent = "Atualizado em " + data.updated + ".";
+      meta.hidden = false;
     }
   }
 
-  function fillRelease(id, entry) {
-    const box = document.getElementById(id);
-    if (!box) return;
-    const link = box.querySelector(".release-num");
-    link.textContent = typeof entry.tag === "string" && entry.tag !== ""
-      ? entry.tag : "v" + entry.version;
-    link.href = entry.html_url;
-    box.querySelector(".release-date").textContent = releaseDate(entry.published_at);
-    // `textContent`: the summary is release copy, not page copy, and it is the
-    // one string here that does not come out of `i18n.js`.
-    const summary = box.querySelector(".release-summary");
-    const picked = releaseSummaryPick(entry);
-    summary.textContent = picked.text;
-    // The tag carries one sentence per language, so the element's own `lang`
-    // follows the pick and not the page. Left on the page language, a reader in
-    // Spanish would hear an English sentence announced as Spanish.
-    summary.lang = DATE_LOCALES[picked.key || current] || "en";
+  try {
+    fetch("roadmap.json", { cache: "no-cache" })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(render)
+      .catch(fail);
+  } catch (e) {
+    fail();
   }
-
-  // Called again on every language change, because the date is the one value in
-  // the box that is written in the language the reader picked.
-  function paintReleases() {
-    if (!releases) return;
-    fillRelease("release-latest", releases.latest);
-    if (releases.previous) fillRelease("release-previous", releases.previous);
-  }
-
-  fetch("latest-release.json")
-    .then(response => response.json())
-    .then(data => {
-      if (!isRelease(data && data.latest)) throw new Error("incomplete");
-      releases = {
-        latest: data.latest,
-        previous: isRelease(data.previous) ? data.previous : null
-      };
-      if (!releases.previous) document.getElementById("release-previous").remove();
-      if (isHttpUrl(data.all_tags_url)) {
-        document.getElementById("release-all-link").href = data.all_tags_url;
-      } else {
-        document.getElementById("release-all-link").parentNode.remove();
-      }
-      paintReleases();
-      releasesBox.hidden = false;
-    })
-    .catch(() => releasesBox.remove());
-
-  const root = document.documentElement;
-  const button = document.getElementById("toggle");
-  const SUN_ICON = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/></svg>`;
-  const MOON_ICON = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 6a8 8 0 0 0 11.955 6.956C21.474 18.03 17.2 22 12 22 6.477 22 2 17.523 2 12c0-5.2 3.97-9.474 9.044-9.955A7.963 7.963 0 0 0 10 6zm-6 6a8 8 0 0 0 8 8 8.006 8.006 0 0 0 6.957-4.045c-.316.03-.636.045-.957.045-5.523 0-10-4.477-10-10 0-.321.015-.641.045-.957A8.006 8.006 0 0 0 4 12z"/></svg>`;
-
-  // The toggle offers the theme you are not wearing, so it shows the sun while
-  // the page is dark. Its label is a sentence like any other on the page and
-  // comes out of the same dictionary, which is why this reads the current
-  // language instead of holding two English strings.
-  function paintToggle() {
-    const isDark = root.getAttribute("data-theme") === "dark";
-    button.innerHTML = isDark ? SUN_ICON : MOON_ICON;
-    // If the dictionary never arrived, the label already on the button is the
-    // English one from the markup, and keeping it beats blanking it.
-    const label = dict()[isDark ? "theme.to_light" : "theme.to_dark"];
-    if (label) {
-      button.title = label;
-      button.setAttribute("aria-label", label);
-    }
-  }
-
-  button.addEventListener("click", () => {
-    root.setAttribute("data-theme",
-      root.getAttribute("data-theme") === "dark" ? "light" : "dark");
-    paintToggle();
-  });
-
-  // ---- language ----
-  //
-  // English is already in the markup, so this only ever overwrites. That order
-  // matters: a reader with JavaScript off, and a crawler, still get the whole
-  // page, and the fallback for a missing key is the English that is already
-  // sitting there rather than an empty element.
-  // A page whose dictionary failed to load is an English page with a picker
-  // that would lie, so the picker goes rather than sitting there doing nothing.
-  const LANGS = window.VIOLEET_I18N || { en: {} };
-  const select = document.getElementById("lang");
-  if (!window.VIOLEET_I18N) select.remove();
-  const STORE_KEY = "violeet-lang";
-  let current = "en";
-
-  function dict() { return LANGS[current] || LANGS.en || {}; }
-
-  // localStorage throws rather than no-ops in a locked-down Safari, and a page
-  // that cannot remember a preference should still honour the click.
-  function remember(code) {
-    try { localStorage.setItem(STORE_KEY, code); } catch (e) { /* not fatal */ }
-  }
-  function recall() {
-    try { return localStorage.getItem(STORE_KEY); } catch (e) { return null; }
-  }
-
-  function applyLang(code) {
-    if (!LANGS[code]) code = "en";
-    current = code;
-    const strings = dict();
-
-    // `innerHTML` rather than `textContent`: several of these sentences carry a
-    // link or a `<code>`, and splitting them into fragments to avoid markup
-    // would hand translators a jigsaw instead of a sentence. The only thing
-    // that ever writes here is `i18n.js`, which the page ships itself.
-    for (const el of document.querySelectorAll("[data-i18n]")) {
-      const value = strings[el.dataset.i18n];
-      if (value !== undefined) el.innerHTML = value;
-    }
-
-    // The parts of the page that are not elements: what the tab says, what a
-    // link preview quotes, and what the document declares itself to be. `lang`
-    // is not decoration — it is what a screen reader consults before choosing
-    // how to pronounce any of this.
-    root.setAttribute("lang", code);
-    document.title = strings["meta.title"];
-    document.getElementById("meta-description")
-            .setAttribute("content", strings["meta.description"]);
-    document.getElementById("brand-home")
-            .setAttribute("aria-label", strings["brand.home"]);
-    // The mark sits between the word and the name with only a margin holding
-    // them apart, which is a space to the eye and nothing at all to a screen
-    // reader. These two links say the whole phrase themselves.
-    document.getElementById("cta-wears")
-            .setAttribute("aria-label", strings["cta.wears"] + " Violeeter");
-    document.getElementById("cta-get")
-            .setAttribute("aria-label", strings["theme.get"] + " Violeeter");
-    select.setAttribute("aria-label", strings["lang.label"]);
-
-    paintReleases();
-    paintToggle();
-    remember(code);
-  }
-
-  select.addEventListener("change", () => applyLang(select.value));
-
-  // English on a first visit, whatever was chosen on a return one. Deliberately
-  // not `navigator.language`: this page is indexed in English, and guessing
-  // would serve a visitor something other than the result they clicked.
-  const stored = recall();
-  if (stored && LANGS[stored] && stored !== "en") {
-    select.value = stored;
-    applyLang(stored);
-  }
+})();
 </script>
-
 </body>
 </html>
