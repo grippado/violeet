@@ -32,7 +32,9 @@
           "state": "entregue"
         }
       ],
-      "state": "entregue"
+      "state": "entregue",
+      "image": "agora-m1.png",
+      "image_alt": "O violeet com o M1, em dados fictícios: header violeet na lateral, seções em accordion, terminal de uma run Claude e a barra de dados da sessão acima do input."
     },
     {
       "id": "M2",
