@@ -24,12 +24,12 @@
         {
           "n": 2,
           "title": "Header na lateral, celular e o nome violeet",
-          "state": "planejada"
+          "state": "em andamento"
         },
         {
           "n": 3,
           "title": "Seções em accordion",
-          "state": "planejada"
+          "state": "em andamento"
         }
       ]
     },
@@ -45,7 +45,12 @@
         },
         {
           "n": 5,
-          "title": "Botoeira do composer: esc, to new session e imagens",
+          "title": "Botoeira do composer: esc, setas e to new session",
+          "state": "planejada"
+        },
+        {
+          "n": 6,
+          "title": "Imagens no composer com a sessão rodando",
           "state": "planejada"
         }
       ]
@@ -56,12 +61,12 @@
       "summary": "Melhorar prompt no composer e handoff entre sessões em segundo plano.",
       "slices": [
         {
-          "n": 6,
+          "n": 7,
           "title": "Melhorar prompt no composer",
           "state": "planejada"
         },
         {
-          "n": 7,
+          "n": 8,
           "title": "Handoff em segundo plano",
           "state": "planejada"
         }
