@@ -44,19 +44,20 @@
         {
           "n": 4,
           "title": "Barra de dados da sessão e card enxuto",
-          "state": "em andamento"
+          "state": "entregue"
         },
         {
           "n": 5,
           "title": "Botoeira do composer: esc, setas e to new session",
-          "state": "planejada"
+          "state": "entregue"
         },
         {
           "n": 6,
           "title": "Imagens no composer com a sessão rodando",
-          "state": "planejada"
+          "state": "em andamento"
         }
-      ]
+      ],
+      "state": "em andamento"
     },
     {
       "id": "M3",
