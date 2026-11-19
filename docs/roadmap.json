@@ -57,7 +57,9 @@
           "state": "entregue"
         }
       ],
-      "state": "entregue"
+      "state": "entregue",
+      "image": "agora-m2.png",
+      "image_alt": "Tela do violeet com uma sessão de agente no terminal e a barra de dados da sessão acima do composer, que tem um rascunho e três imagens anexadas. Ao lado ficam os botões esc e to new session e a lateral com seções e cards; todos os dados são fictícios."
     },
     {
       "id": "M3",
@@ -75,7 +77,9 @@
           "state": "entregue"
         }
       ],
-      "state": "em andamento"
+      "state": "em andamento",
+      "image": "agora-m3.png",
+      "image_alt": "Tela do violeet com a faixa verde de handoff pronto no topo, que oferece abrir uma nova run com o handoff gerado em segundo plano para outra sessão. O resto da tela mostra o terminal e a lateral de cards; todos os dados são fictícios."
     },
     {
       "id": "M4",
@@ -93,7 +97,9 @@
           "state": "entregue"
         }
       ],
-      "state": "entregue"
+      "state": "entregue",
+      "image": "agora-m4.png",
+      "image_alt": "Tela do violeet com a grade de cotas no topo da lateral, por conta e harness, com uma janela em alerta amarelo, uma em vermelho, uma reiniciada, uma sem janela e uma esmaecida vista há 2h. Todos os dados são fictícios."
     },
     {
       "id": "OSS",
