@@ -72,9 +72,10 @@
         {
           "n": 8,
           "title": "Handoff em segundo plano",
-          "state": "planejada"
+          "state": "em andamento"
         }
-      ]
+      ],
+      "state": "em andamento"
     },
     {
       "id": "OSS",
