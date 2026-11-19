@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-18",
+  "updated": "2026-11-19",
   "status": "em desenvolvimento",
   "milestones": [
     {
@@ -76,6 +76,24 @@
         }
       ],
       "state": "em andamento"
+    },
+    {
+      "id": "M4",
+      "title": "Cotas na lateral",
+      "summary": "Grade com as cotas de 5h e 7d de cada conta, no Claude e no Codex, no topo da lateral.",
+      "slices": [
+        {
+          "n": 9,
+          "title": "Grade de cotas por conta e harness",
+          "state": "planejada"
+        },
+        {
+          "n": 10,
+          "title": "Cota ao vivo da sessão por cima do histórico",
+          "state": "planejada"
+        }
+      ],
+      "state": "planejado"
     },
     {
       "id": "OSS",
